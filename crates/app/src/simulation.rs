@@ -1,6 +1,7 @@
 use aeroforge_flow_core::{assess_physical_scaling, CpuLbm, PhysicalScalingReport, VelocityField};
 use bevy::prelude::*;
 
+use crate::gpu_preview::{GpuPreviewRequest, GpuPreviewSnapshot, MAX_GPU_SAMPLES};
 use crate::model::{
     rotation_from_degrees, PrimitiveKind, ProjectState, SceneObject, SolverMode, WindProfile,
     WindSource, WindSourceKind,
@@ -8,14 +9,23 @@ use crate::model::{
 
 pub(crate) const PREVIEW_TAU: f32 = 0.8;
 pub(crate) const TARGET_MAX_LATTICE_SPEED: f32 = 0.075;
-const CPU_PREVIEW_CELL_LIMIT: u64 = 2_000_000;
+pub(crate) const CPU_PREVIEW_CELL_LIMIT: u64 = 2_000_000;
+pub(crate) const GPU_PREVIEW_UPLOAD_CELL_LIMIT: u64 = 4_000_000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreviewBackend {
+    CpuReference,
+    GpuCompute,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PreviewStatus {
     Idle,
     Ready,
     Running,
+    GpuInitializing,
     BlockedCpuBudget,
+    BlockedGpuBudget,
     AccurateSolverPending,
 }
 
@@ -24,6 +34,8 @@ pub struct SimulationRuntime {
     pub(crate) solver: Option<CpuLbm>,
     forcing: Option<VelocityField>,
     prepared_revision: u64,
+    prepared_backend: PreviewBackend,
+    pub backend: PreviewBackend,
     pub status: PreviewStatus,
     pub steps_per_frame: u32,
     pub max_vectors: usize,
@@ -40,6 +52,8 @@ impl Default for SimulationRuntime {
             solver: None,
             forcing: None,
             prepared_revision: 0,
+            prepared_backend: PreviewBackend::CpuReference,
+            backend: PreviewBackend::CpuReference,
             status: PreviewStatus::Idle,
             steps_per_frame: 1,
             max_vectors: 1_200,
@@ -91,20 +105,46 @@ impl SimulationRuntime {
     }
 }
 
-pub fn advance_preview(state: Res<ProjectState>, mut runtime: ResMut<SimulationRuntime>) {
-    if runtime.prepared_revision != state.revision {
-        rebuild_runtime(&state, &mut runtime);
+pub fn advance_preview(
+    state: Res<ProjectState>,
+    mut runtime: ResMut<SimulationRuntime>,
+    mut gpu_request: ResMut<GpuPreviewRequest>,
+    gpu_snapshot: Res<GpuPreviewSnapshot>,
+) {
+    let backend_changed = runtime.prepared_backend != runtime.backend;
+    if runtime.prepared_revision != state.revision || backend_changed {
+        rebuild_runtime(&state, &mut runtime, &mut gpu_request);
+    }
+
+    if state.simulation.mode == SolverMode::Accurate {
+        gpu_request.disable();
+        runtime.status = PreviewStatus::AccurateSolverPending;
+        return;
+    }
+
+    if runtime.backend == PreviewBackend::GpuCompute && gpu_request.enabled {
+        gpu_request.set_control(
+            state.running,
+            runtime.steps_per_frame,
+            runtime.max_vectors.min(MAX_GPU_SAMPLES),
+        );
+        if gpu_snapshot.is_current(gpu_request.revision) {
+            runtime.max_lattice_speed = gpu_snapshot.max_speed;
+            runtime.status = if state.running {
+                PreviewStatus::Running
+            } else {
+                PreviewStatus::Ready
+            };
+        } else if !matches!(runtime.status, PreviewStatus::BlockedGpuBudget) {
+            runtime.status = PreviewStatus::GpuInitializing;
+        }
+        return;
     }
 
     if !state.running {
         if runtime.solver.is_some() && runtime.status != PreviewStatus::BlockedCpuBudget {
             runtime.status = PreviewStatus::Ready;
         }
-        return;
-    }
-
-    if state.simulation.mode == SolverMode::Accurate {
-        runtime.status = PreviewStatus::AccurateSolverPending;
         return;
     }
 
@@ -125,8 +165,13 @@ pub fn advance_preview(state: Res<ProjectState>, mut runtime: ResMut<SimulationR
     runtime.status = PreviewStatus::Running;
 }
 
-fn rebuild_runtime(state: &ProjectState, runtime: &mut SimulationRuntime) {
+fn rebuild_runtime(
+    state: &ProjectState,
+    runtime: &mut SimulationRuntime,
+    gpu_request: &mut GpuPreviewRequest,
+) {
     runtime.prepared_revision = state.revision;
+    runtime.prepared_backend = runtime.backend;
     runtime.solver = None;
     runtime.forcing = None;
     runtime.active_forcing_cells = 0;
@@ -136,35 +181,73 @@ fn rebuild_runtime(state: &ProjectState, runtime: &mut SimulationRuntime) {
     runtime.max_lattice_speed = 0.0;
 
     if state.simulation.mode == SolverMode::Accurate {
+        gpu_request.disable();
         runtime.status = PreviewStatus::AccurateSolverPending;
         return;
     }
 
     let cells = state.simulation.cell_count();
-    if cells > CPU_PREVIEW_CELL_LIMIT {
-        runtime.status = PreviewStatus::BlockedCpuBudget;
-        return;
+    match runtime.backend {
+        PreviewBackend::CpuReference if cells > CPU_PREVIEW_CELL_LIMIT => {
+            gpu_request.disable();
+            runtime.status = PreviewStatus::BlockedCpuBudget;
+            return;
+        }
+        PreviewBackend::GpuCompute if cells > GPU_PREVIEW_UPLOAD_CELL_LIMIT => {
+            gpu_request.disable();
+            runtime.status = PreviewStatus::BlockedGpuBudget;
+            return;
+        }
+        _ => {}
     }
 
     let dims = state.simulation.grid.map(|n| n as usize);
     if dims.iter().any(|&n| n < 2) {
-        runtime.status = PreviewStatus::BlockedCpuBudget;
+        gpu_request.disable();
+        runtime.status = match runtime.backend {
+            PreviewBackend::CpuReference => PreviewStatus::BlockedCpuBudget,
+            PreviewBackend::GpuCompute => PreviewStatus::BlockedGpuBudget,
+        };
         return;
     }
 
-    let mut solver = CpuLbm::new(dims, PREVIEW_TAU);
     let solid_mask = rasterize_solids(state, dims);
     runtime.solid_cells = solid_mask.iter().filter(|&&solid| solid).count();
-    solver.set_solid_mask(&solid_mask);
-
-    let (forcing, max_source_speed_mps, lattice_velocity_scale) =
+    let (forcing, packed_forcing, max_source_speed_mps, lattice_velocity_scale) =
         rasterize_wind_sources(state, dims, &solid_mask);
     runtime.active_forcing_cells = forcing.active_cells();
     runtime.max_source_speed_mps = max_source_speed_mps;
     runtime.lattice_velocity_scale = lattice_velocity_scale;
-    runtime.forcing = Some(forcing);
-    runtime.solver = Some(solver);
-    runtime.status = PreviewStatus::Ready;
+
+    match runtime.backend {
+        PreviewBackend::CpuReference => {
+            gpu_request.disable();
+            let mut solver = CpuLbm::new(dims, PREVIEW_TAU);
+            solver.set_solid_mask(&solid_mask);
+            runtime.forcing = Some(forcing);
+            runtime.solver = Some(solver);
+            runtime.status = PreviewStatus::Ready;
+        }
+        PreviewBackend::GpuCompute => {
+            let gpu_solid = solid_mask
+                .iter()
+                .map(|&solid| if solid { 1_u32 } else { 0_u32 })
+                .collect::<Vec<_>>();
+            gpu_request.configure_domain(
+                state.revision,
+                state.simulation.grid,
+                PREVIEW_TAU,
+                gpu_solid,
+                packed_forcing,
+            );
+            gpu_request.set_control(
+                state.running,
+                runtime.steps_per_frame,
+                runtime.max_vectors.min(MAX_GPU_SAMPLES),
+            );
+            runtime.status = PreviewStatus::GpuInitializing;
+        }
+    }
 }
 
 fn rasterize_solids(state: &ProjectState, dims: [usize; 3]) -> Vec<bool> {
@@ -186,7 +269,7 @@ fn rasterize_wind_sources(
     state: &ProjectState,
     dims: [usize; 3],
     solid_mask: &[bool],
-) -> (VelocityField, f32, f32) {
+) -> (VelocityField, Vec<[f32; 4]>, f32, f32) {
     let max_source_speed_mps = state
         .wind_sources
         .iter()
@@ -206,12 +289,14 @@ fn rasterize_wind_sources(
         state.simulation.domain_size_m.z / dims[2] as f32,
     );
     let mut field = VelocityField::new(dims);
+    let mut packed = vec![[0.0_f32; 4]; dims[0] * dims[1] * dims[2]];
 
     for z in 0..dims[2] {
         for y in 0..dims[1] {
             for x in 0..dims[0] {
                 let p = [x, y, z];
-                if solid_mask[index(dims, p)] {
+                let i = index(dims, p);
+                if solid_mask[i] {
                     continue;
                 }
                 let world = cell_center_world(p, dims, state.simulation.domain_size_m);
@@ -224,13 +309,23 @@ fn rasterize_wind_sources(
                         * source.speed_mps
                         * lattice_velocity_scale
                         * weight;
-                    field.add_target(p, velocity.to_array());
+                    let velocity = velocity.to_array();
+                    field.add_target(p, velocity);
+                    packed[i][0] += velocity[0];
+                    packed[i][1] += velocity[1];
+                    packed[i][2] += velocity[2];
+                    packed[i][3] = 1.0;
                 }
             }
         }
     }
 
-    (field, max_source_speed_mps, lattice_velocity_scale)
+    (
+        field,
+        packed,
+        max_source_speed_mps,
+        lattice_velocity_scale,
+    )
 }
 
 fn object_contains(object: &SceneObject, world: Vec3) -> bool {
@@ -326,7 +421,7 @@ mod tests {
     }
 
     #[test]
-    fn wind_rasterization_preserves_direction() {
+    fn wind_rasterization_preserves_direction_and_gpu_pack() {
         let state = ProjectState {
             objects: vec![],
             wind_sources: vec![WindSource {
@@ -355,10 +450,13 @@ mod tests {
         };
         let dims = [8, 4, 8];
         let solid = vec![false; dims[0] * dims[1] * dims[2]];
-        let (field, _, _) = rasterize_wind_sources(&state, dims, &solid);
+        let (field, packed, _, _) = rasterize_wind_sources(&state, dims, &solid);
         assert!(field.active_cells() > 0);
         let target = field.target([4, 2, 4]).unwrap();
         assert!(target[2].abs() > target[0].abs());
+        let gpu_target = packed[index(dims, [4, 2, 4])];
+        assert!(gpu_target[3] > 0.0);
+        assert!((gpu_target[2] - target[2]).abs() < 1.0e-6);
     }
 
     #[test]

@@ -1,15 +1,21 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
+use crate::gpu_preview::{GpuPreviewRequest, GpuPreviewSnapshot, MAX_GPU_SAMPLES};
 use crate::model::{
     PrimitiveKind, ProjectState, SelectedItem, SolverMode, WindProfile, WindSourceKind,
 };
-use crate::simulation::{PreviewStatus, SimulationRuntime};
+use crate::simulation::{
+    PreviewBackend, PreviewStatus, SimulationRuntime, CPU_PREVIEW_CELL_LIMIT,
+    GPU_PREVIEW_UPLOAD_CELL_LIMIT,
+};
 
 pub fn draw_ui(
     mut contexts: EguiContexts,
     mut state: ResMut<ProjectState>,
     mut runtime: ResMut<SimulationRuntime>,
+    gpu_request: Res<GpuPreviewRequest>,
+    gpu_snapshot: Res<GpuPreviewSnapshot>,
 ) -> Result {
     let ctx = contexts.ctx_mut()?;
     let mut dirty = false;
@@ -88,7 +94,7 @@ pub fn draw_ui(
 
     egui::SidePanel::right("inspector")
         .resizable(true)
-        .default_width(370.0)
+        .default_width(380.0)
         .show(ctx, |ui| {
             ui.heading("Inspector");
             ui.separator();
@@ -98,8 +104,7 @@ pub fn draw_ui(
                 }
                 SelectedItem::Object(id) => {
                     if let Some(index) = state.objects.iter().position(|object| object.id == id) {
-                        let mut delete = false;
-                        {
+                        let delete = {
                             let object = &mut state.objects[index];
                             dirty |= ui.text_edit_singleline(&mut object.name).changed();
                             ui.label(format!("Type: {:?}", object.kind));
@@ -107,8 +112,8 @@ pub fn draw_ui(
                             dirty |= vec3_editor(ui, "Rotation (deg)", &mut object.rotation_deg, 1.0);
                             dirty |= vec3_editor(ui, "Scale (m)", &mut object.scale, 0.05);
                             ui.add_space(8.0);
-                            delete = ui.button("Delete geometry").clicked();
-                        }
+                            ui.button("Delete geometry").clicked()
+                        };
                         if delete {
                             state.objects.remove(index);
                             state.selection = SelectedItem::None;
@@ -118,8 +123,7 @@ pub fn draw_ui(
                 }
                 SelectedItem::Wind(id) => {
                     if let Some(index) = state.wind_sources.iter().position(|source| source.id == id) {
-                        let mut delete = false;
-                        {
+                        let delete = {
                             let source = &mut state.wind_sources[index];
                             dirty |= ui.text_edit_singleline(&mut source.name).changed();
                             dirty |= ui.checkbox(&mut source.enabled, "Enabled").changed();
@@ -196,8 +200,8 @@ pub fn draw_ui(
                             ));
                             ui.small("Turbulence is stored but preview forcing currently uses the mean velocity only.");
                             ui.add_space(8.0);
-                            delete = ui.button("Delete wind source").clicked();
-                        }
+                            ui.button("Delete wind source").clicked()
+                        };
                         if delete {
                             state.wind_sources.remove(index);
                             state.selection = SelectedItem::None;
@@ -245,11 +249,25 @@ pub fn draw_ui(
             let gib = state.simulation.lbm_distribution_memory_bytes() as f64 / 1024.0_f64.powi(3);
             ui.monospace(format!("Cells: {cells}"));
             ui.monospace(format!("Raw LBM f32 ping-pong: {gib:.2} GiB"));
-            if cells > 2_000_000 {
-                ui.colored_label(
-                    egui::Color32::YELLOW,
-                    "CPU reference preview is blocked above 2,000,000 cells. Grid is never silently reduced.",
-                );
+
+            match runtime.backend {
+                PreviewBackend::CpuReference if cells > CPU_PREVIEW_CELL_LIMIT => {
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        format!(
+                            "CPU reference preview is blocked above {CPU_PREVIEW_CELL_LIMIT} cells. Grid is never silently reduced."
+                        ),
+                    );
+                }
+                PreviewBackend::GpuCompute if cells > GPU_PREVIEW_UPLOAD_CELL_LIMIT => {
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        format!(
+                            "GPU preview preparation is blocked above {GPU_PREVIEW_UPLOAD_CELL_LIMIT} cells to protect host RAM/upload cost."
+                        ),
+                    );
+                }
+                _ => {}
             }
 
             let scaling = runtime.physical_scaling_report(&state);
@@ -289,19 +307,68 @@ pub fn draw_ui(
 
             ui.separator();
             ui.heading("Preview runtime");
+            let previous_backend = runtime.backend;
+            egui::ComboBox::from_label("Backend")
+                .selected_text(match runtime.backend {
+                    PreviewBackend::CpuReference => "CPU reference",
+                    PreviewBackend::GpuCompute => "GPU compute (experimental)",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut runtime.backend,
+                        PreviewBackend::CpuReference,
+                        "CPU reference",
+                    );
+                    ui.selectable_value(
+                        &mut runtime.backend,
+                        PreviewBackend::GpuCompute,
+                        "GPU compute (experimental)",
+                    );
+                });
+            if runtime.backend != previous_backend {
+                if runtime.backend == PreviewBackend::GpuCompute {
+                    runtime.max_vectors = runtime.max_vectors.min(MAX_GPU_SAMPLES);
+                }
+                runtime.reset();
+            }
+
             ui.horizontal(|ui| {
                 ui.label("Steps / frame");
-                ui.add(egui::DragValue::new(&mut runtime.steps_per_frame).range(1..=32));
+                let max_steps = if runtime.backend == PreviewBackend::GpuCompute { 64 } else { 32 };
+                ui.add(egui::DragValue::new(&mut runtime.steps_per_frame).range(1..=max_steps));
             });
             ui.horizontal(|ui| {
                 ui.label("Max flow vectors");
-                ui.add(egui::DragValue::new(&mut runtime.max_vectors).range(100..=10_000));
+                let max_vectors = if runtime.backend == PreviewBackend::GpuCompute {
+                    MAX_GPU_SAMPLES
+                } else {
+                    10_000
+                };
+                ui.add(egui::DragValue::new(&mut runtime.max_vectors).range(100..=max_vectors));
             });
+            ui.monospace(format!("Backend: {:?}", runtime.backend));
             ui.monospace(format!("Status: {:?}", runtime.status));
-            ui.monospace(format!("LBM steps: {}", runtime.steps()));
             ui.monospace(format!("Solid cells: {}", runtime.solid_cells));
             ui.monospace(format!("Forced cells: {}", runtime.active_forcing_cells));
             ui.monospace(format!("Max lattice speed: {:.5}", runtime.max_lattice_speed));
+
+            match runtime.backend {
+                PreviewBackend::CpuReference => {
+                    ui.monospace(format!("LBM steps: {}", runtime.steps()));
+                }
+                PreviewBackend::GpuCompute => {
+                    ui.monospace(format!("GPU sample stride: {}", gpu_request.sample_stride));
+                    ui.monospace(format!("GPU sample vectors: {}", gpu_request.sample_count));
+                    ui.monospace(format!("GPU readback frames: {}", gpu_snapshot.frames_received));
+                    ui.small(
+                        "D3Q19 distributions stay in VRAM and ping-pong there. Only the sampled velocity vectors needed for viewport arrows are read back.",
+                    );
+                    ui.small(
+                        "The active graphics device storage-buffer limit is checked again when the GPU buffers are created; exceeding it does not silently reduce the grid.",
+                    );
+                }
+            }
+
             if runtime.max_source_speed_mps > 0.0 {
                 ui.monospace(format!(
                     "Velocity mapping: {:.3} m/s → 1 lattice unit/s",
@@ -309,13 +376,26 @@ pub fn draw_ui(
                 ));
             }
             ui.small(
-                "Preview preserves relative source speeds and visual flow structure. It does not silently substitute a different grid or claim physical Reynolds similarity when the scaling diagnostic rejects it.",
+                "Preview preserves relative source speeds and visual flow structure. It does not claim physical Reynolds similarity when the scaling diagnostic rejects it.",
             );
-            if runtime.status == PreviewStatus::AccurateSolverPending {
-                ui.colored_label(
-                    egui::Color32::YELLOW,
-                    "SU2 adapter foundation exists, but mesh generation and in-app accurate-case execution are not wired yet.",
-                );
+
+            match runtime.status {
+                PreviewStatus::GpuInitializing => {
+                    ui.label("GPU buffers/pipelines are initializing; waiting for the first sampled field.");
+                }
+                PreviewStatus::BlockedGpuBudget => {
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        "GPU preview request was blocked by the explicit host-side preparation budget.",
+                    );
+                }
+                PreviewStatus::AccurateSolverPending => {
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        "SU2 adapter foundation exists, but mesh generation and in-app accurate-case execution are not wired yet.",
+                    );
+                }
+                _ => {}
             }
         });
 
@@ -326,6 +406,8 @@ pub fn draw_ui(
             ui.label(format!("{} geometry objects", state.objects.len()));
             ui.separator();
             ui.label(format!("{} wind sources", state.wind_sources.len()));
+            ui.separator();
+            ui.label(format!("{:?}", runtime.backend));
             ui.separator();
             ui.label(format!("Preview: {:?}", runtime.status));
         });

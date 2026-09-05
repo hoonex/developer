@@ -2,10 +2,11 @@ use bevy::prelude::*;
 use bevy_egui::input::EguiWantsInput;
 use bevy_panorbit_camera::PanOrbitCamera;
 
+use crate::gpu_preview::GpuPreviewSnapshot;
 use crate::model::{
     rotation_from_degrees, PrimitiveKind, ProjectState, SelectedItem, WindSourceKind,
 };
-use crate::simulation::{cell_center_world, SimulationRuntime};
+use crate::simulation::{cell_center_world, PreviewBackend, SimulationRuntime};
 
 #[derive(Component)]
 pub struct EditorVisual;
@@ -218,8 +219,6 @@ pub fn sync_gizmo_to_model(
     }
 
     if *was_active && !gizmo_state.active {
-        // Rebuild CFD masks only after release so dragging stays responsive and the focused
-        // render entity is not respawned underneath the pointer.
         state.touch();
     }
     *was_active = gizmo_state.active;
@@ -272,7 +271,15 @@ pub fn draw_flow_gizmos(
     mut gizmos: Gizmos,
     state: Res<ProjectState>,
     runtime: Res<SimulationRuntime>,
+    gpu_snapshot: Res<GpuPreviewSnapshot>,
 ) {
+    match runtime.backend {
+        PreviewBackend::CpuReference => draw_cpu_flow(&mut gizmos, &state, &runtime),
+        PreviewBackend::GpuCompute => draw_gpu_flow(&mut gizmos, &state, &gpu_snapshot),
+    }
+}
+
+fn draw_cpu_flow(gizmos: &mut Gizmos, state: &ProjectState, runtime: &SimulationRuntime) {
     let Some(solver) = runtime.solver.as_ref() else {
         return;
     };
@@ -285,9 +292,7 @@ pub fn draw_flow_gizmos(
     let target_vectors = runtime.max_vectors.max(1);
     let ratio = cell_count as f32 / target_vectors as f32;
     let stride = ratio.cbrt().ceil().max(1.0) as usize;
-    let cell_scale = (state.simulation.domain_size_m.x / dims[0] as f32)
-        .min(state.simulation.domain_size_m.y / dims[1] as f32)
-        .min(state.simulation.domain_size_m.z / dims[2] as f32);
+    let cell_scale = min_cell_scale(state, dims);
     let max_speed = runtime.max_lattice_speed.max(1.0e-5);
 
     for z in (0..dims[2]).step_by(stride) {
@@ -302,20 +307,90 @@ pub fn draw_flow_gizmos(
                 if speed < 5.0e-4 {
                     continue;
                 }
-                let origin = cell_center_world(p, dims, state.simulation.domain_size_m);
-                let normalized = (speed / max_speed).clamp(0.0, 1.0);
-                let length = cell_scale * (0.35 + normalized * 2.4) * stride as f32;
-                let tip = origin + velocity.normalize_or_zero() * length;
-                draw_arrow(
-                    &mut gizmos,
-                    origin,
-                    tip,
-                    flow_color(normalized),
-                    (cell_scale * 0.22 * stride as f32).max(0.025),
+                draw_flow_vector(
+                    gizmos,
+                    state,
+                    p,
+                    dims,
+                    velocity,
+                    speed,
+                    max_speed,
+                    cell_scale,
+                    stride,
                 );
             }
         }
     }
+}
+
+fn draw_gpu_flow(
+    gizmos: &mut Gizmos,
+    state: &ProjectState,
+    snapshot: &GpuPreviewSnapshot,
+) {
+    if !snapshot.is_current(state.revision) || snapshot.max_speed <= 0.0 {
+        return;
+    }
+    let dims = snapshot.dims.map(|n| n as usize);
+    if dims.contains(&0) {
+        return;
+    }
+    let stride = snapshot.sample_stride.max(1) as usize;
+    let cell_scale = min_cell_scale(state, dims);
+    let max_speed = snapshot.max_speed.max(1.0e-5);
+
+    for (sample_index, sample) in snapshot.samples.iter().enumerate() {
+        let speed = sample[3];
+        if speed < 5.0e-4 {
+            continue;
+        }
+        let Some(p) = snapshot.sample_xyz(sample_index) else {
+            continue;
+        };
+        let velocity = Vec3::new(sample[0], sample[1], sample[2]);
+        draw_flow_vector(
+            gizmos,
+            state,
+            p,
+            dims,
+            velocity,
+            speed,
+            max_speed,
+            cell_scale,
+            stride,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_flow_vector(
+    gizmos: &mut Gizmos,
+    state: &ProjectState,
+    p: [usize; 3],
+    dims: [usize; 3],
+    velocity: Vec3,
+    speed: f32,
+    max_speed: f32,
+    cell_scale: f32,
+    stride: usize,
+) {
+    let origin = cell_center_world(p, dims, state.simulation.domain_size_m);
+    let normalized = (speed / max_speed).clamp(0.0, 1.0);
+    let length = cell_scale * (0.35 + normalized * 2.4) * stride as f32;
+    let tip = origin + velocity.normalize_or_zero() * length;
+    draw_arrow(
+        gizmos,
+        origin,
+        tip,
+        flow_color(normalized),
+        (cell_scale * 0.22 * stride as f32).max(0.025),
+    );
+}
+
+fn min_cell_scale(state: &ProjectState, dims: [usize; 3]) -> f32 {
+    (state.simulation.domain_size_m.x / dims[0] as f32)
+        .min(state.simulation.domain_size_m.y / dims[1] as f32)
+        .min(state.simulation.domain_size_m.z / dims[2] as f32)
 }
 
 fn draw_arrow(gizmos: &mut Gizmos, origin: Vec3, tip: Vec3, color: Color, head: f32) {
