@@ -10,3 +10,6 @@ bevy = { version = "0.19.1", features = ["mesh_picking"] }
 bevy_egui = "0.40.1"
 bevy_panorbit_camera = { version = "0.35.0", features = ["bevy_egui"] }
 bytemuck = "1.23"
+
+[dev-dependencies]
+naga = { version = "29.0.3", features = ["wgsl-in"] }

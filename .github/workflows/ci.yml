@@ -47,3 +47,5 @@ jobs:
             ${{ runner.os }}-cargo-
       - name: Check desktop editor and test targets
         run: cargo check -p aeroforge-app --all-targets
+      - name: Validate GPU WGSL
+        run: cargo test -p aeroforge-app --test shader_validation
