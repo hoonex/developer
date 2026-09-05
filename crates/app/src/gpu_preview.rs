@@ -1,7 +1,7 @@
 use std::{borrow::Cow, sync::Arc};
 
 use bevy::{
-    asset::RenderAssetUsages,
+    asset::{load_internal_asset, uuid_handle, RenderAssetUsages},
     prelude::*,
     render::{
         extract_resource::{ExtractResource, ExtractResourcePlugin},
@@ -15,9 +15,11 @@ use bevy::{
         storage::{GpuShaderBuffer, ShaderBuffer},
         Render, RenderApp, RenderStartup, RenderSystems,
     },
+    shader::Shader,
 };
 
-const SHADER_ASSET_PATH: &str = "shaders/lbm_preview.wgsl";
+const LBM_PREVIEW_SHADER_HANDLE: Handle<Shader> =
+    uuid_handle!("f327b901-69ff-4af7-bf4e-b6a1490211f4");
 const Q: usize = 19;
 const WORKGROUP_SIZE: u32 = 64;
 pub const MAX_GPU_SAMPLES: usize = 4096;
@@ -167,6 +169,13 @@ pub struct GpuPreviewPlugin;
 
 impl Plugin for GpuPreviewPlugin {
     fn build(&self, app: &mut App) {
+        load_internal_asset!(
+            app,
+            LBM_PREVIEW_SHADER_HANDLE,
+            "lbm_preview.wgsl",
+            Shader::from_wgsl
+        );
+
         app.init_resource::<GpuPreviewRequest>()
             .init_resource::<GpuPreviewHandles>()
             .init_resource::<GpuPreviewSnapshot>()
@@ -246,7 +255,6 @@ struct GpuPreviewPipeline {
 
 fn init_compute_pipeline(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
     pipeline_cache: Res<PipelineCache>,
 ) {
     let layout = BindGroupLayoutDescriptor::new(
@@ -263,7 +271,7 @@ fn init_compute_pipeline(
             ),
         ),
     );
-    let shader = asset_server.load(SHADER_ASSET_PATH);
+    let shader = LBM_PREVIEW_SHADER_HANDLE;
     let init_pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
         label: Some("AeroForge GPU LBM init".into()),
         layout: vec![layout.clone()],

@@ -1,5 +1,10 @@
 [workspace]
-members = ["crates/flow_core", "crates/accurate_backend", "crates/app"]
+members = [
+    "crates/flow_core",
+    "crates/accurate_backend",
+    "crates/app",
+    "crates/gpu_smoke",
+]
 resolver = "3"
 
 [workspace.package]
