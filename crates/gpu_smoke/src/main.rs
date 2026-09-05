@@ -42,7 +42,6 @@ fn main() {
         label: Some("AeroForge GPU parity smoke"),
         required_features: wgpu::Features::empty(),
         required_limits: wgpu::Limits::downlevel_defaults(),
-        default_queue: wgpu::QueueDescriptor { label: None },
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
         memory_hints: wgpu::MemoryHints::MemoryUsage,
         trace: wgpu::Trace::Off,
@@ -211,9 +210,7 @@ fn main() {
     device
         .poll(wgpu::PollType::wait_indefinitely())
         .expect("failed while waiting for GPU parity readback");
-    let mapped = slice
-        .get_mapped_range()
-        .expect("failed to map GPU parity readback");
+    let mapped = slice.get_mapped_range();
     let gpu = decode_samples(&mapped);
     assert_eq!(gpu.len(), cells, "GPU parity sample count mismatch");
 
