@@ -139,7 +139,7 @@ pub fn draw_ui(mut contexts: EguiContexts, mut state: ResMut<ProjectState>) -> R
 
         let cells = state.simulation.cell_count();
         let gib = state.simulation.lbm_distribution_memory_bytes() as f64 / 1024.0_f64.powi(3);
-        ui.monospace(format!("Cells: {cells:,}"));
+        ui.monospace(format!("Cells: {cells}"));
         ui.monospace(format!("LBM f32 ping-pong: {gib:.2} GiB"));
         if gib > 6.0 {
             ui.colored_label(egui::Color32::YELLOW, "High VRAM requirement — reduce grid or use future sparse/adaptive mode.");
