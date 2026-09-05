@@ -88,7 +88,7 @@ pub fn draw_ui(
 
     egui::SidePanel::right("inspector")
         .resizable(true)
-        .default_width(350.0)
+        .default_width(370.0)
         .show(ctx, |ui| {
             ui.heading("Inspector");
             ui.separator();
@@ -236,7 +236,7 @@ pub fn draw_ui(
                         .selectable_value(
                             &mut state.simulation.mode,
                             SolverMode::Accurate,
-                            "Accurate solve (planned)",
+                            "Accurate solve (SU2 pipeline)",
                         )
                         .changed();
                 });
@@ -251,6 +251,41 @@ pub fn draw_ui(
                     "CPU reference preview is blocked above 2,000,000 cells. Grid is never silently reduced.",
                 );
             }
+
+            let scaling = runtime.physical_scaling_report(&state);
+            ui.collapsing("Physical scaling diagnostics", |ui| {
+                ui.monospace(format!(
+                    "Cell size: {:.5} × {:.5} × {:.5} m",
+                    scaling.cell_size_m[0], scaling.cell_size_m[1], scaling.cell_size_m[2]
+                ));
+                ui.monospace(format!(
+                    "Cell anisotropy: {:.3}×",
+                    scaling.cell_anisotropy_ratio
+                ));
+                if let Some(dt) = scaling.physical_dt_s {
+                    ui.monospace(format!("Implied physical dt: {dt:.6e} s"));
+                }
+                if let Some(tau) = scaling.tau_for_physical_viscosity {
+                    ui.monospace(format!("τ needed for requested air ν: {tau:.8}"));
+                }
+                if let Some(ratio) = scaling.preview_viscosity_ratio {
+                    ui.monospace(format!("Preview effective ν / requested ν: {ratio:.3e}×"));
+                }
+                if !scaling.grid_is_near_cubic {
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        "D3Q19 expects near-cubic cells; change domain/grid proportions before quantitative interpretation.",
+                    );
+                }
+                if scaling.quantitative_bgk_feasible {
+                    ui.label("BGK scaling is numerically plausible for this mapping, but benchmark validation is still required.");
+                } else {
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        "Current BGK preview is qualitative for these physical settings. Use the accurate backend for engineering values.",
+                    );
+                }
+            });
 
             ui.separator();
             ui.heading("Preview runtime");
@@ -274,12 +309,12 @@ pub fn draw_ui(
                 ));
             }
             ui.small(
-                "Preview currently preserves relative source speeds by mapping the strongest source to a conservative lattice velocity. Physical time/Reynolds mapping is not validated yet, so this mode is qualitative rather than engineering-grade CFD.",
+                "Preview preserves relative source speeds and visual flow structure. It does not silently substitute a different grid or claim physical Reynolds similarity when the scaling diagnostic rejects it.",
             );
             if runtime.status == PreviewStatus::AccurateSolverPending {
                 ui.colored_label(
                     egui::Color32::YELLOW,
-                    "Accurate finite-volume backend is intentionally not implemented yet.",
+                    "SU2 adapter foundation exists, but mesh generation and in-app accurate-case execution are not wired yet.",
                 );
             }
         });

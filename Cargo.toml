@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/flow_core", "crates/app"]
+members = ["crates/flow_core", "crates/accurate_backend", "crates/app"]
 resolver = "3"
 
 [workspace.package]

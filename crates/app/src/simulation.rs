@@ -1,4 +1,4 @@
-use aeroforge_flow_core::{CpuLbm, VelocityField};
+use aeroforge_flow_core::{assess_physical_scaling, CpuLbm, PhysicalScalingReport, VelocityField};
 use bevy::prelude::*;
 
 use crate::model::{
@@ -6,8 +6,8 @@ use crate::model::{
     WindSource, WindSourceKind,
 };
 
-const PREVIEW_TAU: f32 = 0.8;
-const TARGET_MAX_LATTICE_SPEED: f32 = 0.075;
+pub(crate) const PREVIEW_TAU: f32 = 0.8;
+pub(crate) const TARGET_MAX_LATTICE_SPEED: f32 = 0.075;
 const CPU_PREVIEW_CELL_LIMIT: u64 = 2_000_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +72,23 @@ impl SimulationRuntime {
     pub fn dims(&self) -> Option<[usize; 3]> {
         self.solver.as_ref().map(CpuLbm::dims)
     }
+
+    pub fn physical_scaling_report(&self, state: &ProjectState) -> PhysicalScalingReport {
+        let max_speed_mps = state
+            .wind_sources
+            .iter()
+            .filter(|source| source.enabled)
+            .map(|source| source.speed_mps.max(0.0))
+            .fold(0.0_f32, f32::max);
+        assess_physical_scaling(
+            state.simulation.domain_size_m.to_array(),
+            state.simulation.grid.map(|n| n as usize),
+            max_speed_mps,
+            state.simulation.kinematic_viscosity,
+            TARGET_MAX_LATTICE_SPEED,
+            PREVIEW_TAU,
+        )
+    }
 }
 
 pub fn advance_preview(state: Res<ProjectState>, mut runtime: ResMut<SimulationRuntime>) {
@@ -92,7 +109,7 @@ pub fn advance_preview(state: Res<ProjectState>, mut runtime: ResMut<SimulationR
     }
 
     let steps = runtime.steps_per_frame.clamp(1, 32);
-    let mut new_max_speed = runtime.max_lattice_speed;
+    let new_max_speed;
     {
         let runtime = &mut *runtime;
         let SimulationRuntime { solver, forcing, .. } = runtime;
@@ -342,5 +359,15 @@ mod tests {
         assert!(field.active_cells() > 0);
         let target = field.target([4, 2, 4]).unwrap();
         assert!(target[2].abs() > target[0].abs());
+    }
+
+    #[test]
+    fn default_preview_reports_non_quantitative_air_scaling() {
+        let state = ProjectState::default();
+        let runtime = SimulationRuntime::default();
+        let report = runtime.physical_scaling_report(&state);
+        assert!(report.grid_is_near_cubic);
+        assert!(!report.quantitative_bgk_feasible);
+        assert!(report.tau_for_physical_viscosity.unwrap() < 0.501);
     }
 }

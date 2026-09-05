@@ -2,35 +2,64 @@
 
 ## Product target
 
-AeroForge is a desktop 3D aerodynamic workbench where the user can build/import geometry, place arbitrary wind emitters in 3D space, run flow simulation, and inspect velocity/pressure/forces without leaving the application.
+AeroForge is a native desktop 3D aerodynamic workbench where the user can build/import geometry, place arbitrary wind sources in 3D space, run flow simulation, and inspect velocity, pressure, forces, and convergence without leaving the application.
 
 The product must not assume a single wind direction or a single inlet face. A wind source is a first-class scene object.
 
 ## Solver strategy
 
-### Interactive preview
+AeroForge deliberately separates **interactive preview** from **engineering solve**. A visually plausible field is not automatically a quantitatively valid CFD result.
 
-Use a voxel/SDF domain and D3Q19 lattice-Boltzmann method (LBM). The CPU implementation in `flow_core` exists as a correctness/reference kernel. The production preview path should move the same state layout to GPU compute.
+### Interactive preview: native GPU LBM
+
+Use a voxel/SDF domain and D3Q19 lattice-Boltzmann method (LBM). The CPU implementation in `flow_core` is the correctness/reference kernel. The production preview path will move the same field model to GPU compute.
 
 Why LBM for preview:
 
 - local collision/stream operations map well to GPU compute;
 - arbitrary solid voxel geometry is straightforward;
-- velocity fields become available every step for immediate visualization;
-- multi-source forcing is naturally expressible as spatial regions.
+- velocity fields are available every step for immediate visualization;
+- multiple spatial wind sources are naturally rasterized into a target-velocity field;
+- geometry/source masks can be cached independently from solver stepping.
 
-Constraints that must stay visible in the UI:
+Current preview limitations stay visible in the UI:
 
-- weakly compressible method; keep lattice Mach number conservative;
+- D3Q19 BGK is weakly compressible and must keep lattice Mach number conservative;
 - voxel resolution controls boundary fidelity;
-- wall treatment and source forcing affect quantitative accuracy;
-- preview results are not automatically equivalent to validated engineering CFD.
+- realistic high-Reynolds-number air flows can require BGK relaxation time extremely close to 0.5, where a coarse preview grid is not a credible quantitative solver;
+- the current CPU preview preserves relative physical source speeds but does not claim validated physical time/Reynolds scaling;
+- turbulence intensity is stored but is not yet converted into a fabricated random forcing model;
+- preview results are not engineering CFD unless benchmark evidence establishes that claim for the relevant regime.
 
-### Accurate solve
+`flow_core::scaling` provides physical-scaling diagnostics so the program can state when cubic-grid or BGK relaxation constraints make a quantitative mapping implausible instead of silently changing viscosity.
 
-Keep a second solver backend behind the same project/geometry/source model. Target a pressure-based incompressible finite-volume path with explicit residual reporting and turbulence-model selection (initially RANS k-omega SST). Accurate solve may use a different mesh and much longer runtimes.
+### Accurate solve v1: SU2 adapter
 
-The application should therefore report which backend produced every result.
+The first engineering-grade backend should integrate **SU2_CFD** rather than attempting to recreate an industrial finite-volume/RANS stack inside AeroForge from scratch.
+
+Target initial configuration:
+
+- incompressible Navier-Stokes / RANS;
+- dimensional units;
+- SST turbulence model where turbulent RANS is requested;
+- explicit residual/convergence history;
+- native force / drag / lift extraction;
+- result import into AeroForge for common visualization and comparison.
+
+AeroForge owns case preparation, geometry revision tracking, mesh provenance, config generation, process execution, progress parsing, result ingestion, and reproducibility metadata. SU2 owns the accurate numerical solve.
+
+The adapter must detect capabilities rather than pretend every preview source maps one-to-one to SU2:
+
+- domain-boundary Plane/Nozzle sources can map to velocity inlets;
+- internal fan/propulsor-like surfaces can map to actuator-disk-style models where physically appropriate;
+- arbitrary BoxVolume/Sphere preview forcing is **not** automatically an equivalent accurate boundary condition and must be reported as unsupported or converted through an explicit physical model chosen by the user;
+- every accurate result records SU2 version, config, mesh hash, geometry revision, convergence history, and source translation decisions.
+
+Packaging SU2 inside AeroForge is a separate distribution/licensing task. Initial development may discover an existing SU2 installation or use a separately provisioned executable; the UI must report the exact backend used.
+
+### Future native accurate backend
+
+A native pressure-based finite-volume backend may be added later behind the same project/result interface. It is not a prerequisite for delivering credible accurate results while the SU2 adapter is available.
 
 ## Wind source model
 
@@ -44,58 +73,77 @@ Every source owns:
 - turbulence intensity;
 - enabled state.
 
-Multiple sources may overlap. Future source types can include suction, vortex/rotor forcing, imported velocity fields, and time-varying curves.
+Multiple preview sources may overlap and their target velocities combine. Future source types can include suction, vortex/rotor forcing, imported velocity fields, pressure-jump/actuator surfaces, and time-varying curves.
+
+Backend capability is explicit. A source being representable in the editor does not imply every solver backend supports the same physical model.
 
 ## Geometry model
 
 Phase 1 supports primitives and transform editing inside the program. Next steps:
 
-1. STL/OBJ/glTF import;
-2. viewport picking and transform gizmos;
+1. viewport picking and transform gizmos;
+2. STL/OBJ/glTF import;
 3. CSG boolean union/subtract/intersect;
 4. profile extrusion and airfoil generator;
 5. mesh repair/manifold validation;
 6. SDF/voxelization cache for preview solver;
-7. high-quality surface/volume meshing for accurate solve.
+7. surface preparation and high-quality volume meshing for accurate cases.
 
-The modeling representation and solver representation are separate. Editing remains mesh/CSG based; preview computation consumes a voxel/SDF cache.
+The modeling representation and solver representation are separate. Editing remains mesh/CSG based; preview computation consumes a voxel/SDF cache; accurate computation consumes a solver-specific surface/volume mesh with provenance.
 
 ## GPU optimization plan
 
 Performance work must not silently reduce physical fidelity.
 
-- Default distribution precision: `f32`.
-- Ping-pong distribution buffers; structure-of-arrays layout for coalesced compute access.
-- GPU compute dispatch in 3D workgroups; keep collision and streaming fused when benchmark evidence supports it.
+- Default authoritative distribution precision: `f32`.
+- Ping-pong distribution buffers with a structure-of-arrays or otherwise benchmarked memory layout for coalesced GPU access.
+- GPU compute dispatch in 3D workgroups; fuse collision/streaming only when profiling and correctness tests support it.
 - Cache solid masks/SDF and rebuild only after geometry changes.
-- Rebuild source masks only after source transforms/parameters change.
+- Cache source target-velocity masks and rebuild only after source transforms/parameters change.
 - Decouple solver tick rate from rendering frame rate.
-- Visualization uses downsampled vector/particle data; the solver field remains full resolution.
-- Adaptive/bricked grids are a later optimization and require conservation/error tests before becoming default.
-- Never use `f16` for the authoritative solver state merely for frame rate; any reduced-precision path must be opt-in and benchmarked against `f32` error.
+- Visualization samples/downsamples the authoritative field; it does not downsample the solver behind the user's back.
+- Use an explicit memory budget and refuse/offer a lower requested grid rather than allocating until the process crashes.
+- Adaptive/bricked grids are a later optimization and require conservation/error tests before becoming a default path.
+- Reduced precision is opt-in only after error comparison against `f32`.
 
-For a 256^3 D3Q19 solver, two raw `f32` distribution buffers alone are roughly 2.4 GiB. Memory budgeting and sparse/adaptive techniques therefore matter as much as shader throughput at high resolution.
+For a 256^3 D3Q19 solver, two raw `f32` distribution buffers alone are roughly 2.4 GiB. Memory layout, caching, and sparse/adaptive strategies therefore matter as much as arithmetic throughput at high resolution.
 
-## Results and validation
+## Result contract
 
-Every result set should carry:
+Every result set carries enough provenance to prevent stale or incomparable results from being presented as current:
 
-- solver backend/version;
-- grid/mesh resolution;
-- fluid properties;
-- time-step/relaxation settings;
-- convergence/residual history where applicable;
-- source definitions;
+- solver backend and exact version;
 - geometry revision/hash;
-- force/drag/lift integration settings.
+- source definitions and backend translation;
+- grid/mesh resolution and mesh hash;
+- fluid properties;
+- timestep/relaxation/numerical scheme settings;
+- convergence/residual history where applicable;
+- force/drag/lift integration settings;
+- completion status and any warnings about unsupported physics or scaling.
 
-Validation milestones:
+Preview and accurate result sets can coexist for comparison, but the UI always labels which backend produced each field or scalar.
 
+## Validation ladder
+
+Numerical claims require benchmark evidence, not screenshots.
+
+Preview/reference milestones:
+
+- D3Q19 equilibrium/rest conservation;
 - uniform periodic flow conservation;
+- target-velocity field forcing behavior;
 - Poiseuille/channel-flow profile;
 - lid-driven cavity benchmark;
-- flow around cylinder (drag coefficient / shedding regime);
-- NACA airfoil cases against published reference data;
+- flow around a cylinder and vortex shedding regime;
 - grid-convergence checks.
 
-UI screenshots are not CFD validation. Numerical claims require benchmark evidence.
+Accurate-backend milestones:
+
+- reproduce selected upstream SU2 regression/tutorial cases without AeroForge translation changes;
+- canonical external cylinder drag cases;
+- NACA airfoil cases against published reference data;
+- mesh-convergence and turbulence-model sensitivity checks;
+- cross-backend comparison where the preview regime is expected to overlap.
+
+UI screenshots are evidence for editor/visualization behavior only. They are never CFD validation.
