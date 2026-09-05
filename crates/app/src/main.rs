@@ -4,6 +4,7 @@ use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
 use bevy_panorbit_camera::PanOrbitCameraPlugin;
 
 mod editor_toolbar;
+mod gpu_preview;
 mod model;
 mod scene;
 mod simulation;
@@ -31,6 +32,7 @@ fn main() {
             PanOrbitCameraPlugin,
             MeshPickingPlugin,
             TransformGizmoPlugin,
+            gpu_preview::GpuPreviewPlugin,
         ))
         .add_systems(Startup, scene::setup)
         .add_systems(Update, (scene::sync_visuals, scene::sync_gizmo_focus).chain())
