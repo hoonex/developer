@@ -134,9 +134,9 @@ fn step(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let macro_state = macroscopic(cell);
     var u = macro_state.u;
-    let target = forcing[cell];
-    if (target.w > 0.0) {
-        u = clamp_velocity(target.xyz);
+    let imposed_velocity = forcing[cell];
+    if (imposed_velocity.w > 0.0) {
+        u = clamp_velocity(imposed_velocity.xyz);
     }
     let omega = params.physics.x;
 

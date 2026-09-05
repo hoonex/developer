@@ -64,5 +64,6 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
+          save-always: true
       - name: Validate WGSL and compare GPU against CPU reference
         run: cargo run -p aeroforge-gpu-smoke
