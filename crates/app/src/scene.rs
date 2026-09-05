@@ -1,11 +1,20 @@
 use bevy::prelude::*;
+use bevy_egui::input::EguiWantsInput;
 use bevy_panorbit_camera::PanOrbitCamera;
 
-use crate::model::{rotation_from_degrees, PrimitiveKind, ProjectState, WindSourceKind};
+use crate::model::{
+    rotation_from_degrees, PrimitiveKind, ProjectState, SelectedItem, WindSourceKind,
+};
 use crate::simulation::{cell_center_world, SimulationRuntime};
 
 #[derive(Component)]
 pub struct EditorVisual;
+
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditorTarget {
+    Object(u64),
+    Wind(u64),
+}
 
 pub fn setup(mut commands: Commands) {
     commands.spawn((
@@ -21,6 +30,7 @@ pub fn setup(mut commands: Commands) {
         Camera3d::default(),
         Transform::from_xyz(8.0, 6.0, 10.0).looking_at(Vec3::new(0.0, 1.5, 0.0), Vec3::Y),
         PanOrbitCamera::default(),
+        TransformGizmoCamera,
     ));
 }
 
@@ -56,14 +66,19 @@ pub fn sync_visuals(
             perceptual_roughness: 0.42,
             ..default()
         });
-        commands.spawn((
+        let mut entity = commands.spawn((
             EditorVisual,
+            EditorTarget::Object(object.id),
             Mesh3d(mesh),
             MeshMaterial3d(material),
             Transform::from_translation(object.position)
                 .with_rotation(rotation_from_degrees(object.rotation_deg))
-                .with_scale(object.scale.max(Vec3::splat(0.01))),
+                .with_scale(object.scale.abs().max(Vec3::splat(0.01))),
         ));
+        entity.observe(select_editor_target);
+        if state.selection == SelectedItem::Object(object.id) {
+            entity.insert(TransformGizmoFocus);
+        }
     }
 
     for source in &state.wind_sources {
@@ -80,19 +95,134 @@ pub fn sync_visuals(
             unlit: true,
             ..default()
         });
-        let mut visual_scale = source.size.max(Vec3::splat(0.02));
-        if source.kind == WindSourceKind::Plane {
-            visual_scale.x = visual_scale.x.min(0.04).max(0.02);
-        }
-        commands.spawn((
+        let mut entity = commands.spawn((
             EditorVisual,
+            EditorTarget::Wind(source.id),
             Mesh3d(mesh),
             MeshMaterial3d(material),
             Transform::from_translation(source.position)
                 .with_rotation(rotation_from_degrees(source.rotation_deg))
-                .with_scale(visual_scale),
+                .with_scale(source.size.abs().max(Vec3::splat(0.02))),
         ));
+        entity.observe(select_editor_target);
+        if state.selection == SelectedItem::Wind(source.id) {
+            entity.insert(TransformGizmoFocus);
+        }
     }
+}
+
+fn select_editor_target(
+    click: On<Pointer<Click>>,
+    targets: Query<&EditorTarget>,
+    egui_input: Res<EguiWantsInput>,
+    mut state: ResMut<ProjectState>,
+) {
+    if egui_input.wants_any_pointer_input() {
+        return;
+    }
+    let Ok(target) = targets.get(click.entity) else {
+        return;
+    };
+    state.selection = match *target {
+        EditorTarget::Object(id) => SelectedItem::Object(id),
+        EditorTarget::Wind(id) => SelectedItem::Wind(id),
+    };
+}
+
+pub fn sync_gizmo_focus(
+    mut commands: Commands,
+    state: Res<ProjectState>,
+    visuals: Query<(Entity, &EditorTarget, Option<&TransformGizmoFocus>), With<EditorVisual>>,
+) {
+    for (entity, target, focused) in &visuals {
+        let should_focus = match (*target, state.selection) {
+            (EditorTarget::Object(a), SelectedItem::Object(b)) => a == b,
+            (EditorTarget::Wind(a), SelectedItem::Wind(b)) => a == b,
+            _ => false,
+        };
+        match (should_focus, focused.is_some()) {
+            (true, false) => {
+                commands.entity(entity).insert(TransformGizmoFocus);
+            }
+            (false, true) => {
+                commands.entity(entity).remove::<TransformGizmoFocus>();
+            }
+            _ => {}
+        }
+    }
+}
+
+pub fn gizmo_shortcuts(
+    keys: Res<ButtonInput<KeyCode>>,
+    egui_input: Res<EguiWantsInput>,
+    mut settings: ResMut<TransformGizmoSettings>,
+    gizmo_state: Res<TransformGizmoState>,
+    mut cameras: Query<&mut PanOrbitCamera>,
+) {
+    if !egui_input.wants_any_keyboard_input() {
+        if keys.just_pressed(KeyCode::KeyW) {
+            settings.mode = TransformGizmoMode::Translate;
+        }
+        if keys.just_pressed(KeyCode::KeyE) {
+            settings.mode = TransformGizmoMode::Rotate;
+        }
+        if keys.just_pressed(KeyCode::KeyR) {
+            settings.mode = TransformGizmoMode::Scale;
+        }
+        if keys.just_pressed(KeyCode::KeyX) {
+            settings.space = match settings.space {
+                TransformGizmoSpace::World => TransformGizmoSpace::Local,
+                TransformGizmoSpace::Local => TransformGizmoSpace::World,
+            };
+        }
+    }
+
+    let camera_enabled = !gizmo_state.active
+        && gizmo_state.hovered_axis.is_none()
+        && !egui_input.wants_any_pointer_input();
+    for mut camera in &mut cameras {
+        camera.enabled = camera_enabled;
+    }
+}
+
+pub fn sync_gizmo_to_model(
+    gizmo_state: Res<TransformGizmoState>,
+    visuals: Query<(&EditorTarget, &Transform), With<EditorVisual>>,
+    mut state: ResMut<ProjectState>,
+    mut was_active: Local<bool>,
+) {
+    if gizmo_state.active {
+        if let Some(entity) = gizmo_state.entity {
+            if let Ok((target, transform)) = visuals.get(entity) {
+                let (rx, ry, rz) = transform.rotation.to_euler(EulerRot::XYZ);
+                let rotation_deg = Vec3::new(rx.to_degrees(), ry.to_degrees(), rz.to_degrees());
+                let scale = transform.scale.abs().max(Vec3::splat(0.001));
+                match *target {
+                    EditorTarget::Object(id) => {
+                        if let Some(object) = state.objects.iter_mut().find(|object| object.id == id) {
+                            object.position = transform.translation;
+                            object.rotation_deg = rotation_deg;
+                            object.scale = scale;
+                        }
+                    }
+                    EditorTarget::Wind(id) => {
+                        if let Some(source) = state.wind_sources.iter_mut().find(|source| source.id == id) {
+                            source.position = transform.translation;
+                            source.rotation_deg = rotation_deg;
+                            source.size = scale;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if *was_active && !gizmo_state.active {
+        // Rebuild CFD masks only after release so dragging stays responsive and the focused
+        // render entity is not respawned underneath the pointer.
+        state.touch();
+    }
+    *was_active = gizmo_state.active;
 }
 
 pub fn draw_editor_gizmos(mut gizmos: Gizmos, state: Res<ProjectState>) {

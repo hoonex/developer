@@ -3,6 +3,7 @@ use bevy::window::PresentMode;
 use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
 use bevy_panorbit_camera::PanOrbitCameraPlugin;
 
+mod editor_toolbar;
 mod model;
 mod scene;
 mod simulation;
@@ -25,17 +26,30 @@ fn main() {
             }),
             ..default()
         }))
-        .add_plugins((EguiPlugin::default(), PanOrbitCameraPlugin))
+        .add_plugins((
+            EguiPlugin::default(),
+            PanOrbitCameraPlugin,
+            MeshPickingPlugin,
+            TransformGizmoPlugin,
+        ))
         .add_systems(Startup, scene::setup)
+        .add_systems(Update, (scene::sync_visuals, scene::sync_gizmo_focus).chain())
         .add_systems(
             Update,
             (
-                scene::sync_visuals,
+                scene::gizmo_shortcuts,
                 simulation::advance_preview,
                 scene::draw_editor_gizmos,
                 scene::draw_flow_gizmos,
             ),
         )
-        .add_systems(EguiPrimaryContextPass, ui::draw_ui)
+        .add_systems(
+            PostUpdate,
+            scene::sync_gizmo_to_model.after(TransformGizmoSystems),
+        )
+        .add_systems(
+            EguiPrimaryContextPass,
+            (ui::draw_ui, editor_toolbar::draw_transform_toolbar),
+        )
         .run();
 }
