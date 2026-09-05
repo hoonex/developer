@@ -23,7 +23,6 @@ const WORKGROUP_SIZE: u32 = 64;
 pub const MAX_GPU_SAMPLES: usize = 4096;
 
 #[derive(Resource, Clone, ExtractResource)]
-#[extract_app(RenderApp)]
 pub struct GpuPreviewRequest {
     pub enabled: bool,
     pub revision: u64,
@@ -111,7 +110,6 @@ impl GpuPreviewRequest {
 }
 
 #[derive(Resource, Clone, ExtractResource)]
-#[extract_app(RenderApp)]
 struct GpuPreviewHandles {
     samples: Handle<ShaderBuffer>,
 }
