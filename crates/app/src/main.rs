@@ -1,0 +1,30 @@
+use bevy::prelude::*;
+use bevy::window::PresentMode;
+use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
+use bevy_panorbit_camera::PanOrbitCameraPlugin;
+
+mod model;
+mod scene;
+mod ui;
+
+use model::ProjectState;
+
+fn main() {
+    App::new()
+        .insert_resource(ClearColor(Color::srgb(0.028, 0.032, 0.045)))
+        .insert_resource(ProjectState::default())
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "AeroForge — 3D Aerodynamics Workbench".into(),
+                resolution: (1600, 900).into(),
+                present_mode: PresentMode::AutoVsync,
+                ..default()
+            }),
+            ..default()
+        }))
+        .add_plugins((EguiPlugin::default(), PanOrbitCameraPlugin))
+        .add_systems(Startup, scene::setup)
+        .add_systems(Update, (scene::sync_visuals, scene::draw_editor_gizmos))
+        .add_systems(EguiPrimaryContextPass, ui::draw_ui)
+        .run();
+}
