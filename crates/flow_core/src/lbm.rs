@@ -36,6 +36,56 @@ impl VelocityRegion {
     }
 }
 
+/// Dense target-velocity field used by arbitrary 3D wind-source rasterization.
+/// xyz stores the accumulated target lattice velocity, w > 0 marks an active cell.
+#[derive(Clone, Debug)]
+pub struct VelocityField {
+    dims: [usize; 3],
+    targets: Vec<[f32; 4]>,
+    active_cells: usize,
+}
+
+impl VelocityField {
+    pub fn new(dims: [usize; 3]) -> Self {
+        assert!(dims.iter().all(|&n| n > 0), "velocity-field dimensions must be > 0");
+        let cells = dims[0] * dims[1] * dims[2];
+        Self {
+            dims,
+            targets: vec![[0.0; 4]; cells],
+            active_cells: 0,
+        }
+    }
+
+    pub fn dims(&self) -> [usize; 3] {
+        self.dims
+    }
+
+    pub fn active_cells(&self) -> usize {
+        self.active_cells
+    }
+
+    pub fn clear(&mut self) {
+        self.targets.fill([0.0; 4]);
+        self.active_cells = 0;
+    }
+
+    pub fn add_target(&mut self, xyz: [usize; 3], velocity: [f32; 3]) {
+        let i = field_index(self.dims, xyz);
+        if self.targets[i][3] == 0.0 {
+            self.active_cells += 1;
+        }
+        self.targets[i][0] += velocity[0];
+        self.targets[i][1] += velocity[1];
+        self.targets[i][2] += velocity[2];
+        self.targets[i][3] = 1.0;
+    }
+
+    pub fn target(&self, xyz: [usize; 3]) -> Option<[f32; 3]> {
+        let t = self.targets[field_index(self.dims, xyz)];
+        (t[3] > 0.0).then_some([t[0], t[1], t[2]])
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct FlowSnapshot {
     pub dims: [usize; 3],
@@ -77,18 +127,47 @@ impl CpuLbm {
         self.dims
     }
 
+    pub fn steps(&self) -> u64 {
+        self.steps
+    }
+
     pub fn set_solid(&mut self, xyz: [usize; 3], solid: bool) {
         let i = self.index(xyz);
         self.solid[i] = solid;
         if solid {
             self.f[i] = equilibrium(1.0, [0.0; 3]);
+            self.next[i] = [0.0; Q];
             self.velocity[i] = [0.0; 3];
             self.density[i] = 1.0;
         }
     }
 
+    pub fn set_solid_mask(&mut self, solid: &[bool]) {
+        assert_eq!(solid.len(), self.solid.len(), "solid-mask cell count mismatch");
+        self.solid = solid.to_vec();
+        let rest = equilibrium(1.0, [0.0; 3]);
+        self.f.fill(rest);
+        self.next.fill([0.0; Q]);
+        self.density.fill(1.0);
+        self.velocity.fill([0.0; 3]);
+        self.steps = 0;
+    }
+
+    pub fn is_solid(&self, xyz: [usize; 3]) -> bool {
+        self.solid[self.index(xyz)]
+    }
+
+    pub fn velocity_at(&self, xyz: [usize; 3]) -> [f32; 3] {
+        self.velocity[self.index(xyz)]
+    }
+
+    pub fn density_at(&self, xyz: [usize; 3]) -> f32 {
+        self.density[self.index(xyz)]
+    }
+
     pub fn set_uniform_velocity(&mut self, velocity: [f32; 3]) {
-        let eq = equilibrium(1.0, clamp_lattice_velocity(velocity));
+        let velocity = clamp_lattice_velocity(velocity);
+        let eq = equilibrium(1.0, velocity);
         for i in 0..self.f.len() {
             if !self.solid[i] {
                 self.f[i] = eq;
@@ -101,6 +180,16 @@ impl CpuLbm {
     /// Advance one D3Q19 BGK step. Outer boundaries are periodic in this reference kernel.
     /// Production domains will expose explicit open/inlet/outlet boundary policies.
     pub fn step(&mut self, velocity_regions: &[VelocityRegion]) {
+        self.step_impl(None, velocity_regions);
+    }
+
+    /// Advance using a pre-rasterized arbitrary 3D target-velocity field.
+    pub fn step_with_field(&mut self, field: &VelocityField) {
+        assert_eq!(field.dims(), self.dims, "velocity-field dimensions must match solver");
+        self.step_impl(Some(field), &[]);
+    }
+
+    fn step_impl(&mut self, field: Option<&VelocityField>, velocity_regions: &[VelocityRegion]) {
         self.next.fill([0.0; Q]);
         let [nx, ny, nz] = self.dims;
 
@@ -115,18 +204,22 @@ impl CpuLbm {
                     }
 
                     let (rho, mut u) = macroscopic(&self.f[i]);
-                    let mut forced = [0.0_f32; 3];
-                    let mut has_forcing = false;
-                    for region in velocity_regions {
-                        if region.contains(p) {
-                            for axis in 0..3 {
-                                forced[axis] += region.velocity[axis];
+                    if let Some(target) = field.and_then(|f| f.target(p)) {
+                        u = clamp_lattice_velocity(target);
+                    } else if !velocity_regions.is_empty() {
+                        let mut forced = [0.0_f32; 3];
+                        let mut has_forcing = false;
+                        for region in velocity_regions {
+                            if region.contains(p) {
+                                for axis in 0..3 {
+                                    forced[axis] += region.velocity[axis];
+                                }
+                                has_forcing = true;
                             }
-                            has_forcing = true;
                         }
-                    }
-                    if has_forcing {
-                        u = clamp_lattice_velocity(forced);
+                        if has_forcing {
+                            u = clamp_lattice_velocity(forced);
+                        }
                     }
 
                     let eq = equilibrium(rho, u);
@@ -141,9 +234,9 @@ impl CpuLbm {
                         let tz = wrap(z as isize + C[q][2], nz);
                         let dst = self.index([tx, ty, tz]);
                         if self.solid[dst] {
-                            self.next[i][OPPOSITE[q]] = post[q];
+                            self.next[i][OPPOSITE[q]] += post[q];
                         } else {
-                            self.next[dst][q] = post[q];
+                            self.next[dst][q] += post[q];
                         }
                     }
                 }
@@ -184,9 +277,14 @@ impl CpuLbm {
         }
     }
 
-    fn index(&self, [x, y, z]: [usize; 3]) -> usize {
-        x + self.dims[0] * (y + self.dims[1] * z)
+    fn index(&self, xyz: [usize; 3]) -> usize {
+        field_index(self.dims, xyz)
     }
+}
+
+fn field_index(dims: [usize; 3], [x, y, z]: [usize; 3]) -> usize {
+    assert!(x < dims[0] && y < dims[1] && z < dims[2], "grid coordinate out of bounds");
+    x + dims[0] * (y + dims[1] * z)
 }
 
 fn equilibrium(rho: f32, u: [f32; 3]) -> [f32; Q] {
@@ -275,5 +373,37 @@ mod tests {
             }
         }
         assert!(max_error < 1e-4, "velocity drift: {max_error}");
+    }
+
+    #[test]
+    fn dense_velocity_field_drives_target_cells() {
+        let dims = [12, 8, 6];
+        let mut field = VelocityField::new(dims);
+        for z in 1..5 {
+            for y in 2..6 {
+                field.add_target([2, y, z], [0.05, 0.0, 0.0]);
+            }
+        }
+        assert_eq!(field.active_cells(), 16);
+
+        let mut solver = CpuLbm::new(dims, 0.8);
+        for _ in 0..10 {
+            solver.step_with_field(&field);
+        }
+        assert!(solver.velocity_at([2, 3, 2])[0] > 0.015);
+        assert!(solver.max_speed() > 0.015);
+    }
+
+    #[test]
+    fn solid_cells_remain_stationary_under_forcing() {
+        let dims = [8, 6, 5];
+        let mut field = VelocityField::new(dims);
+        field.add_target([3, 3, 2], [0.07, 0.0, 0.0]);
+        let mut solver = CpuLbm::new(dims, 0.8);
+        solver.set_solid([3, 3, 2], true);
+        for _ in 0..8 {
+            solver.step_with_field(&field);
+        }
+        assert_eq!(solver.velocity_at([3, 3, 2]), [0.0; 3]);
     }
 }

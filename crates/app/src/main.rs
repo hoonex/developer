@@ -5,14 +5,17 @@ use bevy_panorbit_camera::PanOrbitCameraPlugin;
 
 mod model;
 mod scene;
+mod simulation;
 mod ui;
 
 use model::ProjectState;
+use simulation::SimulationRuntime;
 
 fn main() {
     App::new()
         .insert_resource(ClearColor(Color::srgb(0.028, 0.032, 0.045)))
         .insert_resource(ProjectState::default())
+        .init_resource::<SimulationRuntime>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "AeroForge — 3D Aerodynamics Workbench".into(),
@@ -24,7 +27,15 @@ fn main() {
         }))
         .add_plugins((EguiPlugin::default(), PanOrbitCameraPlugin))
         .add_systems(Startup, scene::setup)
-        .add_systems(Update, (scene::sync_visuals, scene::draw_editor_gizmos))
+        .add_systems(
+            Update,
+            (
+                scene::sync_visuals,
+                simulation::advance_preview,
+                scene::draw_editor_gizmos,
+                scene::draw_flow_gizmos,
+            ),
+        )
         .add_systems(EguiPrimaryContextPass, ui::draw_ui)
         .run();
 }

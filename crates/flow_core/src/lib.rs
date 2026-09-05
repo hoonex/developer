@@ -1,3 +1,3 @@
 pub mod lbm;
 
-pub use lbm::{CpuLbm, FlowSnapshot, VelocityRegion};
+pub use lbm::{CpuLbm, FlowSnapshot, VelocityField, VelocityRegion};

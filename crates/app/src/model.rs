@@ -92,7 +92,7 @@ pub struct ProjectState {
     pub selection: SelectedItem,
     pub running: bool,
     pub revision: u64,
-    next_id: u64,
+    pub(crate) next_id: u64,
 }
 
 impl Default for ProjectState {
