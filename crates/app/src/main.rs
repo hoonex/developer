@@ -3,6 +3,7 @@ use bevy::window::PresentMode;
 use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
 use bevy_panorbit_camera::PanOrbitCameraPlugin;
 
+mod accurate_execute;
 mod accurate_prepare;
 mod editor_toolbar;
 mod gpu_preview;
@@ -11,6 +12,7 @@ mod scene;
 mod simulation;
 mod ui;
 
+use accurate_execute::AccurateExecutionRuntime;
 use accurate_prepare::AccurateRuntime;
 use model::ProjectState;
 use simulation::SimulationRuntime;
@@ -21,6 +23,7 @@ fn main() {
         .insert_resource(ProjectState::default())
         .init_resource::<SimulationRuntime>()
         .init_resource::<AccurateRuntime>()
+        .init_resource::<AccurateExecutionRuntime>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "AeroForge — 3D Aerodynamics Workbench".into(),
@@ -58,6 +61,7 @@ fn main() {
                 ui::draw_ui,
                 editor_toolbar::draw_transform_toolbar,
                 accurate_prepare::draw_accurate_prepare_ui,
+                accurate_execute::draw_accurate_execute_ui,
             )
                 .chain(),
         )
