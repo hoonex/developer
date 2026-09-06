@@ -1,20 +1,28 @@
 use aeroforge_flow_core::{BoundaryPolicy, CpuLbm, VelocityField};
 use std::f32::consts::TAU;
 
-const DIMS: [usize; 3] = [80, 40, 2];
+// Keep transverse periodic-image blockage at 10% instead of the earlier 20% exploratory case.
+// The streamwise extent leaves 2.5D upstream of the cylinder surface and 5D downstream of the
+// wake probe before the pressure outlet.
+const DIMS: [usize; 3] = [96, 80, 2];
 const CYLINDER_DIAMETER: f32 = 8.0;
 const CYLINDER_RADIUS: f32 = CYLINDER_DIAMETER * 0.5;
-const CYLINDER_CENTER: [f32; 2] = [20.0, 20.0];
+const CYLINDER_CENTER: [f32; 2] = [24.0, 40.0];
 const INLET_SPEED: f32 = 0.06;
 const REYNOLDS: f32 = 60.0;
 const SETTLE_STEPS: usize = 5_000;
 const SAMPLE_STEPS: usize = 6_000;
 
 #[test]
-fn cylinder_re60_develops_periodic_vortex_shedding() {
+fn cylinder_re60_low_blockage_develops_periodic_vortex_shedding() {
     let lattice_nu = INLET_SPEED * CYLINDER_DIAMETER / REYNOLDS;
     let tau = 0.5 + 3.0 * lattice_nu;
     assert!((tau - 0.524).abs() < 1.0e-6);
+    let blockage = CYLINDER_DIAMETER / DIMS[1] as f32;
+    assert!(
+        blockage <= 0.10 + f32::EPSILON,
+        "cylinder benchmark transverse blockage must stay at or below 10%: {blockage}"
+    );
 
     let mut solver = CpuLbm::new(DIMS, tau);
     solver
@@ -135,7 +143,7 @@ fn cylinder_re60_develops_periodic_vortex_shedding() {
     );
 
     println!(
-        "AEROFORGE_CYLINDER_RE60=PASS grid={}x{}x{} D={} U={} tau={tau:.6} St={strouhal:.5} period={mean_period:.2} spectral_prominence={:.2} wake_v_rms={wake_rms:.6} mean_Cd={mean_cd:.4} lift_amp={lift_amplitude:.6} max_rho_error={max_density_error:.6}",
+        "AEROFORGE_CYLINDER_RE60=PASS grid={}x{}x{} D={} U={} blockage={blockage:.3} tau={tau:.6} St={strouhal:.5} period={mean_period:.2} spectral_prominence={:.2} wake_v_rms={wake_rms:.6} mean_Cd={mean_cd:.4} lift_amp={lift_amplitude:.6} max_rho_error={max_density_error:.6}",
         DIMS[0], DIMS[1], DIMS[2], CYLINDER_DIAMETER, INLET_SPEED, spectrum.prominence
     );
 }
