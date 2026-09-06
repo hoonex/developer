@@ -14,6 +14,8 @@ pub(crate) const TARGET_MAX_LATTICE_SPEED: f32 = 0.075;
 pub(crate) const CPU_PREVIEW_CELL_LIMIT: u64 = 2_000_000;
 pub(crate) const GPU_PREVIEW_UPLOAD_CELL_LIMIT: u64 = 4_000_000;
 
+const GPU_BOUNDARY_X_MIN: u32 = 1;
+const GPU_BOUNDARY_X_MAX: u32 = 2;
 const GPU_BOUNDARY_Y_MIN: u32 = 4;
 const GPU_BOUNDARY_Y_MAX: u32 = 8;
 
@@ -93,16 +95,10 @@ impl SimulationRuntime {
     }
 
     pub fn physical_scaling_report(&self, state: &ProjectState) -> PhysicalScalingReport {
-        let max_speed_mps = state
-            .wind_sources
-            .iter()
-            .filter(|source| source.enabled)
-            .map(|source| source.speed_mps.max(0.0))
-            .fold(0.0_f32, f32::max);
         assess_physical_scaling(
             state.simulation.domain_size_m.to_array(),
             state.simulation.grid.map(|n| n as usize),
-            max_speed_mps,
+            max_preview_speed_mps(state),
             state.simulation.kinematic_viscosity,
             TARGET_MAX_LATTICE_SPEED,
             PREVIEW_TAU,
@@ -207,7 +203,9 @@ fn rebuild_runtime(
     }
 
     let dims = state.simulation.grid.map(|n| n as usize);
-    if dims.iter().any(|&n| n < 2) {
+    let wind_tunnel_too_thin = state.simulation.preview_boundary == PreviewBoundaryPreset::WindTunnelX
+        && dims[0] < 3;
+    if dims.iter().any(|&n| n < 2) || wind_tunnel_too_thin {
         gpu_request.disable();
         runtime.status = match runtime.backend {
             PreviewBackend::CpuReference => PreviewStatus::BlockedCpuBudget,
@@ -224,15 +222,16 @@ fn rebuild_runtime(
     runtime.max_source_speed_mps = max_source_speed_mps;
     runtime.lattice_velocity_scale = lattice_velocity_scale;
 
-    let (boundary_policy, gpu_boundary_mask) =
-        preview_boundary_config(state.simulation.preview_boundary);
+    let inlet_lattice_speed =
+        state.simulation.preview_inlet_speed_mps.max(0.0) * lattice_velocity_scale;
+    let boundary = preview_boundary_config(state.simulation.preview_boundary, inlet_lattice_speed);
 
     match runtime.backend {
         PreviewBackend::CpuReference => {
             gpu_request.disable();
             let mut solver = CpuLbm::new(dims, PREVIEW_TAU);
             solver
-                .set_boundary_policy(boundary_policy)
+                .set_boundary_policy(boundary.cpu_policy)
                 .expect("validated preview boundary preset must map to a valid CPU policy");
             solver.set_solid_mask(&solid_mask);
             runtime.forcing = Some(forcing);
@@ -248,10 +247,18 @@ fn rebuild_runtime(
                 state.revision,
                 state.simulation.grid,
                 PREVIEW_TAU,
-                gpu_boundary_mask,
+                boundary.stationary_mask,
                 gpu_solid,
                 packed_forcing,
             );
+            if boundary.velocity_inlet_mask != 0 || boundary.pressure_outlet_mask != 0 {
+                gpu_request.set_open_boundaries(
+                    boundary.velocity_inlet_mask,
+                    boundary.pressure_outlet_mask,
+                    boundary.inlet_velocities,
+                    boundary.pressure_densities,
+                );
+            }
             gpu_request.set_control(
                 state.running,
                 runtime.steps_per_frame,
@@ -262,13 +269,66 @@ fn rebuild_runtime(
     }
 }
 
-fn preview_boundary_config(preset: PreviewBoundaryPreset) -> (BoundaryPolicy, u32) {
+#[derive(Clone, Copy)]
+struct PreviewBoundaryConfig {
+    cpu_policy: BoundaryPolicy,
+    stationary_mask: u32,
+    velocity_inlet_mask: u32,
+    pressure_outlet_mask: u32,
+    inlet_velocities: [[f32; 3]; 6],
+    pressure_densities: [f32; 6],
+}
+
+fn preview_boundary_config(
+    preset: PreviewBoundaryPreset,
+    inlet_lattice_speed: f32,
+) -> PreviewBoundaryConfig {
     match preset {
-        PreviewBoundaryPreset::Periodic => (BoundaryPolicy::periodic(), 0),
-        PreviewBoundaryPreset::ChannelYNoSlip => (
-            BoundaryPolicy::channel_y_no_slip(),
-            GPU_BOUNDARY_Y_MIN | GPU_BOUNDARY_Y_MAX,
-        ),
+        PreviewBoundaryPreset::Periodic => PreviewBoundaryConfig {
+            cpu_policy: BoundaryPolicy::periodic(),
+            stationary_mask: 0,
+            velocity_inlet_mask: 0,
+            pressure_outlet_mask: 0,
+            inlet_velocities: [[0.0; 3]; 6],
+            pressure_densities: [0.0; 6],
+        },
+        PreviewBoundaryPreset::ChannelYNoSlip => PreviewBoundaryConfig {
+            cpu_policy: BoundaryPolicy::channel_y_no_slip(),
+            stationary_mask: GPU_BOUNDARY_Y_MIN | GPU_BOUNDARY_Y_MAX,
+            velocity_inlet_mask: 0,
+            pressure_outlet_mask: 0,
+            inlet_velocities: [[0.0; 3]; 6],
+            pressure_densities: [0.0; 6],
+        },
+        PreviewBoundaryPreset::WindTunnelX => {
+            let velocity = [inlet_lattice_speed, 0.0, 0.0];
+            let mut inlet_velocities = [[0.0; 3]; 6];
+            inlet_velocities[0] = velocity;
+            let mut pressure_densities = [0.0; 6];
+            pressure_densities[1] = 1.0;
+            PreviewBoundaryConfig {
+                cpu_policy: BoundaryPolicy::velocity_pressure_x(velocity, 1.0),
+                stationary_mask: 0,
+                velocity_inlet_mask: GPU_BOUNDARY_X_MIN,
+                pressure_outlet_mask: GPU_BOUNDARY_X_MAX,
+                inlet_velocities,
+                pressure_densities,
+            }
+        }
+    }
+}
+
+fn max_preview_speed_mps(state: &ProjectState) -> f32 {
+    let source_max = state
+        .wind_sources
+        .iter()
+        .filter(|source| source.enabled)
+        .map(|source| source.speed_mps.max(0.0))
+        .fold(0.0_f32, f32::max);
+    if state.simulation.preview_boundary == PreviewBoundaryPreset::WindTunnelX {
+        source_max.max(state.simulation.preview_inlet_speed_mps.max(0.0))
+    } else {
+        source_max
     }
 }
 
@@ -292,12 +352,7 @@ fn rasterize_wind_sources(
     dims: [usize; 3],
     solid_mask: &[bool],
 ) -> (VelocityField, Vec<[f32; 4]>, f32, f32) {
-    let max_source_speed_mps = state
-        .wind_sources
-        .iter()
-        .filter(|source| source.enabled)
-        .map(|source| source.speed_mps.max(0.0))
-        .fold(0.0_f32, f32::max);
+    let max_source_speed_mps = max_preview_speed_mps(state);
 
     let lattice_velocity_scale = if max_source_speed_mps > 0.0 {
         TARGET_MAX_LATTICE_SPEED / max_source_speed_mps
@@ -465,6 +520,7 @@ mod tests {
                 kinematic_viscosity: 1.48e-5,
                 mode: SolverMode::InteractivePreview,
                 preview_boundary: PreviewBoundaryPreset::Periodic,
+                preview_inlet_speed_mps: 0.0,
             },
             selection: crate::model::SelectedItem::None,
             running: false,
@@ -484,14 +540,42 @@ mod tests {
 
     #[test]
     fn boundary_presets_map_to_matching_cpu_and_gpu_semantics() {
-        let (periodic, periodic_mask) = preview_boundary_config(PreviewBoundaryPreset::Periodic);
-        assert_eq!(periodic, BoundaryPolicy::periodic());
-        assert_eq!(periodic_mask, 0);
+        let periodic = preview_boundary_config(PreviewBoundaryPreset::Periodic, 0.03);
+        assert_eq!(periodic.cpu_policy, BoundaryPolicy::periodic());
+        assert_eq!(periodic.stationary_mask, 0);
+        assert_eq!(periodic.velocity_inlet_mask, 0);
 
-        let (channel, channel_mask) =
-            preview_boundary_config(PreviewBoundaryPreset::ChannelYNoSlip);
-        assert_eq!(channel, BoundaryPolicy::channel_y_no_slip());
-        assert_eq!(channel_mask, GPU_BOUNDARY_Y_MIN | GPU_BOUNDARY_Y_MAX);
+        let channel = preview_boundary_config(PreviewBoundaryPreset::ChannelYNoSlip, 0.03);
+        assert_eq!(channel.cpu_policy, BoundaryPolicy::channel_y_no_slip());
+        assert_eq!(channel.stationary_mask, GPU_BOUNDARY_Y_MIN | GPU_BOUNDARY_Y_MAX);
+
+        let tunnel = preview_boundary_config(PreviewBoundaryPreset::WindTunnelX, 0.03);
+        assert_eq!(
+            tunnel.cpu_policy,
+            BoundaryPolicy::velocity_pressure_x([0.03, 0.0, 0.0], 1.0)
+        );
+        assert_eq!(tunnel.stationary_mask, 0);
+        assert_eq!(tunnel.velocity_inlet_mask, GPU_BOUNDARY_X_MIN);
+        assert_eq!(tunnel.pressure_outlet_mask, GPU_BOUNDARY_X_MAX);
+        assert_eq!(tunnel.inlet_velocities[0], [0.03, 0.0, 0.0]);
+        assert_eq!(tunnel.pressure_densities[1], 1.0);
+    }
+
+    #[test]
+    fn wind_tunnel_speed_shares_the_source_lattice_scale() {
+        let mut state = ProjectState::default();
+        state.simulation.preview_boundary = PreviewBoundaryPreset::WindTunnelX;
+        state.simulation.preview_inlet_speed_mps = 20.0;
+        state.wind_sources[0].speed_mps = 10.0;
+        let dims = state.simulation.grid.map(|n| n as usize);
+        let solid = vec![false; dims[0] * dims[1] * dims[2]];
+        let (_, _, max_speed, scale) = rasterize_wind_sources(&state, dims, &solid);
+        assert_eq!(max_speed, 20.0);
+        assert!((scale - TARGET_MAX_LATTICE_SPEED / 20.0).abs() < 1.0e-7);
+        assert!(
+            (state.simulation.preview_inlet_speed_mps * scale - TARGET_MAX_LATTICE_SPEED).abs()
+                < 1.0e-7
+        );
     }
 
     #[test]
