@@ -20,13 +20,21 @@ The interactive LBM preview is not engineering-validated merely because its CPU 
 | Dense target-velocity forcing | CPU reference | target region drives flow | GREEN |
 | Solid cell under forcing | CPU reference | voxel solid remains stationary | GREEN |
 | BGK lattice viscosity relation | CPU reference | `nu = (tau - 0.5) / 3` | GREEN |
+| Explicit face-boundary policy | CPU reference | paired periodic axes + half-way no-slip bounce-back | GREEN |
 | Planar Poiseuille analytical profile | CPU reference | Guo body-force, RMSE/max-error/symmetry/transverse-velocity thresholds | GREEN |
 | CPU ↔ GPU tiny-grid parity | CPU + GPU | 4×4×4, solid + forcing, 3 steps, all sampled velocity/speed values | GREEN |
+| GPU no-slip face parity | CPU + GPU | same face-mask bounce-back semantics | IN PROGRESS |
 | Lid-driven cavity | Native preview | reference centerline velocities / vortical structure | PLANNED |
 | Cylinder flow | Native preview | shedding regime, Strouhal/drag where regime and grid permit | PLANNED |
 | Grid convergence | Native preview | monitored observables vs resolution | PLANNED |
 | Upstream SU2 regression/tutorial | SU2 adapter | AeroForge translation reproduces upstream case | PLANNED |
 | NACA / external-flow reference | SU2 adapter | force coefficients + mesh/model sensitivity | PLANNED |
+
+## Boundary-policy contract
+
+The CPU reference now makes outer-domain behavior explicit instead of hard-coding wraparound. `BoundaryPolicy` supports paired periodic faces and stationary no-slip faces. A periodic face cannot be paired with a non-periodic face on the opposite side of the same axis. No-slip domain faces use half-way bounce-back in the streaming step, matching the same bounce-back convention used when a distribution would stream into a voxel solid.
+
+Velocity-inlet, pressure-outlet and open/convective faces are intentionally **not** represented by placeholder formulas yet; they remain numerical milestones requiring their own validation.
 
 ## Planar Poiseuille contract
 
@@ -36,12 +44,12 @@ Current regression case:
 
 - D3Q19 BGK, `tau = 0.8`;
 - lattice kinematic viscosity `nu = 0.1`;
-- domain `16 × 10 × 3` cells;
-- no-slip voxel walls at the two y boundaries using half-way bounce-back;
-- periodic streamwise/spanwise boundaries inherited from the reference kernel;
+- domain `16 × 8 × 3` fluid cells;
+- explicit no-slip `y-min` / `y-max` domain faces using half-way bounce-back;
+- periodic streamwise x and spanwise z faces;
 - lattice acceleration `[2e-5, 0, 0]`;
 - 5,000 solver steps;
-- analytical profile evaluated using the physical wall location half a lattice cell from the first fluid node.
+- analytical profile evaluated using physical wall locations half a lattice cell outside the first/last fluid nodes.
 
 Acceptance thresholds:
 
@@ -50,7 +58,7 @@ Acceptance thresholds:
 - normalized symmetry error `< 0.5%`;
 - transverse speed `< 1e-6` lattice units.
 
-The GitHub Actions core test `guo_forced_channel_matches_planar_poiseuille_solution` passes these thresholds. This establishes a canonical low-Mach laminar benchmark for the CPU reference kernel; it does not establish external-aerodynamics accuracy, high-Reynolds-number validity, or engineering force-coefficient accuracy.
+GitHub Actions run #37 executed `guo_forced_channel_matches_planar_poiseuille_solution` with the explicit face-boundary implementation and passed. This establishes a canonical low-Mach laminar benchmark for the CPU reference kernel; it does not establish external-aerodynamics accuracy, high-Reynolds-number validity, or engineering force-coefficient accuracy.
 
 ## GPU parity contract
 
@@ -66,7 +74,9 @@ The dedicated `aeroforge-gpu-smoke` executable:
 - compares x/y/z velocity and speed against the CPU snapshot;
 - fails when the maximum absolute error exceeds the declared tolerance.
 
-GitHub Actions run #27 executed this path on the DX12 `Microsoft Basic Render Driver` software adapter and reported `AEROFORGE_WGSL=PASS` and `AEROFORGE_GPU_PARITY=PASS steps=3 cells=64 max_error=0.00000000`. This proves controlled implementation parity across the CPU reference and actual wgpu compute path; it does not measure hardware-GPU performance or establish aerodynamic validation.
+GitHub Actions run #27 executed the periodic baseline on the DX12 `Microsoft Basic Render Driver` software adapter and reported `AEROFORGE_WGSL=PASS` and `AEROFORGE_GPU_PARITY=PASS steps=3 cells=64 max_error=0.00000000`. This proves controlled implementation parity across the CPU reference and actual wgpu compute path; it does not measure hardware-GPU performance or establish aerodynamic validation.
+
+The WGSL kernel now also accepts a six-face no-slip bitmask in `params.control.y`; the dedicated smoke case is being extended to compare this wall path against the CPU `BoundaryPolicy` before the UI exposes boundary presets.
 
 ## Claims policy
 
