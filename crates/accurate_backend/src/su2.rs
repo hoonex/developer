@@ -209,6 +209,14 @@ impl Su2Case {
             );
         }
 
+        // SU2 8.5.0 does not provide a usable default for the flow convective scheme.
+        // Keep these numerical choices explicit so generated configs do not depend on version
+        // defaults and can be exercised by the pinned external-runtime evidence test.
+        push_kv(&mut cfg, "CONV_NUM_METHOD_FLOW", "FDS");
+        push_kv(&mut cfg, "MUSCL_FLOW", "YES");
+        push_kv(&mut cfg, "SLOPE_LIMITER_FLOW", "NONE");
+        push_kv(&mut cfg, "TIME_DISCRE_FLOW", "EULER_IMPLICIT");
+
         push_kv(&mut cfg, "ITER", &self.max_iterations.to_string());
         push_kv(
             &mut cfg,
@@ -377,6 +385,10 @@ mod tests {
         assert!(cfg.contains("MARKER_INLET_TURBULENT= ( inlet_main"));
         assert!(cfg.contains("MARKER_OUTLET= ( outlet, 0.0 )"));
         assert!(cfg.contains("MARKER_HEATFLUX= ( body, 0.0 )"));
+        assert!(cfg.contains("CONV_NUM_METHOD_FLOW= FDS"));
+        assert!(cfg.contains("MUSCL_FLOW= YES"));
+        assert!(cfg.contains("SLOPE_LIMITER_FLOW= NONE"));
+        assert!(cfg.contains("TIME_DISCRE_FLOW= EULER_IMPLICIT"));
     }
 
     #[test]
