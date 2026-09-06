@@ -1,5 +1,12 @@
 const Q: u32 = 19u;
 
+const BOUNDARY_X_MIN: u32 = 1u;
+const BOUNDARY_X_MAX: u32 = 2u;
+const BOUNDARY_Y_MIN: u32 = 4u;
+const BOUNDARY_Y_MAX: u32 = 8u;
+const BOUNDARY_Z_MIN: u32 = 16u;
+const BOUNDARY_Z_MAX: u32 = 32u;
+
 const C: array<vec3<i32>, 19> = array<vec3<i32>, 19>(
     vec3<i32>(0, 0, 0),
     vec3<i32>(1, 0, 0), vec3<i32>(-1, 0, 0),
@@ -33,6 +40,7 @@ const OPPOSITE: array<u32, 19> = array<u32, 19>(
 
 struct Params {
     dims_stride: vec4<u32>,
+    // control.x = sample_count; control.y = no-slip face bitmask.
     control: vec4<u32>,
     physics: vec4<f32>,
 };
@@ -60,6 +68,30 @@ fn linear_index(x: u32, y: u32, z: u32) -> u32 {
 fn wrap_coord(value: i32, size: u32) -> u32 {
     let n = i32(size);
     return u32(((value % n) + n) % n);
+}
+
+fn boundary_bounce(position: vec3<u32>, q: u32) -> bool {
+    let mask = params.control.y;
+    let next = vec3<i32>(position) + C[q];
+    if (next.x < 0 && (mask & BOUNDARY_X_MIN) != 0u) {
+        return true;
+    }
+    if (next.x >= i32(params.dims_stride.x) && (mask & BOUNDARY_X_MAX) != 0u) {
+        return true;
+    }
+    if (next.y < 0 && (mask & BOUNDARY_Y_MIN) != 0u) {
+        return true;
+    }
+    if (next.y >= i32(params.dims_stride.y) && (mask & BOUNDARY_Y_MAX) != 0u) {
+        return true;
+    }
+    if (next.z < 0 && (mask & BOUNDARY_Z_MIN) != 0u) {
+        return true;
+    }
+    if (next.z >= i32(params.dims_stride.z) && (mask & BOUNDARY_Z_MAX) != 0u) {
+        return true;
+    }
+    return false;
 }
 
 fn clamp_velocity(u: vec3<f32>) -> vec3<f32> {
@@ -139,11 +171,16 @@ fn step(@builtin(global_invocation_id) gid: vec3<u32>) {
         u = clamp_velocity(imposed_velocity.xyz);
     }
     let omega = params.physics.x;
+    let position = vec3<u32>(x, y, z);
 
     for (var q = 0u; q < Q; q = q + 1u) {
         let fin = state_in[base + q];
         let eq = equilibrium(macro_state.rho, u, q);
         let post = fin - omega * (fin - eq);
+        if (boundary_bounce(position, q)) {
+            state_out[base + OPPOSITE[q]] = post;
+            continue;
+        }
         let destination = vec3<u32>(
             wrap_coord(i32(x) + C[q].x, params.dims_stride.x),
             wrap_coord(i32(y) + C[q].y, params.dims_stride.y),
