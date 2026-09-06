@@ -29,7 +29,8 @@ Current preview limitations stay visible in the UI:
 - realistic high-Reynolds-number air flows can require BGK relaxation time extremely close to 0.5, where a coarse preview grid is not a credible quantitative solver;
 - the current CPU preview preserves relative physical source speeds but does not claim validated physical time/Reynolds scaling;
 - turbulence intensity is stored but is not yet converted into a fabricated random forcing model;
-- analytic scene primitives are currently rasterized into preview solids, but imported surface objects are not yet consumed by the preview solid-mask path;
+- analytic primitives and audited imported surfaces share one deterministic cell-center staircase ownership raster for preview and generated accurate preparation; the current imported-surface winding raster is explicitly capped at 200,000 requested preview cells rather than silently reducing the grid;
+- CPU preview retains compact stable SceneObject owner labels for momentum-exchange attribution, while the current GPU preview upload reduces the same ownership field to a binary solid mask and therefore still lacks per-object GPU force attribution;
 - preview results are not engineering CFD unless benchmark evidence establishes that claim for the relevant regime.
 
 `flow_core::scaling` provides physical-scaling diagnostics so the program can state when cubic-grid or BGK relaxation constraints make a quantitative mapping implausible instead of silently changing viscosity.
@@ -80,30 +81,29 @@ Backend capability is explicit. A source being representable in the editor does 
 
 ## Geometry model
 
-The current modeling foundation separates analytic primitives from imported triangle surfaces while keeping one stable `SceneObject.id` namespace for solver provenance.
+The current modeling foundation separates analytic primitives from imported triangle surfaces while keeping one stable `SceneObject.id` namespace for editor selection and solver provenance.
 
 Implemented geometry capabilities:
 
 1. analytic Box / Sphere / Cylinder creation, viewport picking, and transform gizmos;
 2. `geometry_core` parsers for STL, OBJ, and static glTF/GLB surface geometry;
-3. desktop OBJ/STL path import into object-local `SurfaceMesh` storage with position/rotation/scale editing and bounded sampled wireframe visualization;
-4. topology reporting plus a deterministic bounded repair/audit contract for imported surfaces entering accurate preparation;
-5. mixed primitive/imported accurate ownership rasterization with one compact owner field and deterministic lowest-stable-ID overlap ownership;
-6. stable imported `SceneObject.id` provenance through the current generated staircase tetrahedral SU2 mesh and marker bindings.
+3. desktop OBJ/STL/glTF/GLB path import into object-local `SurfaceMesh` storage, including GLB BIN and base64-buffer support through `geometry_core` plus explicit local-relative external `.bin` resolution for `.gltf`; URI schemes, absolute paths, query/fragment references and parent-directory traversal fail closed;
+4. imported surfaces are promoted to finite indexed Bevy editor meshes for viewport picking and the common W/E/R transform gizmo path, while an imported-selection inspector exposes the same position/rotation/signed-scale transform and deletion contract;
+5. topology reporting plus a deterministic bounded repair/audit contract for imported surfaces entering solver rasterization;
+6. one shared primitive/imported cell-center ownership raster feeds native CPU/GPU preview preparation and the generated staircase SU2 path, with deterministic lowest-stable-ID overlap ownership and duplicate cross-kind IDs failing closed;
+7. stable imported `SceneObject.id` provenance survives the current generated staircase tetrahedral SU2 mesh and marker bindings.
 
-The desktop import window currently exposes OBJ and STL. The static glTF/GLB importer exists in `geometry_core` but has not yet been wired to that desktop file-import surface, especially for external buffer URI resolution.
+Static glTF/GLB desktop import intentionally remains a **static CFD surface** contract. Skins and morph targets fail closed instead of silently importing an undeformed render mesh. Node transforms are flattened by `geometry_core`; textures/materials are irrelevant to the solver surface representation.
 
-For accurate preparation, an imported mesh is transformed from object-local to world coordinates and then passed through bounded repair/audit. Promotion requires a single connected, watertight two-manifold, consistent orientation, and positive finite enclosed volume. This gate does **not** prove absence of triangle self-intersections or readiness for a high-quality exterior-fluid body-fitted mesher.
+For solver rasterization, an imported mesh is transformed from object-local to world coordinates and then passed through bounded repair/audit. Promotion requires a single connected, watertight two-manifold, consistent orientation, and positive finite enclosed volume. This gate does **not** prove absence of triangle self-intersections or readiness for a high-quality exterior-fluid body-fitted mesher.
 
-The promoted surface is currently reduced to cell-center solid occupancy and merged with analytic primitive occupancy. The lowest stable scene-object ID owns overlaps across geometry kinds; duplicate IDs across the two geometry stores fail closed. The resulting fluid mesh is still Cartesian staircase tetrahedra. Imported geometry support therefore does not imply body-fitted or engineering-quality meshing.
+The promoted surface is currently reduced to cell-center solid occupancy and merged with analytic primitive occupancy. The lowest stable scene-object ID owns overlaps across geometry kinds; duplicate IDs across the two geometry stores fail closed. Native CPU preview consumes the resulting owner labels directly. GPU preview consumes a binary solid mask derived from the same ownership field. The generated accurate path converts the same staircase occupancy into six-tetra-per-fluid-voxel volume elements with explicit marker provenance. None of these paths is body-fitted.
 
-The modeling representation and solver representation remain separate. Editing remains primitive/mesh based; the native preview currently consumes primitive solid rasterization only; the current accurate path consumes deterministic mixed voxel ownership; a future higher-fidelity accurate path must consume audited surfaces directly and retain the same explicit provenance contract.
+The modeling representation and solver representation remain separate. Editing remains primitive/triangle-mesh based; preview and the current generated accurate path share deterministic staircase ownership; a future higher-fidelity accurate path must consume audited surfaces directly and retain the same explicit provenance contract.
 
 Next geometry work includes:
 
-- imported-surface picking/gizmo integration in the common scene editor rather than the dedicated import panel;
-- glTF/GLB desktop import including explicit external-buffer handling;
-- imported-surface preview solid-mask/SDF integration;
+- acceleration/caching for imported-surface preview occupancy so the current explicit 200,000-cell safety budget can be raised only with measured cost and unchanged semantics;
 - CSG boolean union/subtract/intersect, profile extrusion and airfoil generation;
 - self-intersection/geometry-quality diagnostics where required by the selected mesher;
 - body-fitted or otherwise explicitly higher-fidelity exterior-fluid volume meshing for accurate cases.
