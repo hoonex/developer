@@ -20,11 +20,13 @@ The interactive LBM preview is not engineering-validated merely because its CPU 
 | Dense target-velocity forcing | CPU reference | target region drives flow | GREEN |
 | Solid cell under forcing | CPU reference | voxel solid remains stationary | GREEN |
 | BGK lattice viscosity relation | CPU reference | `nu = (tau - 0.5) / 3` | GREEN |
-| Explicit face-boundary policy | CPU reference | paired periodic axes + half-way no-slip bounce-back | GREEN |
+| Explicit face-boundary policy | CPU reference | paired periodic axes + half-way stationary/moving-wall bounce-back | GREEN |
 | Planar Poiseuille analytical profile | CPU reference | Guo body-force, RMSE/max-error/symmetry/transverse-velocity thresholds | GREEN |
+| Planar Couette analytical profile | CPU reference | moving-wall linear profile + density / transverse-flow bounds | GREEN |
+| Lid-driven cavity, Re=100 | CPU reference | Ghia et al. centerline data + steady-state / mass / quasi-2D checks | GREEN |
 | CPU ↔ GPU periodic parity | CPU + GPU | 4×4×4, solid + forcing, 3 steps, all sampled velocity/speed values | GREEN |
 | CPU ↔ GPU no-slip face parity | CPU + GPU | y-min/y-max face-mask bounce-back + solid + forcing | GREEN |
-| Lid-driven cavity | Native preview | reference centerline velocities / vortical structure | PLANNED |
+| CPU ↔ GPU moving-wall parity | CPU + GPU | Couette / moving-wall correction semantics | PLANNED |
 | Cylinder flow | Native preview | shedding regime, Strouhal/drag where regime and grid permit | PLANNED |
 | Grid convergence | Native preview | monitored observables vs resolution | PLANNED |
 | Upstream SU2 regression/tutorial | SU2 adapter | AeroForge translation reproduces upstream case | PLANNED |
@@ -32,15 +34,23 @@ The interactive LBM preview is not engineering-validated merely because its CPU 
 
 ## Boundary-policy contract
 
-The CPU reference now makes outer-domain behavior explicit instead of hard-coding wraparound. `BoundaryPolicy` supports paired periodic faces and stationary no-slip faces. A periodic face cannot be paired with a non-periodic face on the opposite side of the same axis. No-slip domain faces use half-way bounce-back in the streaming step, matching the same bounce-back convention used when a distribution would stream into a voxel solid.
+The CPU reference makes outer-domain behavior explicit instead of hard-coding wraparound. `BoundaryPolicy` supports paired periodic faces, stationary no-slip faces, and tangential moving walls. A periodic face cannot be paired with a non-periodic face on the opposite side of the same axis. Stationary and moving domain walls use half-way bounce-back in the streaming step.
 
-The exact WGSL used by the app mirrors this with a six-face no-slip bitmask in `params.control.y`. Bit values are x-min=1, x-max=2, y-min=4, y-max=8, z-min=16 and z-max=32; unset faces retain periodic wrapping.
+Moving-wall links use the standard half-way correction
+
+`2 w_i rho (c_i · u_wall) / c_s^2 = 6 w_i rho (c_i · u_wall)`
+
+with `c_s^2 = 1/3`. The implementation stores the corrected population in the opposite direction. Wall velocities must be finite and tangential to their face.
+
+At a lid-driven-cavity top corner, a diagonal link can cross both a stationary side wall and the moving lid. AeroForge gives the moving lid precedence for that mixed link so that the two opposing moving-wall diagonal corrections remain paired. A regression test protects this convention; the previous stationary-first convention was rejected because it introduced artificial global mass drift.
+
+The exact WGSL used by the app currently mirrors periodic and stationary no-slip boundaries with a six-face no-slip bitmask in `params.control.y`. Bit values are x-min=1, x-max=2, y-min=4, y-max=8, z-min=16 and z-max=32; unset faces retain periodic wrapping. GPU moving-wall semantics are the next parity milestone and are not yet claimed.
 
 Velocity-inlet, pressure-outlet and open/convective faces are intentionally **not** represented by placeholder formulas yet; they remain numerical milestones requiring their own validation.
 
 ## Planar Poiseuille contract
 
-The first canonical analytical benchmark is a pressure-gradient-equivalent planar channel driven by a spatially uniform lattice acceleration through Guo forcing.
+The pressure-gradient-equivalent planar channel is driven by a spatially uniform lattice acceleration through Guo forcing.
 
 Current regression case:
 
@@ -62,6 +72,56 @@ Acceptance thresholds:
 
 GitHub Actions run #37 executed `guo_forced_channel_matches_planar_poiseuille_solution` with the explicit face-boundary implementation and passed. This establishes a canonical low-Mach laminar benchmark for the CPU reference kernel; it does not establish external-aerodynamics accuracy, high-Reynolds-number validity, or engineering force-coefficient accuracy.
 
+## Planar Couette contract
+
+The moving-wall primitive is first validated independently with planar Couette flow before it is used in the cavity benchmark.
+
+Current regression case:
+
+- D3Q19 BGK, `tau = 0.8`;
+- domain `12 × 12 × 3` fluid cells;
+- `y-min` stationary no-slip wall;
+- `y-max` moving wall with lattice velocity `[0.04, 0, 0]`;
+- x/z periodic;
+- 5,000 solver steps;
+- analytical target is the linear half-way-wall velocity profile.
+
+Acceptance thresholds include normalized profile RMSE `< 0.5%`, normalized max error `< 1%`, transverse velocity `< 1e-6`, bounded plane-wise density deviation, and bounded global mean-density drift.
+
+The first CI attempt (#57) reached and passed the velocity-profile and transverse-flow assertions but rejected a small weakly-compressible f32 plane-density offset (`3.0517578e-5`) under an over-tight `1e-5` criterion. The test was corrected to distinguish local weak-compressibility variation from global mass conservation. GitHub Actions run #59 then completed the Couette regression, app check, and GPU smoke successfully.
+
+## Lid-driven cavity contract
+
+The next canonical benchmark is the quasi-2D lid-driven cavity at `Re = 100`, compared against the centerline velocity data of Ghia, Ghia & Shin (1982), *Journal of Computational Physics* 48, Tables I and II.
+
+Current regression case:
+
+- D3Q19 BGK;
+- domain `32 × 32 × 2` fluid cells;
+- lid lattice speed `U = 0.08` in +x;
+- Reynolds number `Re = 100`;
+- lattice viscosity `nu = U L / Re = 0.0256`;
+- `tau = 0.5 + 3 nu = 0.5768`;
+- x-min/x-max/y-min stationary no-slip walls;
+- y-max moving wall;
+- z periodic to form a quasi-2D D3Q19 case;
+- bilinear sampling of cell-centered velocity at the published normalized centerline coordinates;
+- all 15 interior Table-I vertical-u samples and all 15 interior Table-II horizontal-v samples are evaluated.
+
+Acceptance thresholds:
+
+- Ghia vertical-centerline normalized-u RMSE `< 0.015`;
+- vertical-centerline normalized-u max error `< 0.025`;
+- Ghia horizontal-centerline normalized-v RMSE `< 0.015`;
+- horizontal-centerline normalized-v max error `< 0.025`;
+- maximum normalized change across the steady-state probe window `< 5e-4`;
+- global mean-density error `< 3e-3`;
+- spanwise velocity `< 1e-6` lattice units.
+
+GitHub Actions run #65 passed the original 35,000-step version together with all unit, Couette, Poiseuille, Windows app, and GPU-smoke checks. Numerical convergence checks showed the centerline field was already effectively steady by 8,000–10,000 steps, so the current regression uses 8,000 steps plus a 2,000-step steady-state window without relaxing any accuracy threshold. GitHub Actions run #67 passes the optimized 10,000-step core regression.
+
+This is a strong canonical laminar-flow check, but it still does not make the interactive preview an engineering-validated external-aerodynamics solver.
+
 ## GPU parity contract
 
 The dedicated `aeroforge-gpu-smoke` executable:
@@ -78,7 +138,7 @@ The dedicated `aeroforge-gpu-smoke` executable:
 
 GitHub Actions run #27 executed the periodic baseline on the DX12 `Microsoft Basic Render Driver` software adapter and reported `AEROFORGE_WGSL=PASS` and `AEROFORGE_GPU_PARITY=PASS steps=3 cells=64 max_error=0.00000000`.
 
-GitHub Actions run #41 exercised the new y-min/y-max no-slip mask (`mask=12`) together with an internal voxel solid and target-velocity forcing. It reported `AEROFORGE_GPU_BOUNDARY_PARITY=PASS mask=12 steps=3 cells=64 max_error=0.00000000`. This proves controlled implementation parity for both periodic and currently implemented no-slip outer-domain streaming across the CPU reference and actual wgpu compute path; it does not measure hardware-GPU performance or establish aerodynamic validation.
+GitHub Actions run #41 exercised the y-min/y-max no-slip mask (`mask=12`) together with an internal voxel solid and target-velocity forcing. It reported `AEROFORGE_GPU_BOUNDARY_PARITY=PASS mask=12 steps=3 cells=64 max_error=0.00000000`. This proves controlled implementation parity for periodic and stationary no-slip outer-domain streaming across the CPU reference and actual wgpu compute path. GPU moving-wall correction is not yet implemented or claimed.
 
 ## Claims policy
 
@@ -86,7 +146,8 @@ A result shown in the UI should only inherit claims supported by the relevant ev
 
 - visualization sampling may be coarse while the authoritative solver field remains full resolution;
 - CPU/GPU agreement establishes implementation parity only;
-- the Poiseuille pass establishes a low-Mach laminar canonical benchmark only;
+- the Poiseuille and Couette passes establish their declared low-Mach laminar canonical benchmarks only;
+- the Ghia Re=100 cavity pass establishes a canonical laminar vortical-flow benchmark, not external-aerodynamics accuracy;
 - BGK physical-scaling warnings remain authoritative even when numerical regressions are GREEN;
 - preview force coefficients are not presented as engineering values until the relevant external-flow benchmarks and grid-convergence evidence exist;
 - accurate SU2 results retain solver version, mesh/config provenance, convergence history, geometry revision, and source-translation decisions.
