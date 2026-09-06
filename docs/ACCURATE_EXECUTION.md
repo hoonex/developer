@@ -32,7 +32,7 @@ When a coefficient reference is supplied, the current generated +X-flow path als
 
 AeroForge scene coordinates are **Y-up**. At the pinned zero-angle SU2 frame, raw SU2 `CL` corresponds to `CFz`, not AeroForge vertical lift; AeroForge vertical +Y is `CFy` (equivalently SU2 side-force direction at this frame). The UI therefore does not relabel `CL` as AeroForge lift.
 
-This contract fixes coefficient normalization, world-axis interpretation, and the moment origin for the current generated path. It does **not** make the coefficients engineering-valid, and it does not establish per-body attribution when multiple SceneObject bodies are monitored.
+This contract fixes coefficient normalization, world-axis interpretation, and the moment origin for the current generated path. The same global normalization/reference and moment origin apply to aggregate and per-body surface diagnostics. It does **not** make either aggregate or per-body coefficients engineering-valid, and it does not imply a separate body-specific reference area or length.
 
 ## 3. Explicitly persist and execute
 
@@ -70,7 +70,7 @@ A generated execution directory contains the generated SU2 inputs/provenance plu
 
 `aeroforge_run_manifest.tsv`
 
-Manifest format version 4 records:
+Manifest format version 5 preserves the previous v4 reference/frame/history/aggregate keys and appends structured per-body diagnostic evidence. It records:
 
 - scene revision;
 - probed SU2 version banner;
@@ -88,9 +88,12 @@ Manifest format version 4 records:
 - residual-column count and finite-value status;
 - explicit history parse/read error when structured quality is unavailable;
 - aggregate world-axis `diagnostic_cfx/cfy/cfz` and `diagnostic_cmx/cmy/cmz` when complete finite evidence is available;
-- an explicit diagnostic error when those six aggregate fields cannot be promoted.
+- an explicit aggregate diagnostic error when those six fields cannot be promoted;
+- `per_body_diagnostic_count`;
+- for each complete promoted body, indexed `scene_object_id`, exact marker tag, and `cfx/cfy/cfz/cmx/cmy/cmz` fields;
+- an explicit `per_body_diagnostic_error` when complete per-body evidence cannot be promoted.
 
-Marker provenance separately preserves domain-face and scene-object source translation. For generated primitive bodies, a stable `SceneObject.id` survives through compact owner labeling into markers such as `body_42` and provenance such as `scene_object:42`.
+Marker provenance separately preserves domain-face and scene-object source translation. For generated primitive bodies, a stable `SceneObject.id` survives through compact owner labeling into markers such as `body_42` and provenance such as `scene_object:42`. Per-body result mapping uses that authoritative marker binding and `BoundarySource::SceneObject { scene_object_id }`; AeroForge does not recover object IDs by parsing the marker text.
 
 ## 6. Structured history quality
 
@@ -112,13 +115,15 @@ The UI also retains the last 12 history lines and the last 12 stdout/stderr line
 
 Generated-case load monitoring is separated from the physical tunnel-wall boundary set. `MARKER_HEATFLUX` and `MARKER_PLOTTING` still contain the configured tunnel/body walls, while `MARKER_MONITORING` is derived only from wall bindings whose provenance is `BoundarySource::SceneObject`. A generated tunnel with no scene body therefore emits no monitoring marker; a single `SceneObject.id=42` body emits exactly `MARKER_MONITORING= ( body_42 )`.
 
-For generated cases that carry explicit coefficient references and at least one monitored body, AeroForge explicitly requests SU2 history groups `ITER, RMS_RES, AERO_COEFF`. This was required because SU2 8.5.0 does not otherwise guarantee that the aerodynamic coefficient fields appear in `history.csv`.
+For generated cases that carry explicit coefficient references and at least one monitored body, AeroForge explicitly requests SU2 history groups `ITER, RMS_RES, AERO_COEFF, AERO_COEFF_SURF`. `AERO_COEFF` is required for aggregate world-axis coefficient history and `AERO_COEFF_SURF` requests one surface-coefficient set per monitored marker.
 
-AeroForge promotes only the exact aggregate headers `CFx`, `CFy`, `CFz`, `CMx`, `CMy`, and `CMz` from the final parsed history row. Promotion is fail-closed: all six fields must be present and finite. Per-surface variants such as `CFx(body_42)` are intentionally not accepted by the aggregate extractor.
+AeroForge promotes only the exact aggregate headers `CFx`, `CFy`, `CFz`, `CMx`, `CMy`, and `CMz` from the final parsed history row. Aggregate promotion is fail-closed: all six fields must be present and finite. SU2 8.5.0 writes per-surface fields using exact parenthesized headers such as `CFx(body_42)`, `CFy(body_42)`, ..., `CMz(body_42)`; these are intentionally not accepted by the aggregate extractor.
 
-The UI suppresses coefficient diagnostics when no SceneObject body is monitored. With one or more monitored bodies, the six displayed values are explicitly labeled **aggregate world-axis coefficient diagnostics**. If multiple bodies are monitored, the current result is aggregate-only; AeroForge does not infer a per-body split from SU2 history until that semantics is independently proven.
+Per-body promotion is independently fail-closed. AeroForge supplies the exact monitored marker list to the per-surface extractor, requires one finite six-axis set for every monitored SceneObject marker, and does not promote a partial body list when any surface field is missing, duplicate/ambiguous, or non-finite. The returned surface row is then paired with the authoritative marker binding to recover the stable `SceneObject.id`; marker-name substring/fuzzy matching and `body_<id>` reverse parsing are not used.
 
-These values remain diagnostics. They are not promoted to engineering-valid drag/lift/moment coefficients merely because the solver process or residual gate succeeded.
+The UI suppresses coefficient diagnostics when no SceneObject body is monitored. With monitored bodies it displays **aggregate world-axis coefficient diagnostics** and **per-body world-axis coefficient diagnostics** separately. Every per-body value uses the same global `REF_AREA`, `REF_LENGTH`, world-axis frame, and moment origin as the aggregate result. AeroForge therefore keeps the raw `CFx/CFy/CFz` and `CMx/CMy/CMz` terminology instead of relabeling them as body-specific `Cd/Cl` values.
+
+These values remain diagnostics. They are not promoted to engineering-valid drag/lift/moment coefficients merely because the solver process, residual gate, or aggregate/surface consistency checks succeeded.
 
 ## 8. External and routine evidence
 
@@ -137,9 +142,13 @@ Relevant checkpoints include:
 - **runs #455, #457, #459 and #461**: routine evidence remained GREEN while exact aggregate six-axis extraction, app integration, manifest-v4 persistence, monitored-body gating, and real-runtime diagnostic assertions were added and compiled;
 - **run #463 / `su2-generated-one-shot`**: the first real diagnostic-history assertion failed closed because SU2 history contained none of the six aggregate fields, identifying the missing explicit `AERO_COEFF` history request rather than weakening the extractor;
 - **run #465 / `su2-generated-one-shot`**: after generated configs explicitly requested `HISTORY_OUTPUT= ITER, RMS_RES, AERO_COEFF`, the same pinned archive SHA256 passed, the runtime reported `SU2 v8.5.0 "Harrier", The Open-Source CFD Code`, both generated tests passed (`2 passed; 0 failed`), and the real body-case history produced finite aggregate diagnostics: `CFx=1.057443042`, `CFy=-0.07758861071`, `CFz=-0.07758861071`, `CMx≈0`, `CMy=2.83920088`, `CMz=-2.83920088`;
-- **run #467**: post-evidence cleanup routine CI completed GREEN across core tests, Windows app compile/unit tests, and all three GPU parity smokes with the temporary SU2 job absent.
+- **run #467**: post-evidence cleanup routine CI completed GREEN across core tests, Windows app compile/unit tests, and all three GPU parity smokes with the temporary SU2 job absent;
+- **run #487 / `su2-multi-body-one-shot`**: bounded failure instrumentation captured the real SU2 8.5.0 `history.csv` contract and established that surface fields are parenthesized (`CFx(body_3)`, ..., `CMz(body_9)`) rather than the initially assumed underscore names;
+- **run #489 / `su2-multi-body-one-shot`**: after the exact naming fix, the pinned runtime reported `SU2 v8.5.0 "Harrier", The Open-Source CFD Code`; `body_3` produced `CF=(0.6672644375, -0.02848445078, -0.02848445078)` and `CM=(3.400089777e-16, 1.755802498, -1.755802498)`, `body_9` produced `CF=(0.530493586, -0.01590075699, -0.01590075699)` and `CM=(2.42960813e-17, 1.382416704, -1.382416704)`, while the aggregate was `CF=(1.197758023, -0.04438520778, -0.04438520778)` and `CM=(3.64305059e-16, 3.138219202, -3.138219202)`; all six surface sums matched the aggregate with `max_surface_sum_error=5.000e-10`, and the external test completed `1 passed; 0 failed`;
+- **run #491**: post-evidence cleanup routine `core-tests`, `app-check`, and `gpu-smoke` all completed GREEN with the temporary multi-body SU2 job removed;
+- **run #493**: routine core tests, Windows app compile/unit tests, and GPU parity all completed GREEN after authoritative SceneObject-to-surface mapping, fail-closed per-body result promotion, manifest-v5 persistence, and aggregate/per-body UI separation were integrated.
 
-The #465 coefficient values are **smoke-fixture diagnostic values**, not trusted aerodynamic reference values. These checkpoints establish adapter/process/generated-case execution, body-vs-domain monitoring configuration, explicit reference/frame/origin persistence, exact aggregate history-field ingestion, and pinned-runtime diagnostic compatibility. They do not establish engineering validation, per-body multi-body attribution, or coefficient accuracy against trusted aerodynamic data.
+The #465 and #489 coefficient values are **smoke-fixture diagnostic values**, not trusted aerodynamic reference values. The #489 result establishes the pinned SU2 8.5.0 per-surface history contract and same-reference additive consistency for the two-body generated fixture. It does not establish body-specific aerodynamic normalization, coefficient accuracy, body-fitted mesh quality, or engineering validation.
 
 ## 9. Current non-claims
 
@@ -148,9 +157,9 @@ AeroForge does not currently claim that accurate-mode output is engineering-vali
 - the generated geometry is staircase/voxel-derived, not body-fitted;
 - imported audited surfaces are not yet connected to a higher-fidelity volume-meshing path;
 - live progress/cancellation/process recovery are not implemented yet;
-- body-only monitoring, explicit SI `REF_AREA`/`REF_LENGTH`, fixed zero-angle world axes, zero moment origin, and aggregate six-axis diagnostic extraction are implemented and externally smoke-proven;
-- multi-body per-surface coefficient attribution remains fail-closed;
+- body-only monitoring, explicit SI `REF_AREA`/`REF_LENGTH`, fixed zero-angle world axes, zero moment origin, aggregate six-axis extraction, and per-body `AERO_COEFF_SURF` SceneObject attribution are implemented and externally smoke-proven under pinned SU2 8.5.0;
+- per-body values share the global coefficient reference and moment origin and must not be presented as automatically body-normalized engineering `Cd/Cl` values;
 - the displayed `CF*`/`CM*` values are diagnostics, not validated aerodynamic coefficients;
 - no grid/domain/model-sensitivity campaign has validated a generated body case against trusted dimensional reference data.
 
-The next execution milestone is process lifecycle control (live progress/cancellation/recovery). The next aerodynamic-result milestone is to prove and implement per-body attribution semantics without weakening the aggregate fail-closed contract. Promotion to engineering-valid coefficients requires independent mesh/domain/model/reference validation.
+The next execution milestone is process lifecycle control (live progress/cancellation/recovery). The next geometry/accurate-path milestone is to connect imported audited surfaces to a deterministic higher-fidelity meshing path, retain explicit marker/source provenance through generated volume meshing, and then exercise that imported-mesh path end to end with SU2. Promotion to engineering-valid coefficients requires independent mesh/domain/model/reference validation after those foundations exist.
