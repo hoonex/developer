@@ -32,6 +32,8 @@ pub struct GpuPreviewRequest {
     pub dims: [u32; 3],
     pub tau: f32,
     pub boundary_mask: u32,
+    pub moving_boundary_mask: u32,
+    pub wall_velocities: [[f32; 3]; 6],
     pub running: bool,
     pub steps_per_frame: u32,
     pub sample_stride: u32,
@@ -48,6 +50,8 @@ impl Default for GpuPreviewRequest {
             dims: [0; 3],
             tau: 0.8,
             boundary_mask: 0,
+            moving_boundary_mask: 0,
+            wall_velocities: [[0.0; 3]; 6],
             running: false,
             steps_per_frame: 1,
             sample_stride: 1,
@@ -81,9 +85,34 @@ impl GpuPreviewRequest {
         self.dims = dims;
         self.tau = tau;
         self.boundary_mask = boundary_mask;
+        // Current scene presets expose periodic/stationary walls only. Reset moving-wall metadata
+        // on every domain rebuild so a future moving-wall preset cannot leak into another case.
+        self.moving_boundary_mask = 0;
+        self.wall_velocities = [[0.0; 3]; 6];
         self.solid = Arc::new(solid);
         self.forcing = Arc::new(forcing);
         self.set_sample_budget(MAX_GPU_SAMPLES);
+    }
+
+    pub fn set_moving_boundaries(
+        &mut self,
+        moving_boundary_mask: u32,
+        wall_velocities: [[f32; 3]; 6],
+    ) {
+        assert_eq!(
+            self.boundary_mask & moving_boundary_mask,
+            0,
+            "stationary and moving boundary masks must not overlap"
+        );
+        assert!(
+            wall_velocities
+                .iter()
+                .flatten()
+                .all(|value| value.is_finite()),
+            "GPU wall velocities must be finite"
+        );
+        self.moving_boundary_mask = moving_boundary_mask;
+        self.wall_velocities = wall_velocities;
     }
 
     pub fn set_control(&mut self, running: bool, steps_per_frame: u32, max_samples: usize) {
@@ -103,6 +132,10 @@ impl GpuPreviewRequest {
     }
 
     fn params(&self) -> GpuParams {
+        let wall = |index: usize| {
+            let velocity = self.wall_velocities[index];
+            Vec4::new(velocity[0], velocity[1], velocity[2], 0.0)
+        };
         GpuParams {
             dims_stride: UVec4::new(
                 self.dims[0],
@@ -110,8 +143,19 @@ impl GpuPreviewRequest {
                 self.dims[2],
                 self.sample_stride.max(1),
             ),
-            control: UVec4::new(self.sample_count, self.boundary_mask, 0, 0),
+            control: UVec4::new(
+                self.sample_count,
+                self.boundary_mask,
+                self.moving_boundary_mask,
+                0,
+            ),
             physics: Vec4::new(1.0 / self.tau.max(0.500_001), 0.12, 0.0, 0.0),
+            wall_x_min: wall(0),
+            wall_x_max: wall(1),
+            wall_y_min: wall(2),
+            wall_y_max: wall(3),
+            wall_z_min: wall(4),
+            wall_z_max: wall(5),
         }
     }
 }
@@ -248,6 +292,12 @@ struct GpuParams {
     dims_stride: UVec4,
     control: UVec4,
     physics: Vec4,
+    wall_x_min: Vec4,
+    wall_x_max: Vec4,
+    wall_y_min: Vec4,
+    wall_y_max: Vec4,
+    wall_z_min: Vec4,
+    wall_z_max: Vec4,
 }
 
 #[derive(Resource)]
@@ -588,11 +638,17 @@ mod tests {
     }
 
     #[test]
-    fn params_carry_boundary_mask() {
+    fn params_carry_stationary_and_moving_boundary_metadata() {
         let mut request = GpuPreviewRequest::default();
         request.dims = [8, 4, 6];
         request.sample_count = 20;
-        request.boundary_mask = 12;
-        assert_eq!(request.params().control.y, 12);
+        request.boundary_mask = 4;
+        let mut walls = [[0.0; 3]; 6];
+        walls[3] = [0.04, 0.0, 0.0];
+        request.set_moving_boundaries(8, walls);
+        let params = request.params();
+        assert_eq!(params.control.y, 4);
+        assert_eq!(params.control.z, 8);
+        assert_eq!(params.wall_y_max.xyz(), Vec3::new(0.04, 0.0, 0.0));
     }
 }
