@@ -31,6 +31,7 @@ pub struct GpuPreviewRequest {
     pub revision: u64,
     pub dims: [u32; 3],
     pub tau: f32,
+    pub boundary_mask: u32,
     pub running: bool,
     pub steps_per_frame: u32,
     pub sample_stride: u32,
@@ -46,6 +47,7 @@ impl Default for GpuPreviewRequest {
             revision: 0,
             dims: [0; 3],
             tau: 0.8,
+            boundary_mask: 0,
             running: false,
             steps_per_frame: 1,
             sample_stride: 1,
@@ -67,6 +69,7 @@ impl GpuPreviewRequest {
         revision: u64,
         dims: [u32; 3],
         tau: f32,
+        boundary_mask: u32,
         solid: Vec<u32>,
         forcing: Vec<[f32; 4]>,
     ) {
@@ -77,6 +80,7 @@ impl GpuPreviewRequest {
         self.revision = revision;
         self.dims = dims;
         self.tau = tau;
+        self.boundary_mask = boundary_mask;
         self.solid = Arc::new(solid);
         self.forcing = Arc::new(forcing);
         self.set_sample_budget(MAX_GPU_SAMPLES);
@@ -106,7 +110,7 @@ impl GpuPreviewRequest {
                 self.dims[2],
                 self.sample_stride.max(1),
             ),
-            control: UVec4::new(self.sample_count, 0, 0, 0),
+            control: UVec4::new(self.sample_count, self.boundary_mask, 0, 0),
             physics: Vec4::new(1.0 / self.tau.max(0.500_001), 0.12, 0.0, 0.0),
         }
     }
@@ -581,5 +585,14 @@ mod tests {
         assert_eq!(snapshot.sample_xyz(1), Some([2, 0, 0]));
         assert_eq!(snapshot.sample_xyz(4), Some([0, 2, 0]));
         assert_eq!(snapshot.sample_xyz(8), Some([0, 0, 2]));
+    }
+
+    #[test]
+    fn params_carry_boundary_mask() {
+        let mut request = GpuPreviewRequest::default();
+        request.dims = [8, 4, 6];
+        request.sample_count = 20;
+        request.boundary_mask = 12;
+        assert_eq!(request.params().control.y, 12);
     }
 }
