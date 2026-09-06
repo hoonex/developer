@@ -44,6 +44,17 @@ const D10_BEST_DOMAIN: CylinderCase = CylinderCase {
     sample_steps: 7_500,
 };
 
+const D12_BEST_DOMAIN: CylinderCase = CylinderCase {
+    label: "D12_H20_IN6_OUT9",
+    dims: [180, 240, 2],
+    diameter: 12.0,
+    center: [72.0, 120.0],
+    inlet_speed: 0.06,
+    reynolds: 60.0,
+    settle_steps: 7_500,
+    sample_steps: 9_000,
+};
+
 #[test]
 #[ignore = "slow streamwise-domain evidence; run explicitly"]
 fn cylinder_re60_far_field_streamwise_extent_sensitivity() {
@@ -113,4 +124,12 @@ fn cylinder_re60_best_domain_d8_d10_sensitivity() {
     println!(
         "AEROFORGE_CYLINDER_BEST_DOMAIN_D8_D10=PASS D=8->10 H_over_D=20 inlet_D=6 outlet_D=9 St_delta_pct={st_delta_pct:.3} Cd_delta_pct={cd_delta_pct:.3} lift_amp_delta_pct={lift_delta_pct:.3} rho_error_delta_pct={rho_delta_pct:.3} max_speed_delta_pct={speed_delta_pct:.3}"
     );
+}
+
+#[test]
+#[ignore = "slow best-domain D12 resolution evidence; run explicitly"]
+fn cylinder_re60_best_domain_d12_sensitivity() {
+    let d12 = run_case(D12_BEST_DOMAIN);
+    assert_sanity(D12_BEST_DOMAIN, d12);
+    print_metrics("AEROFORGE_CYLINDER_BEST_DOMAIN_D12", D12_BEST_DOMAIN, d12);
 }
