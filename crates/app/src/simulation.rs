@@ -657,6 +657,7 @@ mod tests {
     fn wind_rasterization_preserves_direction_and_gpu_pack() {
         let state = ProjectState {
             objects: vec![],
+            imported_surfaces: vec![],
             wind_sources: vec![WindSource {
                 id: 1,
                 name: "test".into(),
