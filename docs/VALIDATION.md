@@ -32,8 +32,9 @@ The interactive LBM preview is not engineering-validated merely because its CPU 
 | CPU ↔ GPU open-boundary parity | CPU + GPU | two-stage NEQ velocity-inlet / pressure-outlet reconstruction | GREEN |
 | WindTunnelX app/runtime mapping | CPU + GPU + UI | one shared physical→lattice speed scale + identical x-open policy | GREEN |
 | Cylinder shedding, Re=60 | Native preview | 10% blockage, wake-spectrum Strouhal + stability checks | GREEN |
-| Cylinder grid sensitivity | Native preview | D=8 → D=10 at fixed Re and 10% blockage | GREEN |
-| Grid convergence | Native preview | ≥3-level monitored observables vs resolution | PLANNED |
+| Spectral sub-bin estimator | Native preview | synthetic off-bin frequency recovery with quadratic log-power interpolation | GREEN |
+| Cylinder three-grid sensitivity | Native preview | D=8 → D=10 → D=12 at fixed Re and 10% blockage | GREEN |
+| Formal grid convergence | Native preview | monotonic/asymptotic observable convergence or justified GCI-style evidence | NOT ESTABLISHED |
 | Upstream SU2 regression/tutorial | SU2 adapter | AeroForge translation reproduces upstream case | PLANNED |
 | NACA / external-flow reference | SU2 adapter | force coefficients + mesh/model sensitivity | PLANNED |
 
@@ -57,7 +58,7 @@ The exact WGSL used by the app mirrors periodic, stationary no-slip, moving-wall
 
 GPU NEQ deliberately uses two compute stages per open-boundary solver step: `stream/collide → reconstruct_open → ping-pong flip`. The reconstruction dispatch covers only the active face area. When both open masks are zero, the desktop runtime issues no open-boundary reconstruction dispatch.
 
-A convective/far-field style non-reflecting boundary is not yet implemented.
+A transverse free-stream/far-field or convective non-reflecting boundary is not yet implemented. The current cylinder benchmark therefore still uses periodic y/z boundaries and explicitly carries that limitation in its claims.
 
 ## Planar Poiseuille contract
 
@@ -210,11 +211,13 @@ The accepted baseline case is:
 - 5,000 settle steps + 6,000 sampled steps;
 - Hann-window spectral search over a deliberately broad `St = 0.05..0.65` interval rather than a narrow expected-frequency band.
 
+The spectral scan has `ΔSt = 0.0005`. Because that bin spacing was already comparable to the first D8→D10 grid shift, the current estimator refines the strongest discrete peak with a three-point quadratic interpolation in log power. A synthetic off-bin sinusoid regression protects the sub-bin estimator. The cylinder acceptance criterion still requires a real wake peak with spectral prominence `> 4`; the synthetic frequency-recovery test does not replace that physical signal-strength check.
+
 Acceptance requires measurable alternating lift, measurable wake transverse RMS, a dominant spectral peak with prominence `> 4`, `St` in the broad `0.11..0.18` low-Re shedding band, bounded density variation, finite speed, and only a broad drag sanity bound.
 
-GitHub Actions run #113 completed the full core, Windows app and GPU suite and reported:
+GitHub Actions run #127 completed the routine D8 regression with the sub-bin estimator and reported:
 
-`AEROFORGE_CYLINDER_RE60=PASS grid=96x80x2 D=8 U=0.06 blockage=0.100 tau=0.524000 St=0.15350 period=868.62 spectral_prominence=17.45 wake_v_rms=0.020519 mean_Cd=1.9243 lift_amp=0.008020 max_rho_error=0.013267`
+`AEROFORGE_CYLINDER_RE60=PASS case=D8 grid=96x80x2 D=8 U=0.06 blockage=0.100 tau=0.524000 St=0.153310 period=869.70 spectral_prominence=17.45 wake_v_rms=0.020519 mean_Cd=1.9243 lift_amp=0.008020 max_rho_error=0.013267`
 
 An earlier exploratory `80 × 40 × 2`, `D = 8` case had **20% transverse blockage** and produced `St = 0.17550`, `mean_Cd = 2.2810`, and maximum density error `0.019762`. It was deliberately rejected as the canonical baseline even though it passed the broad numerical sanity thresholds. Reducing blockage to 10% moved `St`, drag and density variation in the expected free-cylinder direction.
 
@@ -222,35 +225,68 @@ For reference, Williamson & Brown (1998), *Journal of Fluids and Structures* 12(
 
 `St = 0.2698 - 1.0271 / sqrt(Re)`,
 
-which evaluates to approximately `0.1372` at `Re = 60`. The AeroForge D=8 baseline therefore demonstrates the correct shedding regime and a credible frequency, but it is not treated as a converged free-cylinder solution.
+which evaluates to approximately `0.1372` at `Re = 60`. The AeroForge baseline therefore demonstrates the correct shedding regime and a credible frequency, but it is not treated as a converged free-cylinder solution.
 
-## Cylinder grid-sensitivity evidence
+## Cylinder three-grid sensitivity evidence
 
-The cylinder test is parameterized so the expensive refinement evidence can be run explicitly without adding it to every PR. GitHub Actions run #117 executed both the normal D=8 baseline and a one-shot ignored D=10 refinement. The refinement preserves:
+The cylinder test is parameterized so expensive refinement evidence can be run explicitly without adding it to every PR. GitHub Actions run #127 executed the routine D=8 baseline and then the ignored D=10 and D=12 cases sequentially. All three preserve:
 
 - `Re = 60` and `U = 0.06`;
 - 10% transverse blockage;
 - geometrically similar streamwise placement (`x_c = 3D`, wake probe `x = 7D`, outlet `x = 12D`);
-- the same nondimensional settle/sample durations;
-- the same x-open and y/z-periodic boundary policy.
+- approximately the same nondimensional settle/sample durations;
+- the same x-open and y/z-periodic boundary policy;
+- the same sub-bin spectral estimator.
 
-D=10 refinement:
+### D=8 baseline
+
+- grid `96 × 80 × 2`;
+- `tau = 0.524`;
+- `St = 0.153310`;
+- mean momentum-exchange `Cd = 1.9243`;
+- spectral prominence `17.45`;
+- maximum density error `0.013267`.
+
+### D=10 refinement
 
 - grid `120 × 100 × 2`;
-- `D = 10`;
-- `tau = 0.530` from the same Reynolds-number relation;
+- `tau = 0.530`;
 - 6,250 settle + 7,500 sample steps;
-- `St = 0.15250`;
-- period `1092.90` steps;
+- `St = 0.152665`;
+- period `1091.72` steps;
 - spectral prominence `17.24`;
 - wake transverse RMS `0.017517`;
 - mean momentum-exchange `Cd = 1.8346`;
 - lift amplitude `0.008363`;
 - maximum density error `0.013591`.
 
-From D=8 → D=10, `St` changes only about **-0.65%**, while mean `Cd` changes about **-4.66%**. This is strong evidence that the shedding-frequency observable is becoming grid-stable at these resolutions. Drag is still materially resolution-sensitive and remains a diagnostic only. A two-level sensitivity check is not a formal asymptotic grid-convergence study; a third resolution and improved transverse far-field treatment remain required before preview force coefficients can be promoted.
+### D=12 refinement
 
-The D=10 test remains `#[ignore]` by default so routine CI keeps the cheaper D=8 regression. The one-shot CI invocation used to collect run #117 evidence was removed immediately afterward.
+- grid `144 × 120 × 2`;
+- `tau = 0.536`;
+- 7,500 settle + 9,000 sample steps;
+- `St = 0.153939`;
+- period `1299.22` steps;
+- spectral prominence `17.10`;
+- wake transverse RMS `0.017906`;
+- mean momentum-exchange `Cd = 1.8092`;
+- lift amplitude `0.010739`;
+- maximum density error `0.013782`.
+
+Observed changes:
+
+- D8 → D10 Strouhal: `-0.42%`;
+- D10 → D12 Strouhal: `+0.83%`;
+- D8 → D12 Strouhal: `+0.41%`;
+- D8 → D10 mean Cd: `-4.66%`;
+- D10 → D12 mean Cd: `-1.38%`;
+- D8 → D12 mean Cd: `-5.98%`.
+
+The three Strouhal values remain inside a narrow approximately ±0.5% band around the tested-resolution mean, but the sequence is **non-monotonic**: D10 moves down and D12 moves back up. That is useful grid-sensitivity evidence, not a formal asymptotic-convergence result. AeroForge therefore does not report an observed convergence order or GCI value for Strouhal from these three grids.
+
+Mean Cd decreases monotonically and the incremental change shrinks from 4.66% to 1.38%, which is encouraging, but the voxelized circular geometry changes discretely with resolution and the transverse boundary remains periodic. AeroForge therefore also does not promote the drag sequence to a formal engineering convergence claim. The next validation step is to reduce boundary-condition contamination with an explicit transverse free-stream/far-field treatment and then repeat the sensitivity study.
+
+D10 and D12 remain `#[ignore]` by default so routine CI keeps the cheaper D8 regression. The one-shot CI step used to collect run #127 evidence was removed immediately afterward.
 
 ## GPU parity contract
 
@@ -270,7 +306,7 @@ Evidence:
 - run #75: mixed stationary/moving faces, moving-corner precedence, internal solid + forcing / max error `0.00000000`;
 - run #93: NEQ open-boundary parity, 16×4×3 / 8 steps / 192 cells / max error `0.00000000`;
 - run #101: full core + Windows app + moving-wall GPU + NEQ GPU suite GREEN after desktop WindTunnelX integration;
-- run #117: full app/GPU suite remained GREEN while the explicit D=10 cylinder sensitivity evidence was collected.
+- run #127: Windows app check and both GPU parity jobs remained GREEN while D8/D10/D12 cylinder evidence was collected.
 
 These tests establish controlled implementation parity. They do not measure hardware-GPU performance or establish aerodynamic validation.
 
@@ -283,8 +319,9 @@ A result shown in the UI should only inherit claims supported by the relevant ev
 - the Poiseuille and Couette passes establish their declared low-Mach laminar canonical benchmarks only;
 - the Ghia Re=100 cavity pass establishes a canonical laminar vortical-flow benchmark, not external-aerodynamics accuracy;
 - the NEQ plug-flow and CPU↔GPU passes establish the declared open-boundary reconstruction only, not generic non-reflecting/far-field accuracy;
-- the Re=60 cylinder pass establishes controlled periodic shedding and a grid-stable Strouhal trend for the declared 10%-blockage setup, not a general free-field external-aerodynamics validation;
-- the momentum-exchange drag value remains diagnostic because D=8→D=10 still changes mean `Cd` by about 4.66%;
+- the Re=60 cylinder pass establishes controlled periodic shedding and a narrow three-grid Strouhal sensitivity band for the declared 10%-blockage setup, not a general free-field external-aerodynamics validation;
+- the non-monotonic D8/D10/D12 Strouhal sequence is explicitly **not** called formal grid convergence;
+- the momentum-exchange drag values remain diagnostic even though D10→D12 changes only about 1.38%, because D8→D12 still changes about 5.98% and transverse-boundary influence is not removed;
 - BGK physical-scaling warnings remain authoritative even when numerical regressions are GREEN;
-- preview force coefficients are not presented as engineering values until a third grid level, improved transverse far-field treatment, and suitable external-flow reference evidence exist;
+- preview force coefficients are not presented as engineering values until improved transverse far-field treatment, repeatable convergence evidence, and suitable external-flow reference evidence exist;
 - accurate SU2 results retain solver version, mesh/config provenance, convergence history, geometry revision, and source-translation decisions.
