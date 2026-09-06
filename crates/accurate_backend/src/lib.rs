@@ -9,8 +9,8 @@ pub use generated_case::{
     build_generated_su2_case_bundle, GeneratedSu2CaseBundle, GeneratedSu2CaseError,
 };
 pub use scene_provenance::{
-    build_scene_owner_marker_provenance, SceneOwnerMarkerProvenance,
-    SceneOwnerProvenanceError,
+    build_active_scene_owner_marker_provenance, build_scene_owner_marker_provenance,
+    scene_object_wall_tag, SceneOwnerMarkerProvenance, SceneOwnerProvenanceError,
 };
 pub use su2::{
     discover_su2, probe_su2_banner, run_su2_case, FlowModel, InletBoundary, Su2Case,
