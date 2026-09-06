@@ -58,6 +58,12 @@ pub enum SolverMode {
     Accurate,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreviewBoundaryPreset {
+    Periodic,
+    ChannelYNoSlip,
+}
+
 #[derive(Clone, Debug)]
 pub struct SimulationSettings {
     pub domain_size_m: Vec3,
@@ -65,6 +71,7 @@ pub struct SimulationSettings {
     pub air_density: f32,
     pub kinematic_viscosity: f32,
     pub mode: SolverMode,
+    pub preview_boundary: PreviewBoundaryPreset,
 }
 
 impl SimulationSettings {
@@ -124,6 +131,7 @@ impl Default for ProjectState {
                 air_density: 1.225,
                 kinematic_viscosity: 1.48e-5,
                 mode: SolverMode::InteractivePreview,
+                preview_boundary: PreviewBoundaryPreset::Periodic,
             },
             selection: SelectedItem::Object(1),
             running: false,
