@@ -33,7 +33,7 @@ The native LBM backend remains an interactive preview solver. GREEN numerical re
 | Formal grid convergence | Native preview | **NOT ESTABLISHED** |
 | Formal domain convergence | Native preview | **NOT ESTABLISHED** |
 | Trusted external-cylinder reference agreement | Native preview | PARTIAL / NOT VALIDATED |
-| Pinned upstream SU2 8.5.0 known-case | SU2 adapter | TEST HARNESS ADDED / RUNTIME PENDING |
+| Pinned upstream SU2 8.5.0 known-case | SU2 adapter | GREEN |
 | AeroForge-generated-mesh SU2 cross-validation | SU2 adapter | PLANNED |
 
 ## Boundary-policy contract
@@ -188,9 +188,11 @@ Per-object force provenance is the next native-force implementation milestone.
 
 `aeroforge-accurate-backend` provides dimensional incompressible laminar/RANS-SST config generation, marker/filename validation, inlet-direction normalization, `SU2_RUN`/PATH discovery, banner probing, and a prepared-case process primitive.
 
-A pinned ignored integration test now mirrors the official SU2 8.5.0 incompressible laminar-cylinder regression contract: it requires SU2 8.5.0, runs through AeroForge's `discover_su2 → probe_su2_banner → run_su2_case` path, parses solver iteration 10, and compares the four upstream reference values with `1e-5` tolerance. The harness has compiled/unit parser coverage, but the external SU2 binary/mesh runtime evidence is still pending.
+The pinned ignored integration test mirrors the official SU2 8.5.0 incompressible laminar-cylinder regression contract: it runs through AeroForge's `discover_su2 → probe_su2_banner → run_su2_case` path, parses solver iteration 10, and compares the four upstream reference values with `1e-5` tolerance.
 
-A real AeroForge-generated volume mesh has not yet completed end-to-end SU2 validation.
+The external runtime checkpoint is now **GREEN**. PR workflow run #253 verified the pinned outer Linux OMP release archive SHA256 `aadc800cd9df34deff99d4725f5897f620c9f2979f62ab235313311bf501f09b`, extracted its nested `linux64-omp.zip`, and executed `SU2_CFD` with banner `SU2 v8.5.0 "Harrier", The Open-Source CFD Code`. Using SU2 config commit `12eb826f049ef7f67df974dfcb44cf36ee07c0f8` and TestCases commit `790c80ec5b543487b5f8ecf8bb0f0e4d2cc67f3f`, the AeroForge integration path reproduced iteration 10 exactly: `[-4.168180, -3.611108, 0.007850, 4.539924]`, with reported maximum absolute error `0.000e0`.
+
+The temporary SU2 one-shot job was removed from routine CI after this evidence was captured. This validates the pinned upstream known-case adapter/process path only. A real AeroForge-generated geometry/volume mesh has **not** completed end-to-end SU2 validation.
 
 ## Claims policy
 
@@ -203,11 +205,12 @@ A real AeroForge-generated volume mesh has not yet completed end-to-end SU2 vali
 - Best-domain D8/D10/D12 shows a shrinking Cd* refinement increment, while St remains non-monotonic; do not report GCI or an extrapolated engineering coefficient.
 - Momentum-exchange Cd/lift remain diagnostics until grid/domain/reference/force evidence improves.
 - BGK physical-scaling warnings remain authoritative even when regressions are GREEN.
+- The GREEN upstream SU2 known-case establishes pinned adapter/process compatibility, not AeroForge-generated-mesh end-to-end validation.
 - Accurate SU2 results must retain solver version, mesh/config provenance, convergence history, geometry revision and source-translation decisions.
 
 ## Next validation milestones
 
-1. Execute the pinned official SU2 8.5.0 incompressible-cylinder known-case through AeroForge's accurate-backend process path and record exact runtime evidence.
-2. Extend native momentum exchange to per-object force provenance and expose effective-diameter/normalization diagnostics.
-3. Use the SU2-known-case result to harden history/output parsing and provenance before attempting an AeroForge-generated-mesh accurate case.
+1. Extend native momentum exchange to per-object force provenance and expose effective-diameter/normalization diagnostics.
+2. Harden SU2 history/output provenance using the now-GREEN pinned known-case evidence.
+3. Build geometry import/repair, volume-mesh generation and marker provenance before attempting an AeroForge-generated-mesh accurate case.
 4. Do not extend the native D8/D10/D12 cylinder ladder by brute force unless a later force/boundary change requires revalidation.
