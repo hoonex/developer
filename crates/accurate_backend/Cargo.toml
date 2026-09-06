@@ -5,4 +5,5 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+aeroforge-geometry-core = { path = "../geometry_core" }
 aeroforge-volume-core = { path = "../volume_core" }
