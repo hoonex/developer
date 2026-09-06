@@ -5,9 +5,10 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aeroforge_accurate_backend::{
-    discover_su2, evaluate_su2_history_quality, prepare_generated_su2_case_directory,
-    probe_su2_banner, run_prepared_generated_su2_case, summarize_su2_history_csv,
-    GeneratedSu2CaseBundle, Su2HistoryGateStatus, Su2HistoryQuality,
+    discover_su2, evaluate_su2_history_quality, extract_su2_world_axis_diagnostics,
+    prepare_generated_su2_case_directory, probe_su2_banner, run_prepared_generated_su2_case,
+    summarize_su2_history_csv, BoundarySource, GeneratedSu2CaseBundle, Su2HistoryGateStatus,
+    Su2HistoryQuality, Su2WorldAxisDiagnostics,
 };
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
@@ -18,6 +19,7 @@ use crate::model::{ProjectState, SolverMode};
 const SUPPORTED_SU2_BANNER_FRAGMENT: &str = "SU2 v8.5.0";
 const OUTPUT_TAIL_LINES: usize = 12;
 const RUN_MANIFEST_FILENAME: &str = "aeroforge_run_manifest.tsv";
+const COEFFICIENT_FRAME_MANIFEST: &str = "su2_world_xyz_aeroforge_y_up_aoa0_sideslip0";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AccurateExecutionStatus {
@@ -52,9 +54,12 @@ pub struct AccurateRunSummary {
     pub case_directory: PathBuf,
     pub su2_banner: String,
     pub exit_code: Option<i32>,
+    pub monitored_scene_body_count: usize,
     pub history_tail: Option<String>,
     pub history_quality: Option<Su2HistoryQuality>,
     pub history_error: Option<String>,
+    pub world_axis_diagnostics: Option<Su2WorldAxisDiagnostics>,
+    pub diagnostic_error: Option<String>,
     pub stdout_tail: String,
     pub stderr_tail: String,
 }
@@ -73,6 +78,8 @@ struct HistoryEvidence {
     tail: Option<String>,
     quality: Option<Su2HistoryQuality>,
     error: Option<String>,
+    world_axis_diagnostics: Option<Su2WorldAxisDiagnostics>,
+    diagnostic_error: Option<String>,
 }
 
 #[derive(Resource)]
@@ -190,6 +197,10 @@ pub fn draw_accurate_execute_ui(
                 ui.monospace(format!("Exit code: {:?}", run.exit_code));
                 ui.monospace(format!("Case: {}", run.case_directory.display()));
                 ui.monospace(format!("Run manifest: {RUN_MANIFEST_FILENAME}"));
+                ui.monospace(format!(
+                    "Monitored SceneObject bodies: {}",
+                    run.monitored_scene_body_count
+                ));
 
                 if let Some(quality) = &run.history_quality {
                     let worst_residual = quality
@@ -219,6 +230,37 @@ pub fn draw_accurate_execute_ui(
                         format!("History quality unavailable: {error}"),
                     );
                 }
+
+                if run.monitored_scene_body_count == 0 {
+                    ui.small(
+                        "No SceneObject body is in MARKER_MONITORING, so aerodynamic coefficient diagnostics are intentionally suppressed for this run.",
+                    );
+                } else if let Some(diagnostics) = &run.world_axis_diagnostics {
+                    ui.collapsing("World-axis coefficient diagnostics", |ui| {
+                        ui.monospace(format!(
+                            "CFx={:.8}  CFy={:.8}  CFz={:.8}",
+                            diagnostics.force_coefficient_xyz[0],
+                            diagnostics.force_coefficient_xyz[1],
+                            diagnostics.force_coefficient_xyz[2]
+                        ));
+                        ui.monospace(format!(
+                            "CMx={:.8}  CMy={:.8}  CMz={:.8}",
+                            diagnostics.moment_coefficient_xyz[0],
+                            diagnostics.moment_coefficient_xyz[1],
+                            diagnostics.moment_coefficient_xyz[2]
+                        ));
+                        ui.small(
+                            "Aggregate over all SceneObject markers in SU2 MARKER_MONITORING. Generated accurate cases use AOA=0°, sideslip=0° and moment origin (0,0,0) m. AeroForge is Y-up: SU2 CL is +Z at this frame, while +Y vertical is CFy/CSF. These are diagnostics, not engineering-validated coefficients or per-body attribution.",
+                        );
+                    });
+                }
+                if let Some(error) = &run.diagnostic_error {
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        format!("World-axis diagnostics unavailable: {error}"),
+                    );
+                }
+
                 if let Some(history) = &run.history_tail {
                     ui.collapsing("history CSV tail", |ui| {
                         ui.monospace(history);
@@ -235,7 +277,7 @@ pub fn draw_accurate_execute_ui(
                     });
                 }
                 ui.small(
-                    "Process success and history quality are separate signals. Even a residual-target pass on the current staircase mesh is not an engineering-valid aerodynamic coefficient result.",
+                    "Process success, residual quality and coefficient diagnostics are separate signals. Even a residual-target pass on the current staircase mesh is not an engineering-valid aerodynamic result.",
                 );
             }
             if let Some(error) = &execution.last_error {
@@ -285,13 +327,25 @@ fn launch_run(
     let nonce = run_nonce_millis();
     let case_name = case_directory_name(revision, sequence, nonce);
     let completion = Arc::clone(&execution.completion);
+    let monitored_scene_body_count = bundle
+        .marker_bindings
+        .iter()
+        .filter(|binding| matches!(&binding.source, BoundarySource::SceneObject { .. }))
+        .count();
 
     execution.status = AccurateExecutionStatus::Running;
     execution.running_revision = Some(revision);
     execution.last_error = None;
 
     thread::spawn(move || {
-        let result = execute_case(root, case_name, revision, contract, bundle);
+        let result = execute_case(
+            root,
+            case_name,
+            revision,
+            contract,
+            monitored_scene_body_count,
+            bundle,
+        );
         let mut slot = completion
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -304,6 +358,7 @@ fn execute_case(
     case_name: String,
     revision: u64,
     contract: AccurateRunContract,
+    monitored_scene_body_count: usize,
     bundle: GeneratedSu2CaseBundle,
 ) -> AccurateRunCompletion {
     let executable = match discover_su2() {
@@ -363,9 +418,12 @@ fn execute_case(
                     case_directory: prepared.working_directory,
                     su2_banner: banner,
                     exit_code: None,
+                    monitored_scene_body_count,
                     history_tail: None,
                     history_quality: None,
                     history_error: None,
+                    world_axis_diagnostics: None,
+                    diagnostic_error: None,
                     stdout_tail: String::new(),
                     stderr_tail: String::new(),
                 }),
@@ -373,15 +431,22 @@ fn execute_case(
         }
     };
 
-    let history = read_history_evidence(&prepared.working_directory, contract);
+    let history = read_history_evidence(
+        &prepared.working_directory,
+        contract,
+        monitored_scene_body_count,
+    );
     let summary = AccurateRunSummary {
         revision,
         case_directory: prepared.working_directory.clone(),
         su2_banner: banner.clone(),
         exit_code: run.exit_code,
+        monitored_scene_body_count,
         history_tail: history.tail,
         history_quality: history.quality,
         history_error: history.error,
+        world_axis_diagnostics: history.world_axis_diagnostics,
+        diagnostic_error: history.diagnostic_error,
         stdout_tail: tail_lines(&run.stdout, OUTPUT_TAIL_LINES),
         stderr_tail: tail_lines(&run.stderr, OUTPUT_TAIL_LINES),
     };
@@ -393,8 +458,11 @@ fn execute_case(
         run.success,
         run.exit_code,
         contract,
+        monitored_scene_body_count,
         summary.history_quality.as_ref(),
         summary.history_error.as_deref(),
+        summary.world_axis_diagnostics.as_ref(),
+        summary.diagnostic_error.as_deref(),
     ) {
         return AccurateRunCompletion::Failed {
             message: format!(
@@ -441,14 +509,17 @@ fn write_run_manifest(
     success: bool,
     exit_code: Option<i32>,
     contract: AccurateRunContract,
+    monitored_scene_body_count: usize,
     history_quality: Option<&Su2HistoryQuality>,
     history_error: Option<&str>,
+    world_axis_diagnostics: Option<&Su2WorldAxisDiagnostics>,
+    diagnostic_error: Option<&str>,
 ) -> std::io::Result<()> {
     let exit_code = exit_code
         .map(|value| value.to_string())
         .unwrap_or_else(|| "none".into());
     let mut text = format!(
-        "key\tvalue\nformat_version\t3\nscene_revision\t{revision}\nsu2_banner\t{}\nprocess_success\t{success}\nexit_code\t{exit_code}\ncoefficient_reference_area_m2\t{}\ncoefficient_reference_length_m\t{}\nhistory_requested_iterations\t{}\nhistory_residual_target_log10\t{}\n",
+        "key\tvalue\nformat_version\t4\nscene_revision\t{revision}\nsu2_banner\t{}\nprocess_success\t{success}\nexit_code\t{exit_code}\ncoefficient_reference_area_m2\t{}\ncoefficient_reference_length_m\t{}\ncoefficient_frame\t{COEFFICIENT_FRAME_MANIFEST}\ncoefficient_angle_of_attack_deg\t0\ncoefficient_sideslip_angle_deg\t0\ncoefficient_moment_origin_m\t0,0,0\nmonitored_scene_body_count\t{monitored_scene_body_count}\nhistory_requested_iterations\t{}\nhistory_residual_target_log10\t{}\n",
         escape_manifest_value(banner),
         contract.reference_area_m2,
         contract.reference_length_m,
@@ -480,6 +551,28 @@ fn write_run_manifest(
     text.push_str(&format!(
         "history_error\t{}\n",
         history_error
+            .map(escape_manifest_value)
+            .unwrap_or_else(|| "none".into())
+    ));
+
+    if let Some(diagnostics) = world_axis_diagnostics {
+        text.push_str(&format!(
+            "diagnostic_cfx\t{}\ndiagnostic_cfy\t{}\ndiagnostic_cfz\t{}\ndiagnostic_cmx\t{}\ndiagnostic_cmy\t{}\ndiagnostic_cmz\t{}\n",
+            diagnostics.force_coefficient_xyz[0],
+            diagnostics.force_coefficient_xyz[1],
+            diagnostics.force_coefficient_xyz[2],
+            diagnostics.moment_coefficient_xyz[0],
+            diagnostics.moment_coefficient_xyz[1],
+            diagnostics.moment_coefficient_xyz[2]
+        ));
+    } else {
+        text.push_str(
+            "diagnostic_cfx\tnone\ndiagnostic_cfy\tnone\ndiagnostic_cfz\tnone\ndiagnostic_cmx\tnone\ndiagnostic_cmy\tnone\ndiagnostic_cmz\tnone\n",
+        );
+    }
+    text.push_str(&format!(
+        "diagnostic_error\t{}\n",
+        diagnostic_error
             .map(escape_manifest_value)
             .unwrap_or_else(|| "none".into())
     ));
@@ -516,6 +609,7 @@ fn find_history_path(case_directory: &Path) -> Option<PathBuf> {
 fn read_history_evidence(
     case_directory: &Path,
     contract: AccurateRunContract,
+    monitored_scene_body_count: usize,
 ) -> HistoryEvidence {
     let Some(path) = find_history_path(case_directory) else {
         return HistoryEvidence {
@@ -536,19 +630,34 @@ fn read_history_evidence(
     let tail = Some(tail_lines(&text, OUTPUT_TAIL_LINES));
 
     match summarize_su2_history_csv(&text) {
-        Ok(summary) => HistoryEvidence {
-            tail,
-            quality: Some(evaluate_su2_history_quality(
+        Ok(summary) => {
+            let quality = evaluate_su2_history_quality(
                 &summary,
                 contract.requested_iterations,
                 contract.residual_target_log10,
-            )),
-            error: None,
-        },
+            );
+            let (world_axis_diagnostics, diagnostic_error) = if monitored_scene_body_count == 0 {
+                (None, None)
+            } else {
+                match extract_su2_world_axis_diagnostics(&summary) {
+                    Ok(diagnostics) => (Some(diagnostics), None),
+                    Err(error) => (None, Some(error.to_string())),
+                }
+            };
+            HistoryEvidence {
+                tail,
+                quality: Some(quality),
+                error: None,
+                world_axis_diagnostics,
+                diagnostic_error,
+            }
+        }
         Err(error) => HistoryEvidence {
             tail,
             quality: None,
             error: Some(format!("failed to parse {}: {error}", path.display())),
+            world_axis_diagnostics: None,
+            diagnostic_error: None,
         },
     }
 }
@@ -611,7 +720,7 @@ mod tests {
         )
         .unwrap();
 
-        let evidence = read_history_evidence(&root, test_contract());
+        let evidence = read_history_evidence(&root, test_contract(), 0);
         let quality = evidence.quality.unwrap();
         assert_eq!(quality.status, Su2HistoryGateStatus::ResidualTargetMet);
         assert_eq!(quality.last_iteration, Some(19));
@@ -620,7 +729,44 @@ mod tests {
         assert!(tail.ends_with("19,-7.0,1.0"));
         assert_eq!(tail.lines().count(), OUTPUT_TAIL_LINES);
         assert!(evidence.error.is_none());
+        assert!(evidence.world_axis_diagnostics.is_none());
+        assert!(evidence.diagnostic_error.is_none());
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn monitored_body_promotes_only_complete_world_axis_diagnostics() {
+        let root = temp_root("world-axis-diagnostics");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("history.csv"),
+            "\"Inner_Iter\",\"rms[P]\",\"CFx\",\"CFy\",\"CFz\",\"CMx\",\"CMy\",\"CMz\"\n0,-7,1,2,3,4,5,6\n",
+        )
+        .unwrap();
+        let evidence = read_history_evidence(&root, test_contract(), 1);
+        let diagnostics = evidence.world_axis_diagnostics.unwrap();
+        assert_eq!(diagnostics.force_coefficient_xyz, [1.0, 2.0, 3.0]);
+        assert_eq!(diagnostics.moment_coefficient_xyz, [4.0, 5.0, 6.0]);
+        assert!(evidence.diagnostic_error.is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn monitored_body_diagnostic_missing_field_is_explicit() {
+        let root = temp_root("world-axis-missing");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("history.csv"),
+            "\"Inner_Iter\",\"rms[P]\",\"CFx\",\"CFy\",\"CFz\",\"CMx\",\"CMy\"\n0,-7,1,2,3,4,5\n",
+        )
+        .unwrap();
+        let evidence = read_history_evidence(&root, test_contract(), 1);
+        assert!(evidence.world_axis_diagnostics.is_none());
+        assert!(evidence
+            .diagnostic_error
+            .unwrap()
+            .contains("missing aggregate world-axis diagnostic fields: CMZ"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -628,22 +774,24 @@ mod tests {
     fn missing_history_is_explicitly_unavailable() {
         let root = temp_root("missing-history");
         fs::create_dir_all(&root).unwrap();
-        let evidence = read_history_evidence(&root, test_contract());
+        let evidence = read_history_evidence(&root, test_contract(), 1);
         assert!(evidence.quality.is_none());
         assert!(evidence.tail.is_none());
         assert!(evidence.error.unwrap().contains("no SU2 history CSV"));
+        assert!(evidence.world_axis_diagnostics.is_none());
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn run_manifest_persists_runtime_history_and_coefficient_reference() {
+    fn run_manifest_v4_persists_runtime_frame_history_and_diagnostics() {
         let root = temp_root("run-manifest");
         fs::create_dir_all(&root).unwrap();
         let history = summarize_su2_history_csv(
-            "\"Inner_Iter\",\"rms[P]\"\n0,-4.0\n1,-6.5\n",
+            "\"Inner_Iter\",\"rms[P]\",\"CFx\",\"CFy\",\"CFz\",\"CMx\",\"CMy\",\"CMz\"\n0,-4,1,2,3,4,5,6\n1,-6.5,1.1,2.1,3.1,4.1,5.1,6.1\n",
         )
         .unwrap();
         let quality = evaluate_su2_history_quality(&history, 100, -6.0);
+        let diagnostics = extract_su2_world_axis_diagnostics(&history).unwrap();
         write_run_manifest(
             &root,
             81,
@@ -651,19 +799,29 @@ mod tests {
             true,
             Some(0),
             test_contract(),
+            1,
             Some(&quality),
+            None,
+            Some(&diagnostics),
             None,
         )
         .unwrap();
 
         let text = fs::read_to_string(root.join(RUN_MANIFEST_FILENAME)).unwrap();
-        assert!(text.contains("format_version\t3"));
+        assert!(text.contains("format_version\t4"));
         assert!(text.contains("scene_revision\t81"));
         assert!(text.contains(r#"SU2 v8.5.0 \"Harrier\"\tvalidated"#));
         assert!(text.contains("process_success\ttrue"));
         assert!(text.contains("exit_code\t0"));
         assert!(text.contains("coefficient_reference_area_m2\t2.5"));
         assert!(text.contains("coefficient_reference_length_m\t1.25"));
+        assert!(text.contains(&format!(
+            "coefficient_frame\t{COEFFICIENT_FRAME_MANIFEST}"
+        )));
+        assert!(text.contains("coefficient_angle_of_attack_deg\t0"));
+        assert!(text.contains("coefficient_sideslip_angle_deg\t0"));
+        assert!(text.contains("coefficient_moment_origin_m\t0,0,0"));
+        assert!(text.contains("monitored_scene_body_count\t1"));
         assert!(text.contains("history_requested_iterations\t100"));
         assert!(text.contains("history_residual_target_log10\t-6"));
         assert!(text.contains("history_gate\tresidual_target_met"));
@@ -672,6 +830,13 @@ mod tests {
         assert!(text.contains("history_residual_count\t1"));
         assert!(text.contains("history_all_residuals_finite\ttrue"));
         assert!(text.contains("history_error\tnone"));
+        assert!(text.contains("diagnostic_cfx\t1.1"));
+        assert!(text.contains("diagnostic_cfy\t2.1"));
+        assert!(text.contains("diagnostic_cfz\t3.1"));
+        assert!(text.contains("diagnostic_cmx\t4.1"));
+        assert!(text.contains("diagnostic_cmy\t5.1"));
+        assert!(text.contains("diagnostic_cmz\t6.1"));
+        assert!(text.contains("diagnostic_error\tnone"));
 
         fs::remove_dir_all(root).unwrap();
     }
