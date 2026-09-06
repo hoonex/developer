@@ -479,9 +479,8 @@ impl CpuLbm {
         let required = owner as usize + 1;
         if self.last_solid_force_by_owner.len() < required {
             self.last_solid_force_by_owner.resize(required, [0.0; 3]);
-        } else {
-            self.last_solid_force_by_owner.fill([0.0; 3]);
         }
+        self.last_solid_force_by_owner.fill([0.0; 3]);
         self.last_solid_force = [0.0; 3];
         self.f[i] = equilibrium(1.0, [0.0; 3]);
         self.next[i] = [0.0; Q];
@@ -1070,6 +1069,20 @@ mod tests {
                 "aggregate/per-object mismatch axis {axis}: aggregate={aggregate:?} first={first:?} second={second:?}"
             );
         }
+    }
+
+    #[test]
+    fn growing_owner_table_invalidates_previous_force_sample() {
+        let mut solver = CpuLbm::new([12, 8, 4], 0.8);
+        solver.set_solid_with_owner([4, 3, 2], 1);
+        solver.set_uniform_velocity([0.03, 0.0, 0.0]);
+        solver.step(&[]);
+        assert!(solver.solid_force_lattice_for_owner(1)[0] > 0.0);
+
+        solver.set_solid_with_owner([7, 4, 2], 2);
+        assert_eq!(solver.solid_force_lattice(), [0.0; 3]);
+        assert_eq!(solver.solid_force_lattice_for_owner(1), [0.0; 3]);
+        assert_eq!(solver.solid_force_lattice_for_owner(2), [0.0; 3]);
     }
 
     #[test]
