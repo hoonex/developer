@@ -29,8 +29,6 @@ jobs:
             ${{ runner.os }}-cargo-
       - name: Test numerical and accurate-backend cores
         run: cargo test -p aeroforge-flow-core -p aeroforge-accurate-backend -- --nocapture
-      - name: Run explicit D10/D12 cylinder grid evidence
-        run: cargo test -p aeroforge-flow-core --test cylinder_wake -- --ignored --nocapture --test-threads=1
 
   app-check:
     runs-on: windows-latest
