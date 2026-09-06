@@ -1,4 +1,5 @@
 pub mod gltf_import;
+pub mod repair;
 
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
