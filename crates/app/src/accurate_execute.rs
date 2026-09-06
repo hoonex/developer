@@ -7,8 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use aeroforge_accurate_backend::{
     discover_su2, evaluate_su2_history_quality, extract_su2_world_axis_diagnostics,
     prepare_generated_su2_case_directory, probe_su2_banner, run_prepared_generated_su2_case,
-    summarize_su2_history_csv, BoundarySource, GeneratedSu2CaseBundle, Su2HistoryGateStatus,
-    Su2HistoryQuality, Su2WorldAxisDiagnostics,
+    summarize_su2_history_csv, BoundaryRole, BoundarySource, GeneratedSu2CaseBundle,
+    Su2HistoryGateStatus, Su2HistoryQuality, Su2WorldAxisDiagnostics,
 };
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
@@ -330,7 +330,10 @@ fn launch_run(
     let monitored_scene_body_count = bundle
         .marker_bindings
         .iter()
-        .filter(|binding| matches!(&binding.source, BoundarySource::SceneObject { .. }))
+        .filter(|binding| {
+            binding.role == BoundaryRole::Wall
+                && matches!(&binding.source, BoundarySource::SceneObject { .. })
+        })
         .count();
 
     execution.status = AccurateExecutionStatus::Running;
