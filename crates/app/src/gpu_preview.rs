@@ -22,6 +22,7 @@ const LBM_PREVIEW_SHADER_HANDLE: Handle<Shader> =
     uuid_handle!("f327b901-69ff-4af7-bf4e-b6a1490211f4");
 const Q: usize = 19;
 const WORKGROUP_SIZE: u32 = 64;
+const REQUIRED_STORAGE_BUFFERS_PER_STAGE: u32 = 5;
 pub const MAX_GPU_SAMPLES: usize = 4096;
 
 #[derive(Resource, Clone, ExtractResource)]
@@ -256,7 +257,18 @@ struct GpuPreviewPipeline {
 fn init_compute_pipeline(
     mut commands: Commands,
     pipeline_cache: Res<PipelineCache>,
+    render_device: Res<RenderDevice>,
 ) {
+    let available_storage_buffers = render_device.limits().max_storage_buffers_per_shader_stage;
+    if available_storage_buffers < REQUIRED_STORAGE_BUFFERS_PER_STAGE {
+        error!(
+            available_storage_buffers,
+            required_storage_buffers = REQUIRED_STORAGE_BUFFERS_PER_STAGE,
+            "GPU preview disabled because the active device cannot bind enough storage buffers per compute stage"
+        );
+        return;
+    }
+
     let layout = BindGroupLayoutDescriptor::new(
         "aeroforge_gpu_lbm_layout",
         &BindGroupLayoutEntries::sequential(
@@ -321,7 +333,7 @@ fn prepare_gpu_buffers(
     mut commands: Commands,
     request: Res<GpuPreviewRequest>,
     handles: Res<GpuPreviewHandles>,
-    pipeline: Res<GpuPreviewPipeline>,
+    pipeline: Option<Res<GpuPreviewPipeline>>,
     pipeline_cache: Res<PipelineCache>,
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
@@ -334,6 +346,13 @@ fn prepare_gpu_buffers(
         }
         return;
     }
+
+    let Some(pipeline) = pipeline else {
+        if current.is_some() {
+            commands.remove_resource::<GpuPreviewBuffers>();
+        }
+        return;
+    };
 
     let Some(samples) = shader_buffers.get(&handles.samples) else {
         return;
@@ -445,10 +464,13 @@ fn prepare_gpu_buffers(
 fn run_gpu_preview(
     mut render_context: RenderContext,
     pipeline_cache: Res<PipelineCache>,
-    pipeline: Res<GpuPreviewPipeline>,
+    pipeline: Option<Res<GpuPreviewPipeline>>,
     request: Res<GpuPreviewRequest>,
     buffers: Option<ResMut<GpuPreviewBuffers>>,
 ) {
+    let Some(pipeline) = pipeline else {
+        return;
+    };
     let Some(mut buffers) = buffers else {
         return;
     };
