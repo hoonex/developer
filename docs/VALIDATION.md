@@ -37,6 +37,7 @@ The native LBM backend remains an interactive preview solver. GREEN numerical re
 | Pinned upstream SU2 8.5.0 known-case | SU2 adapter | GREEN |
 | AeroForge-generated empty-tunnel SU2 execution | SU2 adapter | GREEN execution smoke |
 | AeroForge-generated primitive-body/marker SU2 execution | SU2 adapter | GREEN execution smoke |
+| Explicit desktop SU2 execution orchestration | App + SU2 adapter | GREEN implementation regression |
 
 ## Boundary-policy contract
 
@@ -201,7 +202,9 @@ The empty `4×3×3` case contains `216` tetrahedra and audited fluid volume `36`
 
 The temporary generated-SU2 one-shot job was removed from routine CI after evidence capture. These generated-case tests establish **mesh/config/marker/provenance persistence and SU2 parser/solver execution compatibility**. They do **not** establish body-fitted meshing, aerodynamic coefficient accuracy, convergence, turbulence-model validity, or engineering validation. The current generated volume mesh is deliberately staircase/voxel-derived.
 
-The desktop accurate-mode integration is currently prepare-only: scene primitives can be translated into the accurate generated-case path and inspected/prepared without automatically launching a solver from the UI. Solver execution/result ingestion remains a separate orchestration milestone.
+The desktop accurate-mode integration now supports an explicit, revision-gated execution path. A user first prepares the current scene revision, then explicitly chooses `Persist + run with SU2 8.5.0`. AeroForge refuses stale prepared bundles, discovers and probes `SU2_CFD`, rejects non-8.5.0 banners, persists a new non-overwriting case directory, launches SU2 on a worker thread, and ingests process status plus `history.csv`/stdout/stderr tails after completion. Each completed process also writes `aeroforge_run_manifest.tsv` containing scene revision, SU2 banner, success flag and exit code. There is still **no automatic solver launch**.
+
+PR workflow run #379 is GREEN across routine core tests, Windows app compile/unit tests, and GPU smoke after adding this execution orchestration. This validates the implementation contract, not the aerodynamic accuracy of a user case. The operational contract and non-claims are detailed in `docs/ACCURATE_EXECUTION.md`.
 
 ## Claims policy
 
@@ -216,13 +219,14 @@ The desktop accurate-mode integration is currently prepare-only: scene primitive
 - BGK physical-scaling warnings remain authoritative even when regressions are GREEN.
 - The GREEN upstream SU2 known-case establishes pinned adapter/process compatibility.
 - The GREEN generated SU2 smoke establishes generated mesh/config/marker/provenance execution compatibility only; it is not an engineering CFD validation result.
+- The GREEN desktop execution orchestration establishes explicit launch/persistence/raw-ingestion behavior only; a successful process exit is not a convergence or accuracy claim.
 - Staircase voxel boundaries must not be described as body-fitted surfaces.
 - Accurate SU2 results must retain solver version, mesh/config provenance, convergence history, geometry revision and source-translation decisions.
 
 ## Next validation milestones
 
-1. Add solver-launch/result-ingestion orchestration on top of the existing prepare-only accurate UI while retaining explicit user control and provenance.
+1. Add structured SU2 history/result parsing with declared convergence gates, plus live progress/cancellation/process-lifecycle handling in the desktop app.
 2. Connect imported audited surfaces to a deterministic repair/body-fitted or otherwise declared higher-fidelity volume-meshing path; keep staircase voxel meshing explicitly labeled as such.
-3. Add aerodynamic result extraction plus case-level convergence/history checks before presenting coefficients as accurate-mode outputs.
+3. Add aerodynamic result extraction and case-level quality checks before presenting coefficients as accurate-mode outputs.
 4. Validate a body-containing generated case against trusted dimensional reference data with grid/domain/model sensitivity before making engineering claims.
 5. Do not extend the native D8/D10/D12 cylinder ladder by brute force unless a later force/boundary change requires revalidation.
