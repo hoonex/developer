@@ -9,6 +9,7 @@ const STEPS: usize = 3;
 const TAU: f32 = 0.8;
 const FORCED_VELOCITY: [f32; 3] = [0.04, 0.01, 0.0];
 const MAX_ALLOWED_ERROR: f32 = 2.0e-4;
+const REQUIRED_STORAGE_BUFFERS_PER_STAGE: u32 = 5;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -38,10 +39,25 @@ fn main() {
         info.name
     );
 
+    let adapter_limits = adapter.limits();
+    println!(
+        "AEROFORGE_GPU_LIMITS max_storage_buffers_per_shader_stage={} max_storage_buffer_binding_size={}",
+        adapter_limits.max_storage_buffers_per_shader_stage,
+        adapter_limits.max_storage_buffer_binding_size
+    );
+    assert!(
+        adapter_limits.max_storage_buffers_per_shader_stage >= REQUIRED_STORAGE_BUFFERS_PER_STAGE,
+        "AEROFORGE_GPU_SMOKE=INSUFFICIENT_STORAGE_BINDINGS available={} required={}",
+        adapter_limits.max_storage_buffers_per_shader_stage,
+        REQUIRED_STORAGE_BUFFERS_PER_STAGE
+    );
+
+    let mut required_limits = wgpu::Limits::downlevel_defaults();
+    required_limits.max_storage_buffers_per_shader_stage = REQUIRED_STORAGE_BUFFERS_PER_STAGE;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("AeroForge GPU parity smoke"),
         required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::downlevel_defaults(),
+        required_limits,
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
         memory_hints: wgpu::MemoryHints::MemoryUsage,
         trace: wgpu::Trace::Off,
