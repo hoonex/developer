@@ -91,7 +91,7 @@ pub fn voxelize_project_geometry_for_staircase(
             )
             .map_err(|error| {
                 format!(
-                    "imported surface {} ({}) failed closed-surface audit: {error}",
+                    "imported surface {} ({}) failed accurate audit (failed closed-surface audit): {error}",
                     object.id, object.name
                 )
             })
