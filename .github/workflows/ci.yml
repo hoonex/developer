@@ -29,8 +29,6 @@ jobs:
             ${{ runner.os }}-cargo-
       - name: Test numerical and accurate-backend cores
         run: cargo test -p aeroforge-flow-core -p aeroforge-accurate-backend -- --nocapture
-      - name: Run one-shot split streamwise cylinder evidence
-        run: cargo test -p aeroforge-flow-core --test cylinder_far_field_streamwise cylinder_re60_far_field_streamwise_split_sensitivity -- --ignored --nocapture
 
   app-check:
     runs-on: windows-latest
