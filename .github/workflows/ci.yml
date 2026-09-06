@@ -28,7 +28,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
       - name: Test numerical and accurate-backend cores
-        run: cargo test -p aeroforge-flow-core -p aeroforge-accurate-backend
+        run: cargo test -p aeroforge-flow-core -p aeroforge-accurate-backend -- --nocapture
 
   app-check:
     runs-on: windows-latest
