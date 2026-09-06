@@ -119,12 +119,8 @@ pub fn draw_accurate_execute_ui(
 
             if run_clicked {
                 if let Some(bundle) = prepared.bundle.clone() {
-                    launch_run(
-                        &mut execution,
-                        PathBuf::from(execution.case_root.trim()),
-                        state.revision,
-                        bundle,
-                    );
+                    let root = PathBuf::from(execution.case_root.trim());
+                    launch_run(&mut execution, root, state.revision, bundle);
                 }
             }
 
