@@ -14,7 +14,7 @@ use crate::model::{rotation_from_degrees, PrimitiveKind, ProjectState, SolverMod
 
 pub const ACCURATE_PREPARE_CELL_LIMIT: u64 = 200_000;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AccurateSettings {
     pub flow_model: FlowModel,
     pub inlet_speed_mps: f64,
@@ -63,6 +63,7 @@ pub struct AccurateRuntime {
     pub settings: AccurateSettings,
     pub status: AccuratePrepareStatus,
     pub prepared_revision: Option<u64>,
+    pub prepared_settings: Option<AccurateSettings>,
     pub summary: Option<PreparedCaseSummary>,
     pub last_error: Option<String>,
     /// Prepared in-memory mesh/config/provenance bundle. It is not executed automatically.
@@ -75,10 +76,20 @@ impl Default for AccurateRuntime {
             settings: AccurateSettings::default(),
             status: AccuratePrepareStatus::Idle,
             prepared_revision: None,
+            prepared_settings: None,
             summary: None,
             last_error: None,
             bundle: None,
         }
+    }
+}
+
+impl AccurateRuntime {
+    pub fn is_fresh_for(&self, scene_revision: u64) -> bool {
+        self.status == AccuratePrepareStatus::Prepared
+            && self.bundle.is_some()
+            && self.prepared_revision == Some(scene_revision)
+            && self.prepared_settings.as_ref() == Some(&self.settings)
     }
 }
 
@@ -97,7 +108,7 @@ pub fn draw_accurate_prepare_ui(
         .resizable(true)
         .show(ctx, |ui| {
             ui.label(
-                "Prepare-only foundation: closed wind tunnel (X inlet/outlet, Y/Z walls) with scene bodies as wall markers.",
+                "Generate a closed wind-tunnel SU2 case (X inlet/outlet, Y/Z walls) with scene bodies as wall markers.",
             );
             ui.small(
                 "The current generated mesh is a Cartesian staircase tetra mesh. It preserves boundary/object provenance but is not yet a body-fitted engineering-quality mesh.",
@@ -195,11 +206,13 @@ pub fn draw_accurate_prepare_ui(
                 .add_enabled(within_budget, egui::Button::new("Prepare generated SU2 case"))
                 .clicked();
             if prepare {
-                match prepare_from_state(&state, &runtime.settings) {
+                let settings_snapshot = runtime.settings.clone();
+                match prepare_from_state(&state, &settings_snapshot) {
                     Ok((bundle, summary)) => {
                         runtime.bundle = Some(bundle);
                         runtime.summary = Some(summary);
                         runtime.prepared_revision = Some(state.revision);
+                        runtime.prepared_settings = Some(settings_snapshot);
                         runtime.last_error = None;
                         runtime.status = AccuratePrepareStatus::Prepared;
                     }
@@ -207,6 +220,7 @@ pub fn draw_accurate_prepare_ui(
                         runtime.bundle = None;
                         runtime.summary = None;
                         runtime.prepared_revision = None;
+                        runtime.prepared_settings = None;
                         runtime.last_error = Some(error);
                         runtime.status = AccuratePrepareStatus::Failed;
                     }
@@ -224,6 +238,14 @@ pub fn draw_accurate_prepare_ui(
                     );
                 }
             }
+            if runtime.prepared_settings.is_some()
+                && runtime.prepared_settings.as_ref() != Some(&runtime.settings)
+            {
+                ui.colored_label(
+                    egui::Color32::YELLOW,
+                    "Prepared case is stale: accurate solver settings changed after preparation.",
+                );
+            }
 
             if let Some(summary) = &runtime.summary {
                 ui.separator();
@@ -236,7 +258,7 @@ pub fn draw_accurate_prepare_ui(
                 ui.monospace(format!("Mesh text: {:.2} MiB", summary.mesh_bytes as f64 / 1_048_576.0));
                 ui.monospace(format!("Config text: {} bytes", summary.config_bytes));
                 ui.small(
-                    "Prepared in memory only. SU2 process execution remains a separate explicit step.",
+                    "Prepared in memory. Persisting and launching SU2 remains a separate explicit action.",
                 );
             }
             if let Some(error) = &runtime.last_error {
@@ -475,5 +497,26 @@ mod tests {
         let error = prepare_from_state(&state, &AccurateSettings::default()).unwrap_err();
         assert!(error.contains("preparation limit"));
         assert_eq!(state.simulation.grid, [100, 100, 100]);
+    }
+
+    #[test]
+    fn accurate_setting_change_invalidates_prepared_bundle_freshness() {
+        let mut state = ProjectState::default();
+        state.simulation.grid = [8, 6, 8];
+        let settings = AccurateSettings::default();
+        let (bundle, summary) = prepare_from_state(&state, &settings).unwrap();
+        let mut runtime = AccurateRuntime {
+            settings: settings.clone(),
+            status: AccuratePrepareStatus::Prepared,
+            prepared_revision: Some(state.revision),
+            prepared_settings: Some(settings),
+            summary: Some(summary),
+            last_error: None,
+            bundle: Some(bundle),
+        };
+
+        assert!(runtime.is_fresh_for(state.revision));
+        runtime.settings.inlet_speed_mps += 1.0;
+        assert!(!runtime.is_fresh_for(state.revision));
     }
 }
