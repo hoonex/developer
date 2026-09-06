@@ -1,5 +1,6 @@
 mod generated_case;
 mod prepared_case;
+mod primitive_voxel;
 mod scene_provenance;
 mod su2;
 mod su2_mesh;
@@ -12,6 +13,10 @@ pub use generated_case::{
 pub use prepared_case::{
     prepare_generated_su2_case_directory, run_prepared_generated_su2_case,
     PrepareGeneratedCaseError, PreparedGeneratedSu2Case,
+};
+pub use primitive_voxel::{
+    voxelize_scene_primitives, PrimitiveVoxelizationError, VoxelPrimitiveKind,
+    VoxelSolidPrimitive, VoxelizedPrimitiveScene,
 };
 pub use scene_provenance::{
     build_active_scene_owner_marker_provenance, build_scene_owner_marker_provenance,
