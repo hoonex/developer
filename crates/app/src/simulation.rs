@@ -3,16 +3,20 @@ use aeroforge_flow_core::{
 };
 use bevy::prelude::*;
 
+use crate::accurate_scene_geometry::{
+    project_voxel_domain, voxelize_project_geometry_for_staircase,
+};
 use crate::gpu_preview::{GpuPreviewRequest, GpuPreviewSnapshot, MAX_GPU_SAMPLES};
 use crate::model::{
-    rotation_from_degrees, PreviewBoundaryPreset, PrimitiveKind, ProjectState, SceneObject,
-    SolverMode, WindProfile, WindSource, WindSourceKind,
+    rotation_from_degrees, PreviewBoundaryPreset, ProjectState, SolverMode, WindProfile,
+    WindSource, WindSourceKind,
 };
 
 pub(crate) const PREVIEW_TAU: f32 = 0.8;
 pub(crate) const TARGET_MAX_LATTICE_SPEED: f32 = 0.075;
 pub(crate) const CPU_PREVIEW_CELL_LIMIT: u64 = 2_000_000;
 pub(crate) const GPU_PREVIEW_UPLOAD_CELL_LIMIT: u64 = 4_000_000;
+pub(crate) const IMPORTED_PREVIEW_CELL_LIMIT: u64 = 200_000;
 
 const GPU_BOUNDARY_X_MIN: u32 = 1;
 const GPU_BOUNDARY_X_MAX: u32 = 2;
@@ -33,6 +37,8 @@ pub enum PreviewStatus {
     GpuInitializing,
     BlockedCpuBudget,
     BlockedGpuBudget,
+    BlockedGeometryBudget,
+    BlockedGeometry,
     AccurateSolverPending,
 }
 
@@ -47,6 +53,7 @@ pub struct SimulationRuntime {
     solid_owner_object_ids: Vec<u64>,
     pub backend: PreviewBackend,
     pub status: PreviewStatus,
+    pub geometry_error: Option<String>,
     pub steps_per_frame: u32,
     pub max_vectors: usize,
     pub active_forcing_cells: usize,
@@ -66,6 +73,7 @@ impl Default for SimulationRuntime {
             solid_owner_object_ids: Vec::new(),
             backend: PreviewBackend::CpuReference,
             status: PreviewStatus::Idle,
+            geometry_error: None,
             steps_per_frame: 1,
             max_vectors: 1_200,
             active_forcing_cells: 0,
@@ -84,6 +92,7 @@ impl SimulationRuntime {
         self.prepared_revision = 0;
         self.solid_owner_object_ids.clear();
         self.status = PreviewStatus::Idle;
+        self.geometry_error = None;
         self.active_forcing_cells = 0;
         self.solid_cells = 0;
         self.max_source_speed_mps = 0.0;
@@ -156,7 +165,12 @@ pub fn advance_preview(
             } else {
                 PreviewStatus::Ready
             };
-        } else if !matches!(runtime.status, PreviewStatus::BlockedGpuBudget) {
+        } else if !matches!(
+            runtime.status,
+            PreviewStatus::BlockedGpuBudget
+                | PreviewStatus::BlockedGeometryBudget
+                | PreviewStatus::BlockedGeometry
+        ) {
             runtime.status = PreviewStatus::GpuInitializing;
         }
         return;
@@ -196,6 +210,7 @@ fn rebuild_runtime(
     runtime.solver = None;
     runtime.forcing = None;
     runtime.solid_owner_object_ids.clear();
+    runtime.geometry_error = None;
     runtime.active_forcing_cells = 0;
     runtime.solid_cells = 0;
     runtime.max_source_speed_mps = 0.0;
@@ -222,6 +237,14 @@ fn rebuild_runtime(
         }
         _ => {}
     }
+    if !state.imported_surfaces.is_empty() && cells > IMPORTED_PREVIEW_CELL_LIMIT {
+        gpu_request.disable();
+        runtime.status = PreviewStatus::BlockedGeometryBudget;
+        runtime.geometry_error = Some(format!(
+            "imported-surface preview rasterization is capped at {IMPORTED_PREVIEW_CELL_LIMIT} cells; requested {cells}. Grid is not silently reduced."
+        ));
+        return;
+    }
 
     let dims = state.simulation.grid.map(|n| n as usize);
     let uses_x_open = matches!(
@@ -239,7 +262,15 @@ fn rebuild_runtime(
         return;
     }
 
-    let solids = rasterize_solids(state, dims);
+    let solids = match rasterize_solids(state, dims) {
+        Ok(solids) => solids,
+        Err(error) => {
+            gpu_request.disable();
+            runtime.geometry_error = Some(error);
+            runtime.status = PreviewStatus::BlockedGeometry;
+            return;
+        }
+    };
     runtime.solid_cells = solids.owners.iter().filter(|&&owner| owner != 0).count();
     runtime.solid_owner_object_ids = solids.owner_object_ids.clone();
     let (forcing, packed_forcing, max_source_speed_mps, lattice_velocity_scale) =
@@ -416,43 +447,18 @@ struct SolidRasterization {
     owner_object_ids: Vec<u64>,
 }
 
-fn rasterize_solids(state: &ProjectState, dims: [usize; 3]) -> SolidRasterization {
-    let cells = dims[0] * dims[1] * dims[2];
-    let mut owners = vec![0_u32; cells];
-    let mut ordered_objects = state.objects.iter().collect::<Vec<_>>();
-    ordered_objects.sort_by_key(|object| object.id);
-    assert!(
-        ordered_objects.len() < u32::MAX as usize,
-        "scene contains too many geometry objects for compact u32 ownership labels"
-    );
-    debug_assert!(
-        ordered_objects.windows(2).all(|pair| pair[0].id != pair[1].id),
-        "SceneObject ids must be unique"
-    );
-    let owner_object_ids = ordered_objects.iter().map(|object| object.id).collect::<Vec<_>>();
-
-    for z in 0..dims[2] {
-        for y in 0..dims[1] {
-            for x in 0..dims[0] {
-                let p = [x, y, z];
-                let world = cell_center_world(p, dims, state.simulation.domain_size_m);
-                // Deterministic overlap policy: the lowest stable SceneObject.id owns a voxel.
-                // Object vector order therefore cannot change momentum-exchange provenance.
-                if let Some(owner_index) = ordered_objects
-                    .iter()
-                    .position(|object| object_contains(object, world))
-                {
-                    owners[index(dims, p)] = u32::try_from(owner_index + 1)
-                        .expect("scene-object owner index was bounded above");
-                }
-            }
-        }
-    }
-
-    SolidRasterization {
-        owners,
-        owner_object_ids,
-    }
+fn rasterize_solids(
+    state: &ProjectState,
+    dims: [usize; 3],
+) -> Result<SolidRasterization, String> {
+    let voxelized = voxelize_project_geometry_for_staircase(
+        state,
+        project_voxel_domain(state, dims),
+    )?;
+    Ok(SolidRasterization {
+        owners: voxelized.solid_owner,
+        owner_object_ids: voxelized.owner_object_ids,
+    })
 }
 
 fn rasterize_wind_sources(
@@ -513,26 +519,6 @@ fn rasterize_wind_sources(
     )
 }
 
-fn object_contains(object: &SceneObject, world: Vec3) -> bool {
-    let rotation = rotation_from_degrees(object.rotation_deg);
-    let local = rotation.inverse() * (world - object.position);
-    let half = (object.scale.abs() * 0.5).max(Vec3::splat(0.001));
-
-    match object.kind {
-        PrimitiveKind::Box => {
-            local.x.abs() <= half.x && local.y.abs() <= half.y && local.z.abs() <= half.z
-        }
-        PrimitiveKind::Sphere => {
-            let q = local / half;
-            q.length_squared() <= 1.0
-        }
-        PrimitiveKind::Cylinder => {
-            let radial = Vec2::new(local.x / half.x, local.z / half.z).length_squared();
-            local.y.abs() <= half.y && radial <= 1.0
-        }
-    }
-}
-
 fn source_weight(source: &WindSource, world: Vec3, cell_size: Vec3) -> f32 {
     let rotation = rotation_from_degrees(source.rotation_deg);
     let local = rotation.inverse() * (world - source.position);
@@ -589,7 +575,10 @@ fn index(dims: [usize; 3], [x, y, z]: [usize; 3]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{PreviewBoundaryPreset, SimulationSettings, SolverMode};
+    use aeroforge_geometry_core::SurfaceMesh;
+    use crate::model::{
+        PreviewBoundaryPreset, PrimitiveKind, SceneObject, SimulationSettings, SolverMode,
+    };
 
     fn test_box(id: u64, position: Vec3, scale: Vec3) -> SceneObject {
         SceneObject {
@@ -602,18 +591,34 @@ mod tests {
         }
     }
 
+    fn tetra_surface() -> SurfaceMesh {
+        SurfaceMesh {
+            positions: vec![
+                [0.0, 0.0, 0.0],
+                [2.0, 0.0, 0.0],
+                [0.0, 2.0, 0.0],
+                [0.0, 0.0, 2.0],
+            ],
+            triangles: vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
+        }
+    }
+
     #[test]
-    fn rotated_box_contains_expected_point() {
-        let object = SceneObject {
+    fn rotated_box_rasterizes_through_shared_geometry_adapter() {
+        let mut state = ProjectState::default();
+        state.simulation.domain_size_m = Vec3::new(4.0, 4.0, 4.0);
+        state.simulation.grid = [8, 8, 8];
+        state.objects = vec![SceneObject {
             id: 1,
             name: "box".into(),
             kind: PrimitiveKind::Box,
-            position: Vec3::ZERO,
+            position: Vec3::new(0.0, 2.0, 0.0),
             rotation_deg: Vec3::new(0.0, 45.0, 0.0),
             scale: Vec3::new(2.0, 2.0, 0.5),
-        };
-        assert!(object_contains(&object, Vec3::new(0.5, 0.0, -0.5)));
-        assert!(!object_contains(&object, Vec3::new(1.5, 0.0, 1.5)));
+        }];
+        let solids = rasterize_solids(&state, [8, 8, 8]).unwrap();
+        assert_eq!(solids.owner_object_ids, vec![1]);
+        assert!(solids.owners.iter().any(|&owner| owner == 1));
     }
 
     #[test]
@@ -626,13 +631,45 @@ mod tests {
             test_box(3, Vec3::new(0.0, 1.0, 0.0), Vec3::splat(4.0)),
         ];
 
-        let first = rasterize_solids(&state, [2, 2, 2]);
+        let first = rasterize_solids(&state, [2, 2, 2]).unwrap();
         assert_eq!(first.owner_object_ids, vec![3, 9]);
         assert!(first.owners.iter().all(|&owner| owner == 1));
 
         state.objects.swap(0, 1);
-        let reordered = rasterize_solids(&state, [2, 2, 2]);
+        let reordered = rasterize_solids(&state, [2, 2, 2]).unwrap();
         assert_eq!(reordered, first);
+    }
+
+    #[test]
+    fn imported_surface_rasterizes_into_preview_with_stable_owner() {
+        let mut state = ProjectState::default();
+        state.objects.clear();
+        state.simulation.domain_size_m = Vec3::new(4.0, 4.0, 4.0);
+        state.simulation.grid = [4, 4, 4];
+        let id = state.add_imported_surface("tetra.gltf", tetra_surface());
+        state.imported_surfaces[0].position = Vec3::new(-1.0, 1.0, -1.0);
+
+        let solids = rasterize_solids(&state, [4, 4, 4]).unwrap();
+        assert_eq!(solids.owner_object_ids, vec![id]);
+        assert!(solids.owners.iter().any(|&owner| owner == 1));
+    }
+
+    #[test]
+    fn invalid_imported_surface_fails_preview_closed() {
+        let mut state = ProjectState::default();
+        state.objects.clear();
+        state.simulation.domain_size_m = Vec3::new(4.0, 4.0, 4.0);
+        state.simulation.grid = [4, 4, 4];
+        state.add_imported_surface(
+            "open.obj",
+            SurfaceMesh {
+                positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                triangles: vec![[0, 1, 2]],
+            },
+        );
+
+        let error = rasterize_solids(&state, [4, 4, 4]).unwrap_err();
+        assert!(error.contains("failed closed-surface audit"));
     }
 
     #[test]
