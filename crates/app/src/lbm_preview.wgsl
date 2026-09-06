@@ -40,14 +40,26 @@ const OPPOSITE: array<u32, 19> = array<u32, 19>(
 
 struct Params {
     dims_stride: vec4<u32>,
-    // control.x = sample_count; control.y = no-slip face bitmask.
+    // control.x = sample_count; control.y = stationary no-slip face bitmask;
+    // control.z = moving-wall face bitmask.
     control: vec4<u32>,
     physics: vec4<f32>,
+    wall_x_min: vec4<f32>,
+    wall_x_max: vec4<f32>,
+    wall_y_min: vec4<f32>,
+    wall_y_max: vec4<f32>,
+    wall_z_min: vec4<f32>,
+    wall_z_max: vec4<f32>,
 };
 
 struct MacroState {
     rho: f32,
     u: vec3<f32>,
+};
+
+struct BoundaryHit {
+    bounce: bool,
+    wall_velocity: vec3<f32>,
 };
 
 @group(0) @binding(0) var<storage, read_write> state_in: array<f32>;
@@ -70,28 +82,84 @@ fn wrap_coord(value: i32, size: u32) -> u32 {
     return u32(((value % n) + n) % n);
 }
 
-fn boundary_bounce(position: vec3<u32>, q: u32) -> bool {
-    let mask = params.control.y;
+fn face_velocity(bit: u32) -> vec3<f32> {
+    if (bit == BOUNDARY_X_MIN) { return params.wall_x_min.xyz; }
+    if (bit == BOUNDARY_X_MAX) { return params.wall_x_max.xyz; }
+    if (bit == BOUNDARY_Y_MIN) { return params.wall_y_min.xyz; }
+    if (bit == BOUNDARY_Y_MAX) { return params.wall_y_max.xyz; }
+    if (bit == BOUNDARY_Z_MIN) { return params.wall_z_min.xyz; }
+    return params.wall_z_max.xyz;
+}
+
+fn register_boundary_hit(
+    bit: u32,
+    stationary_mask: u32,
+    moving_mask: u32,
+    hit_stationary: ptr<function, bool>,
+    hit_moving: ptr<function, bool>,
+    moving_velocity: ptr<function, vec3<f32>>,
+) {
+    if ((moving_mask & bit) != 0u) {
+        *hit_moving = true;
+        *moving_velocity = face_velocity(bit);
+    } else if ((stationary_mask & bit) != 0u) {
+        *hit_stationary = true;
+    }
+}
+
+fn boundary_hit(position: vec3<u32>, q: u32) -> BoundaryHit {
+    let stationary_mask = params.control.y;
+    let moving_mask = params.control.z;
     let next = vec3<i32>(position) + C[q];
-    if (next.x < 0 && (mask & BOUNDARY_X_MIN) != 0u) {
-        return true;
+    var hit_stationary = false;
+    var hit_moving = false;
+    var moving_velocity = vec3<f32>(0.0, 0.0, 0.0);
+
+    if (next.x < 0) {
+        register_boundary_hit(
+            BOUNDARY_X_MIN, stationary_mask, moving_mask,
+            &hit_stationary, &hit_moving, &moving_velocity
+        );
     }
-    if (next.x >= i32(params.dims_stride.x) && (mask & BOUNDARY_X_MAX) != 0u) {
-        return true;
+    if (next.x >= i32(params.dims_stride.x)) {
+        register_boundary_hit(
+            BOUNDARY_X_MAX, stationary_mask, moving_mask,
+            &hit_stationary, &hit_moving, &moving_velocity
+        );
     }
-    if (next.y < 0 && (mask & BOUNDARY_Y_MIN) != 0u) {
-        return true;
+    if (next.y < 0) {
+        register_boundary_hit(
+            BOUNDARY_Y_MIN, stationary_mask, moving_mask,
+            &hit_stationary, &hit_moving, &moving_velocity
+        );
     }
-    if (next.y >= i32(params.dims_stride.y) && (mask & BOUNDARY_Y_MAX) != 0u) {
-        return true;
+    if (next.y >= i32(params.dims_stride.y)) {
+        register_boundary_hit(
+            BOUNDARY_Y_MAX, stationary_mask, moving_mask,
+            &hit_stationary, &hit_moving, &moving_velocity
+        );
     }
-    if (next.z < 0 && (mask & BOUNDARY_Z_MIN) != 0u) {
-        return true;
+    if (next.z < 0) {
+        register_boundary_hit(
+            BOUNDARY_Z_MIN, stationary_mask, moving_mask,
+            &hit_stationary, &hit_moving, &moving_velocity
+        );
     }
-    if (next.z >= i32(params.dims_stride.z) && (mask & BOUNDARY_Z_MAX) != 0u) {
-        return true;
+    if (next.z >= i32(params.dims_stride.z)) {
+        register_boundary_hit(
+            BOUNDARY_Z_MAX, stationary_mask, moving_mask,
+            &hit_stationary, &hit_moving, &moving_velocity
+        );
     }
-    return false;
+
+    // Match the CPU reference: at a mixed corner a moving wall dominates a stationary wall.
+    if (hit_moving) {
+        return BoundaryHit(true, moving_velocity);
+    }
+    if (hit_stationary) {
+        return BoundaryHit(true, vec3<f32>(0.0, 0.0, 0.0));
+    }
+    return BoundaryHit(false, vec3<f32>(0.0, 0.0, 0.0));
 }
 
 fn clamp_velocity(u: vec3<f32>) -> vec3<f32> {
@@ -108,6 +176,11 @@ fn equilibrium(rho: f32, u: vec3<f32>, q: u32) -> f32 {
     let cu = dot(c, u);
     let u2 = dot(u, u);
     return W[q] * rho * (1.0 + 3.0 * cu + 4.5 * cu * cu - 1.5 * u2);
+}
+
+fn moving_wall_correction(rho: f32, q: u32, wall_velocity: vec3<f32>) -> f32 {
+    let c = vec3<f32>(f32(C[q].x), f32(C[q].y), f32(C[q].z));
+    return 6.0 * W[q] * rho * dot(c, wall_velocity);
 }
 
 fn macroscopic(cell: u32) -> MacroState {
@@ -177,8 +250,10 @@ fn step(@builtin(global_invocation_id) gid: vec3<u32>) {
         let fin = state_in[base + q];
         let eq = equilibrium(macro_state.rho, u, q);
         let post = fin - omega * (fin - eq);
-        if (boundary_bounce(position, q)) {
-            state_out[base + OPPOSITE[q]] = post;
+        let hit = boundary_hit(position, q);
+        if (hit.bounce) {
+            let correction = moving_wall_correction(macro_state.rho, q, hit.wall_velocity);
+            state_out[base + OPPOSITE[q]] = post - correction;
             continue;
         }
         let destination = vec3<u32>(
