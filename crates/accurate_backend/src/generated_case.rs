@@ -71,6 +71,7 @@ pub fn build_generated_su2_case_bundle(
 ) -> Result<GeneratedSu2CaseBundle, GeneratedSu2CaseError> {
     case.validate()?;
     marker_map.validate_for_mesh(mesh)?;
+    validate_supported_boundary_roles(marker_map)?;
     validate_case_marker_provenance(case, marker_map)?;
     validate_complete_boundary_consumption(case, marker_map)?;
 
@@ -83,6 +84,23 @@ pub fn build_generated_su2_case_bundle(
         mesh_text: mesh_export.mesh_text,
         marker_bindings: mesh_export.marker_bindings,
     })
+}
+
+fn validate_supported_boundary_roles(
+    marker_map: &Su2MarkerMap,
+) -> Result<(), GeneratedSu2CaseError> {
+    for binding in &marker_map.bindings {
+        if matches!(
+            binding.role,
+            BoundaryRole::FarField | BoundaryRole::Symmetry | BoundaryRole::Custom
+        ) {
+            return Err(GeneratedSu2CaseError::UnsupportedBoundaryRole {
+                tag: binding.tag.clone(),
+                role: binding.role,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn validate_complete_boundary_consumption(
@@ -105,12 +123,7 @@ fn validate_complete_boundary_consumption(
             BoundaryRole::Inlet => inlet_tags.contains(binding.tag.as_str()),
             BoundaryRole::Outlet => binding.tag == case.outlet_marker,
             BoundaryRole::Wall => wall_tags.contains(binding.tag.as_str()),
-            BoundaryRole::FarField | BoundaryRole::Symmetry | BoundaryRole::Custom => {
-                return Err(GeneratedSu2CaseError::UnsupportedBoundaryRole {
-                    tag: binding.tag.clone(),
-                    role: binding.role,
-                });
-            }
+            BoundaryRole::FarField | BoundaryRole::Symmetry | BoundaryRole::Custom => false,
         };
         if !consumed {
             return Err(GeneratedSu2CaseError::UnreferencedBoundary {
