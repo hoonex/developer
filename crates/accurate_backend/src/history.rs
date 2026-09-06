@@ -53,6 +53,7 @@ pub struct Su2SurfaceWorldAxisDiagnostics {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Su2DiagnosticError {
     MissingFields(Vec<String>),
+    MissingSurfaceFields(Vec<String>),
     NonFiniteField(String),
     AmbiguousField(String),
 }
@@ -62,7 +63,12 @@ impl Display for Su2DiagnosticError {
         match self {
             Self::MissingFields(fields) => write!(
                 f,
-                "SU2 history is missing world-axis diagnostic fields: {}",
+                "SU2 history is missing aggregate world-axis diagnostic fields: {}",
+                fields.join(", ")
+            ),
+            Self::MissingSurfaceFields(fields) => write!(
+                f,
+                "SU2 history is missing per-surface world-axis diagnostic fields: {}",
                 fields.join(", ")
             ),
             Self::NonFiniteField(field) => {
@@ -293,7 +299,7 @@ pub fn extract_su2_surface_world_axis_diagnostics(
     }
 
     if !missing.is_empty() {
-        return Err(Su2DiagnosticError::MissingFields(missing));
+        return Err(Su2DiagnosticError::MissingSurfaceFields(missing));
     }
 
     Ok(output)
@@ -502,7 +508,9 @@ mod tests {
         .unwrap();
         assert_eq!(
             extract_su2_surface_world_axis_diagnostics(&summary, &["body_42".into()]),
-            Err(Su2DiagnosticError::MissingFields(vec!["CMz_body_42".into()]))
+            Err(Su2DiagnosticError::MissingSurfaceFields(vec![
+                "CMz_body_42".into()
+            ]))
         );
     }
 
