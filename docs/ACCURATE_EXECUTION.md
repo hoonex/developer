@@ -87,7 +87,7 @@ This makes body-vs-domain monitoring semantics explicit, but aerodynamic post-pr
 
 ## 7. External and routine evidence
 
-Four relevant checkpoints now exist:
+Five relevant checkpoints now exist:
 
 - **run #253**: official upstream incompressible laminar-cylinder regression reproduced through AeroForge's SU2 adapter/process path, including exact iteration-10 reference values;
 - **run #365**: initial AeroForge-generated cases executed with real SU2 8.5.0, including an empty tunnel and a primitive-body case preserving `SceneObject.id=42 → body_42 → scene_object:42` provenance;
