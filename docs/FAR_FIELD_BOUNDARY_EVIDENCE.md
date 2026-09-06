@@ -70,42 +70,79 @@ The CI summary line was:
 
 `AEROFORGE_CYLINDER_BOUNDARY_COMPARE=PASS St_delta_pct=1.258 Cd_delta_pct=1.022 lift_amp_delta_pct=-6.764 rho_error_ratio=0.7017`
 
-## D10 free-stream refinement
+## Free-stream D8 / D10 / D12 grid sensitivity
 
-Push run #164 executed the geometrically similar D10 refinement with the same y free-stream policy:
+The expensive refinements remain `#[ignore]` by default and are executed only as explicit evidence runs. They preserve `Re=60`, `U=0.06`, 10% transverse blockage, geometrically similar streamwise placement, the same startup perturbation, and approximately matching nondimensional settle/sample duration.
+
+Run #164 produced D10:
 
 `AEROFORGE_CYLINDER_FAR_FIELD_D10=PASS case=D10_FAR_FIELD grid=120x100x2 D=10 U=0.06 Re=60 tau=0.530000 St=0.154413 spectral_prominence=17.27 wake_v_rms=0.018098 mean_Cd=1.8478 lift_amp=0.007737 max_rho_error=0.008865 max_speed=0.087030`
 
-Relative to the D8 free-stream case:
+Run #170 produced D12:
 
-- `St`: `0.155239 → 0.154413`, about `-0.532%`;
-- mean momentum-exchange `Cd*`: `1.9439 → 1.8478`, about `-4.944%`;
-- max density error: `0.009309 → 0.008865`, about `-4.77%`;
-- max lattice speed: `0.089989 → 0.087030`, about `-3.29%`.
+`AEROFORGE_CYLINDER_FAR_FIELD_D12=PASS case=D12_FAR_FIELD grid=144x120x2 D=12 U=0.06 Re=60 tau=0.536000 St=0.155600 spectral_prominence=17.14 wake_v_rms=0.018333 mean_Cd=1.8211 lift_amp=0.009912 max_rho_error=0.008896 max_speed=0.086476`
 
-At the same D10 grid, changing y from periodic to free-stream gives approximately:
+Full sequence:
 
-- `St`: `0.152665 → 0.154413`, `+1.145%`;
-- mean `Cd*`: `1.8346 → 1.8478`, `+0.719%`;
-- max density error: `0.013591 → 0.008865`, `-34.77%`.
+| Case | Grid | D | tau | St | Mean Cd* | Spectral prominence | Max rho error | Max speed |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| D8 free-stream | `96×80×2` | 8 | 0.524 | 0.155239 | 1.9439 | 17.51 | 0.009309 | 0.089989 |
+| D10 free-stream | `120×100×2` | 10 | 0.530 | 0.154413 | 1.8478 | 17.27 | 0.008865 | 0.087030 |
+| D12 free-stream | `144×120×2` | 12 | 0.536 | 0.155600 | 1.8211 | 17.14 | 0.008896 | 0.086476 |
 
-The D8→D10 free-stream sequence is monotonic for `St`, `Cd*`, density error and max speed, but two levels are insufficient to infer an observed convergence order or asymptotic regime. D12 is required before any three-grid convergence statement.
+Observed changes:
 
-## Interpretation
+- D8→D10 `St`: `-0.532%`;
+- D10→D12 `St`: `+0.769%`;
+- D8→D12 `St`: `+0.233%`;
+- D8→D10 mean `Cd*`: `-4.944%`;
+- D10→D12 mean `Cd*`: `-1.445%`;
+- D8→D12 mean `Cd*`: `-6.317%`;
+- D8→D10 max density error: `-4.770%`;
+- D10→D12 max density error: `+0.350%`;
+- D8→D12 max density error: `-4.437%`;
+- D8→D12 max lattice speed: `-3.904%`.
 
-The evidence so far is encouraging but deliberately limited:
+The free-stream Strouhal sequence is again **non-monotonic**: D10 moves downward and D12 moves back upward. Consequently AeroForge does not infer an observed convergence order, Richardson extrapolation, or GCI from these levels. The result is three-grid sensitivity evidence only.
 
-- changing D8 from periodic-y to free-stream-y moves shedding frequency only about 1.3% and the drag diagnostic about 1.0%; the previous periodic result was therefore not dominated by a catastrophic periodic-image shift at this 10% blockage setup;
-- the maximum D8 density deviation falls by about 29.8% with free-stream-y, and the D10 free-stream case stays lower still;
-- at D10, the free-stream policy reduces maximum density deviation by about 34.8% relative to the periodic-y case while changing St and Cd by roughly 1.1% and 0.7%;
-- this supports using the free-stream-y policy as the better external-flow preview boundary, but it does **not** prove that its `St` or `Cd` is closer to experiment/reference data;
-- the free-stream NEQ boundary is still not a general non-reflecting boundary, so reflection and domain-distance sensitivity remain separate validation tasks.
+The drag diagnostic is monotonic and its refinement increment shrinks from about 4.94% to 1.45%, which is encouraging, but voxel geometry and remaining domain/boundary sensitivity still block an engineering convergence claim.
+
+## Boundary effect remains consistent across resolution
+
+At each tested resolution, switching y from periodic to free-stream changes St/Cd modestly while substantially lowering maximum density deviation:
+
+| Resolution | Periodic St | Free-stream St | ΔSt | Periodic Cd* | Free-stream Cd* | ΔCd | Periodic max ρ error | Free-stream max ρ error | Δρ error |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| D8 | 0.153310 | 0.155239 | +1.258% | 1.9243 | 1.9439 | +1.022% | 0.013267 | 0.009309 | -29.83% |
+| D10 | 0.152665 | 0.154413 | +1.145% | 1.8346 | 1.8478 | +0.719% | 0.013591 | 0.008865 | -34.77% |
+| D12 | 0.153939 | 0.155600 | +1.079% | 1.8092 | 1.8211 | +0.658% | 0.013782 | 0.008896 | -35.45% |
+
+This is a useful pattern: the boundary-induced St shift stays around 1.1%, the Cd shift shrinks below 1%, and density deviation is roughly 30–35% lower with the free-stream-y policy across all three grids. That consistency strengthens the case for `ExternalFlowX` as the native external-flow preview preset.
+
+It still does **not** prove that the free-stream values are closer to experiment/reference data. The free-stream NEQ condition is also not a generic non-reflecting boundary.
+
+## Evidence-level interpretation
+
+The current evidence supports these statements:
+
+- CPU and exact-app-WGSL implementations agree for the controlled far-field case;
+- the prescribed y free-stream policy preserves uniform flow in the declared regression;
+- changing from periodic-y to free-stream-y produces a modest and repeatable St/Cd shift across D8/D10/D12;
+- maximum density deviation is materially lower with free-stream-y on all three tested grids;
+- free-stream-y is therefore the more appropriate native preview boundary for external-flow scenes than transverse periodicity.
+
+The current evidence does **not** support these stronger statements:
+
+- that `FarField` is non-reflecting in a general sense;
+- that the three-grid sequence is asymptotically converged;
+- that the momentum-exchange Cd values are engineering-valid;
+- that the native preview matches a trusted Re≈60 external-cylinder reference within a validated uncertainty band.
 
 Therefore the evidence level remains **boundary-sensitivity / numerical validation**, not engineering validation.
 
 ## Next evidence
 
-1. Run D12 with the y free-stream policy and assess the full D8/D10/D12 sequence without forcing a convergence claim.
-2. Add transverse-domain-height sensitivity at fixed lattice resolution to measure residual boundary-distance dependence.
-3. Compare the resulting `St` and force diagnostics against a trusted Re≈60 cylinder reference before tightening acceptance bands.
-4. Consider a convective or characteristic boundary only if measured reflection/domain-size sensitivity justifies the extra complexity.
+1. Add transverse-domain-height sensitivity at fixed lattice resolution to isolate residual boundary-distance dependence from voxel/grid refinement.
+2. Compare `St` and force diagnostics against trusted Re≈60 cylinder reference data before tightening acceptance bands.
+3. Consider a convective or characteristic boundary only if measured reflection/domain-size sensitivity justifies the added complexity.
+4. Keep D10/D12 evidence tests ignored in routine CI; the one-shot CI steps used for runs #164 and #170 were removed after evidence collection.
