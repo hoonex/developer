@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
@@ -7,7 +8,7 @@ use crate::generated_case::{
     build_generated_su2_case_bundle, GeneratedSu2CaseBundle, GeneratedSu2CaseError,
 };
 use crate::scene_provenance::{
-    build_scene_owner_marker_provenance, SceneOwnerProvenanceError,
+    build_active_scene_owner_marker_provenance, SceneOwnerProvenanceError,
 };
 use crate::su2::Su2Case;
 use crate::su2_mesh::Su2MarkerBinding;
@@ -62,10 +63,10 @@ impl From<GeneratedSu2CaseError> for GeneratedVoxelSu2CaseError {
 ///
 /// `stable SceneObject.id -> compact solid owner -> volume boundary marker -> SU2 marker tag`.
 ///
-/// Geometry remains the Cartesian staircase implied by the supplied owner field. This function
-/// does not claim body-fitted remeshing or engineering-quality surface recovery; its purpose is to
-/// close and test the data/provenance path before replacing the staircase mesher with a stronger
-/// volume-mesh backend.
+/// Only compact owner labels that actually occur in `solid_owner` become object-wall markers, so
+/// scene objects outside the domain do not create unused SU2 boundaries. Geometry remains the
+/// Cartesian staircase implied by the supplied owner field; this is not claimed to be body-fitted
+/// or engineering-quality surface recovery.
 pub fn build_voxel_generated_su2_case(
     case: &Su2Case,
     domain: VoxelFluidDomainSpec,
@@ -73,8 +74,16 @@ pub fn build_voxel_generated_su2_case(
     owner_object_ids: &[u64],
     domain_bindings: Vec<Su2MarkerBinding>,
 ) -> Result<GeneratedVoxelSu2Case, GeneratedVoxelSu2CaseError> {
-    let provenance =
-        build_scene_owner_marker_provenance(owner_object_ids, domain_bindings)?;
+    let active_owner_labels = solid_owner
+        .iter()
+        .copied()
+        .filter(|&owner| owner != 0)
+        .collect::<BTreeSet<_>>();
+    let provenance = build_active_scene_owner_marker_provenance(
+        owner_object_ids,
+        &active_owner_labels,
+        domain_bindings,
+    )?;
     let volume_mesh = tetrahedralize_voxel_fluid_domain(
         domain,
         solid_owner,
@@ -133,16 +142,14 @@ mod tests {
         ]
     }
 
-    fn case(include_body: bool) -> Su2Case {
+    fn case(body_tags: &[&str]) -> Su2Case {
         let mut walls = vec![
             "y_min".into(),
             "y_max".into(),
             "z_min".into(),
             "z_max".into(),
         ];
-        if include_body {
-            walls.push("body_42".into());
-        }
+        walls.extend(body_tags.iter().map(|tag| (*tag).to_owned()));
         Su2Case {
             mesh_filename: "scene_generated.su2".into(),
             density_kg_m3: 1.225,
@@ -173,7 +180,7 @@ mod tests {
     #[test]
     fn scene_owner_reaches_generated_su2_mesh_and_config_with_stable_provenance() {
         let result = build_voxel_generated_su2_case(
-            &case(true),
+            &case(&["body_42"]),
             domain(),
             &center_owned_voxels(),
             &[42],
@@ -202,9 +209,28 @@ mod tests {
     }
 
     #[test]
+    fn inactive_scene_object_does_not_create_mesh_or_case_marker() {
+        let result = build_voxel_generated_su2_case(
+            &case(&["body_42"]),
+            domain(),
+            &center_owned_voxels(),
+            &[42, 99],
+            domain_bindings(),
+        )
+        .unwrap();
+        assert!(result.bundle.mesh_text.contains("MARKER_TAG= body_42"));
+        assert!(!result.bundle.mesh_text.contains("MARKER_TAG= body_99"));
+        assert!(!result
+            .bundle
+            .marker_bindings
+            .iter()
+            .any(|binding| binding.tag == "body_99"));
+    }
+
+    #[test]
     fn object_wall_must_be_consumed_by_case_config() {
         let error = build_voxel_generated_su2_case(
-            &case(false),
+            &case(&[]),
             domain(),
             &center_owned_voxels(),
             &[42],
@@ -227,7 +253,7 @@ mod tests {
         let mut bindings = domain_bindings();
         bindings[2].role = BoundaryRole::FarField;
         let error = build_voxel_generated_su2_case(
-            &case(true),
+            &case(&["body_42"]),
             domain(),
             &center_owned_voxels(),
             &[42],
