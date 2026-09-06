@@ -34,6 +34,42 @@ pub struct Su2HistoryQuality {
     pub all_residuals_finite: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Su2WorldAxisDiagnostics {
+    /// Aggregate force coefficients in SU2/world XYZ coordinates over MARKER_MONITORING.
+    pub force_coefficient_xyz: [f64; 3],
+    /// Aggregate moment coefficients about the configured reference origin in SU2/world XYZ coordinates.
+    pub moment_coefficient_xyz: [f64; 3],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Su2DiagnosticError {
+    MissingFields(Vec<String>),
+    NonFiniteField(String),
+    AmbiguousField(String),
+}
+
+impl Display for Su2DiagnosticError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingFields(fields) => write!(
+                f,
+                "SU2 history is missing aggregate world-axis diagnostic fields: {}",
+                fields.join(", ")
+            ),
+            Self::NonFiniteField(field) => {
+                write!(f, "SU2 history diagnostic field {field} is non-finite")
+            }
+            Self::AmbiguousField(field) => write!(
+                f,
+                "SU2 history contains multiple aggregate diagnostic fields matching {field}"
+            ),
+        }
+    }
+}
+
+impl Error for Su2DiagnosticError {}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Su2HistoryError {
     Empty,
@@ -160,6 +196,42 @@ pub fn evaluate_su2_history_quality(
         residual_count: summary.residuals.len(),
         all_residuals_finite,
     }
+}
+
+/// Extracts only the aggregate world-axis coefficient fields from the final usable history row.
+/// Per-surface columns such as `CFx(body_42)` intentionally do not match these exact normalized
+/// names, so multi-body attribution remains fail-closed until its history semantics are proven.
+pub fn extract_su2_world_axis_diagnostics(
+    summary: &Su2HistorySummary,
+) -> Result<Su2WorldAxisDiagnostics, Su2DiagnosticError> {
+    let expected = ["CFX", "CFY", "CFZ", "CMX", "CMY", "CMZ"];
+    let mut values = [0.0_f64; 6];
+    let mut missing = Vec::new();
+
+    for (slot, field) in expected.iter().enumerate() {
+        let matches = summary
+            .last_numeric_values
+            .iter()
+            .filter(|value| normalize_header(&value.name) == *field)
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [] => missing.push((*field).to_owned()),
+            [value] if !value.value.is_finite() => {
+                return Err(Su2DiagnosticError::NonFiniteField((*field).to_owned()));
+            }
+            [value] => values[slot] = value.value,
+            _ => return Err(Su2DiagnosticError::AmbiguousField((*field).to_owned())),
+        }
+    }
+
+    if !missing.is_empty() {
+        return Err(Su2DiagnosticError::MissingFields(missing));
+    }
+
+    Ok(Su2WorldAxisDiagnostics {
+        force_coefficient_xyz: [values[0], values[1], values[2]],
+        moment_coefficient_xyz: [values[3], values[4], values[5]],
+    })
 }
 
 fn find_iteration_column(headers: &[String]) -> Option<usize> {
@@ -305,6 +377,48 @@ mod tests {
         assert_eq!(quality.status, Su2HistoryGateStatus::Incomplete);
         assert_eq!(quality.residual_count, 0);
         assert!(!quality.all_residuals_finite);
+    }
+
+    #[test]
+    fn aggregate_world_axis_diagnostics_are_extracted_exactly() {
+        let summary = summarize_su2_history_csv(
+            "\"Inner_Iter\",\"rms[P]\",\"CFx\",\"CFy\",\"CFz\",\"CMx\",\"CMy\",\"CMz\"\n0,-6.5,1.0,2.0,3.0,4.0,5.0,6.0\n",
+        )
+        .unwrap();
+        let diagnostics = extract_su2_world_axis_diagnostics(&summary).unwrap();
+        assert_eq!(diagnostics.force_coefficient_xyz, [1.0, 2.0, 3.0]);
+        assert_eq!(diagnostics.moment_coefficient_xyz, [4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn per_surface_columns_do_not_satisfy_aggregate_diagnostics() {
+        let summary = summarize_su2_history_csv(
+            "\"Inner_Iter\",\"CFx(body_42)\",\"CFy(body_42)\",\"CFz(body_42)\",\"CMx(body_42)\",\"CMy(body_42)\",\"CMz(body_42)\"\n0,1,2,3,4,5,6\n",
+        )
+        .unwrap();
+        assert_eq!(
+            extract_su2_world_axis_diagnostics(&summary),
+            Err(Su2DiagnosticError::MissingFields(vec![
+                "CFX".into(),
+                "CFY".into(),
+                "CFZ".into(),
+                "CMX".into(),
+                "CMY".into(),
+                "CMZ".into(),
+            ]))
+        );
+    }
+
+    #[test]
+    fn nonfinite_world_axis_diagnostic_fails_closed() {
+        let summary = summarize_su2_history_csv(
+            "\"Inner_Iter\",\"CFx\",\"CFy\",\"CFz\",\"CMx\",\"CMy\",\"CMz\"\n0,1,2,NaN,4,5,6\n",
+        )
+        .unwrap();
+        assert_eq!(
+            extract_su2_world_axis_diagnostics(&summary),
+            Err(Su2DiagnosticError::NonFiniteField("CFZ".into()))
+        );
     }
 
     #[test]
