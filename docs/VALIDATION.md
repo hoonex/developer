@@ -26,7 +26,7 @@ The interactive LBM preview is not engineering-validated merely because its CPU 
 | Lid-driven cavity, Re=100 | CPU reference | Ghia et al. centerline data + steady-state / mass / quasi-2D checks | GREEN |
 | CPU ↔ GPU periodic parity | CPU + GPU | 4×4×4, solid + forcing, 3 steps, all sampled velocity/speed values | GREEN |
 | CPU ↔ GPU no-slip face parity | CPU + GPU | y-min/y-max face-mask bounce-back + solid + forcing | GREEN |
-| CPU ↔ GPU moving-wall parity | CPU + GPU | Couette / moving-wall correction semantics | PLANNED |
+| CPU ↔ GPU moving-wall parity | CPU + GPU | mixed stationary/moving faces + corner precedence + solid + forcing | GREEN |
 | Cylinder flow | Native preview | shedding regime, Strouhal/drag where regime and grid permit | PLANNED |
 | Grid convergence | Native preview | monitored observables vs resolution | PLANNED |
 | Upstream SU2 regression/tutorial | SU2 adapter | AeroForge translation reproduces upstream case | PLANNED |
@@ -44,7 +44,7 @@ with `c_s^2 = 1/3`. The implementation stores the corrected population in the op
 
 At a lid-driven-cavity top corner, a diagonal link can cross both a stationary side wall and the moving lid. AeroForge gives the moving lid precedence for that mixed link so that the two opposing moving-wall diagonal corrections remain paired. A regression test protects this convention; the previous stationary-first convention was rejected because it introduced artificial global mass drift.
 
-The exact WGSL used by the app currently mirrors periodic and stationary no-slip boundaries with a six-face no-slip bitmask in `params.control.y`. Bit values are x-min=1, x-max=2, y-min=4, y-max=8, z-min=16 and z-max=32; unset faces retain periodic wrapping. GPU moving-wall semantics are the next parity milestone and are not yet claimed.
+The exact WGSL used by the app mirrors these semantics without adding storage buffers. `params.control.y` stores the stationary no-slip face bitmask and `params.control.z` stores the moving-wall face bitmask. Bit values are x-min=1, x-max=2, y-min=4, y-max=8, z-min=16 and z-max=32. Six aligned `vec4<f32>` uniform entries carry the per-face wall velocities. Unset faces retain periodic wrapping, and a moving face takes precedence over a stationary face at a mixed corner just as in the CPU reference.
 
 Velocity-inlet, pressure-outlet and open/convective faces are intentionally **not** represented by placeholder formulas yet; they remain numerical milestones requiring their own validation.
 
@@ -118,7 +118,7 @@ Acceptance thresholds:
 - global mean-density error `< 3e-3`;
 - spanwise velocity `< 1e-6` lattice units.
 
-GitHub Actions run #65 passed the original 35,000-step version together with all unit, Couette, Poiseuille, Windows app, and GPU-smoke checks. Numerical convergence checks showed the centerline field was already effectively steady by 8,000–10,000 steps, so the current regression uses 8,000 steps plus a 2,000-step steady-state window without relaxing any accuracy threshold. GitHub Actions run #67 passes the optimized 10,000-step core regression.
+GitHub Actions run #65 passed the original 35,000-step version together with all unit, Couette, Poiseuille, Windows app, and GPU-smoke checks. Numerical convergence checks showed the centerline field was already effectively steady by 8,000–10,000 steps, so the current regression uses 8,000 steps plus a 2,000-step steady-state window without relaxing any accuracy threshold. GitHub Actions run #67 completed the optimized 10,000-step core regression, Windows app check, and GPU smoke successfully.
 
 This is a strong canonical laminar-flow check, but it still does not make the interactive preview an engineering-validated external-aerodynamics solver.
 
@@ -130,15 +130,18 @@ The dedicated `aeroforge-gpu-smoke` executable:
 - creates a headless wgpu compute device;
 - verifies the adapter exposes at least five storage buffers per compute stage, matching the LBM bind layout;
 - initializes the same D3Q19 rest state as `CpuLbm`;
-- applies the same voxel solid mask and target-velocity forcing field;
-- advances both implementations three steps;
+- advances controlled CPU and GPU cases from identical state;
 - reads all 64 cells from the 4×4×4 GPU case;
 - compares x/y/z velocity and speed against the CPU snapshot;
 - fails when the maximum absolute error exceeds the declared tolerance.
 
 GitHub Actions run #27 executed the periodic baseline on the DX12 `Microsoft Basic Render Driver` software adapter and reported `AEROFORGE_WGSL=PASS` and `AEROFORGE_GPU_PARITY=PASS steps=3 cells=64 max_error=0.00000000`.
 
-GitHub Actions run #41 exercised the y-min/y-max no-slip mask (`mask=12`) together with an internal voxel solid and target-velocity forcing. It reported `AEROFORGE_GPU_BOUNDARY_PARITY=PASS mask=12 steps=3 cells=64 max_error=0.00000000`. This proves controlled implementation parity for periodic and stationary no-slip outer-domain streaming across the CPU reference and actual wgpu compute path. GPU moving-wall correction is not yet implemented or claimed.
+GitHub Actions run #41 exercised the y-min/y-max no-slip mask (`mask=12`) together with an internal voxel solid and target-velocity forcing. It reported `AEROFORGE_GPU_BOUNDARY_PARITY=PASS mask=12 steps=3 cells=64 max_error=0.00000000`.
+
+GitHub Actions run #75 exercised mixed stationary/moving outer faces with x-min/x-max/y-min stationary (`stationary_mask=7`) and y-max moving (`moving_mask=8`), including the moving-lid corner-precedence path, an internal voxel solid, and target-velocity forcing. The exact app WGSL parsed successfully and the actual wgpu compute path reported `AEROFORGE_GPU_MOVING_WALL_PARITY=PASS ... steps=3 cells=64 max_error=0.00000000`. The same run completed the numerical core and Windows app checks successfully.
+
+These tests establish controlled implementation parity for the implemented periodic, stationary no-slip, and moving-wall streaming semantics. They do not measure hardware-GPU performance or establish aerodynamic validation.
 
 ## Claims policy
 
