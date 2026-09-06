@@ -5,3 +5,4 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+aeroforge-volume-core = { path = "../volume_core" }
