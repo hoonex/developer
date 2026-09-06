@@ -63,6 +63,8 @@ pub enum PreviewBoundaryPreset {
     Periodic,
     ChannelYNoSlip,
     WindTunnelX,
+    /// x velocity inlet / pressure outlet with prescribed free-stream NEQ faces on y.
+    ExternalFlowX,
 }
 
 #[derive(Clone, Debug)]
@@ -73,7 +75,7 @@ pub struct SimulationSettings {
     pub kinematic_viscosity: f32,
     pub mode: SolverMode,
     pub preview_boundary: PreviewBoundaryPreset,
-    /// Physical inlet speed used by the validated x-min velocity / x-max pressure preview preset.
+    /// Physical inlet/free-stream speed used by x-directed open preview presets.
     pub preview_inlet_speed_mps: f32,
 }
 
