@@ -45,7 +45,7 @@ pub fn draw_surface_import_ui(
                 "glTF/GLB imports the selected static scene. Skins and morph targets are rejected; external buffers must be local relative files inside the document directory.",
             );
             ui.small(
-                "Imported surfaces currently feed the accurate staircase-SU2 path only; interactive preview solid rasterization remains primitive-only.",
+                "Imported surfaces feed the same audited cell-center staircase ownership used by native preview and generated SU2 preparation. Imported preview rasterization has an explicit cell budget; this remains voxel/staircase geometry, not body-fitted meshing.",
             );
 
             if ui.button("Import surface").clicked() {
