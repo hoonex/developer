@@ -28,7 +28,7 @@ The native LBM backend remains an interactive preview solver. GREEN numerical re
 | Periodic-y D8/D10/D12 sensitivity | Native preview | GREEN evidence |
 | Free-stream-y D8/D10/D12 sensitivity | Native preview | GREEN evidence |
 | Fixed-D8 H/D=10/15/20 transverse sensitivity | Native preview | GREEN evidence |
-| Fixed-D8 X/D=12/24 streamwise sensitivity | Native preview | GREEN evidence |
+| Fixed-D8 streamwise extent/split sensitivity | Native preview | GREEN evidence |
 | Formal grid convergence | Native preview | **NOT ESTABLISHED** |
 | Formal domain convergence | Native preview | **NOT ESTABLISHED** |
 | Trusted external-cylinder reference agreement | Native preview | PARTIAL / NOT VALIDATED |
@@ -97,8 +97,6 @@ Runs #180 and #190 isolate y-domain distance at fixed D8. Re, U, tau, x/z extent
 | H15D | `96×120×2` | 15 | 0.152365 | 1.9185 | 0.006961 | 0.009138 | 0.089383 |
 | H20D | `96×160×2` | 20 | 0.152006 | 1.9148 | 0.006833 | 0.009113 | 0.089316 |
 
-Observed changes:
-
 | Interval | ΔSt | ΔCd* | Δ lift amp | Δ max rho error | Δ max speed |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | H/D 10→15 | -1.852% | -1.306% | -6.913% | -1.835% | -0.674% |
@@ -108,28 +106,47 @@ The St and Cd* changes shrink by about `7.9×` and `6.7×` respectively between 
 
 ## Fixed-grid streamwise domain sensitivity
 
-Run #202 changes the streamwise placement while keeping D8, H/D=20, Re, U, tau, voxel geometry, startup perturbation, settle/sample duration and diagnostics fixed.
+Run #202 changes streamwise placement while keeping D8, H/D=20, Re, U, tau, voxel geometry, startup perturbation, settle/sample duration and diagnostics fixed.
 
 | Case | Grid | Inlet distance | Outlet distance | St | Mean Cd* | Lift amp | Max rho error | Max speed |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | X12D | `96×160×2` | `3D` | `9D` | 0.152006 | 1.9148 | 0.006833 | 0.009113 | 0.089316 |
 | X24D | `192×160×2` | `6D` | `18D` | 0.133263 | 1.6216 | 0.004809 | 0.007719 | 0.081242 |
 
-Observed change X/D=12→24:
+X/D=12→24 changes St by `-12.330%` and Cd* by `-15.315%`. This is far larger than the residual H/D=15→20 transverse effect, so streamwise placement is a major contamination source.
 
-- `St`: `-12.330%`;
-- `Cd*`: `-15.315%`;
-- lift amplitude: `-29.623%`;
-- max density error: `-15.294%`;
-- max speed: `-9.040%`.
+Against Williamson–Brown `St_ref=0.137202`, X12D is `+10.79%` high while X24D is `-2.87%` low. The expansion removes most of the earlier Strouhal bias. `Cd*=1.6216` remains roughly `+10.3%` above a Tritton-oriented `Cd≈1.47` and `+14.5%` above a Henderson-oriented `Cd≈1.416`.
 
-This effect is far larger than the residual H/D=15→20 transverse-domain effect. Streamwise boundary placement is therefore a major contamination source in the previous D8 external-cylinder setup.
+## Split inlet/outlet sensitivity
 
-Against the Williamson–Brown two-term Re=60 relation `St_ref=0.137202`, the X12D result is `+10.79%` high while the X24D result is `-2.87%` low. The streamwise expansion therefore removes most of the previous Strouhal bias.
+Run #213 isolates the two streamwise clearances at the same D8/H20/Re60 conditions. Routine core, Windows app check, GPU parity, and the one-shot split evidence all completed GREEN.
 
-For drag, `Cd*=1.6216` is still about `+10.3%` above a Tritton-oriented `Cd≈1.47` value and `+14.5%` above a Henderson-oriented `Cd≈1.416` value. Because both inlet and outlet distances changed together, run #202 does not identify which x boundary dominates the correction. The remaining drag gap also leaves voxel geometry, BGK relaxation and force normalization as active error sources.
+| Case | Grid | Inlet distance | Outlet distance | St | Mean Cd* | Lift amp | Max rho error | Max speed |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline | `96×160×2` | `3D` | `9D` | 0.152006 | 1.9148 | 0.006833 | 0.009113 | 0.089316 |
+| upstream-only | `120×160×2` | `6D` | `9D` | 0.133638 | 1.6209 | 0.005409 | 0.007688 | 0.081518 |
+| downstream-only | `168×160×2` | `3D` | `18D` | 0.153019 | 1.9135 | 0.007825 | 0.009248 | 0.089438 |
+| both-expanded | `192×160×2` | `6D` | `18D` | 0.133263 | 1.6216 | 0.004809 | 0.007719 | 0.081242 |
+
+Key deltas:
+
+- baseline → upstream-only: `St -12.084%`, `Cd* -15.349%`;
+- baseline → downstream-only: `St +0.666%`, `Cd* -0.068%`;
+- upstream-only → both-expanded: `St -0.281%`, `Cd* +0.043%`.
+
+For this controlled case, **inlet proximity is the dominant streamwise contamination source**. Moving the inlet from `3D` to `6D` reproduces essentially the entire X24D correction while leaving the outlet at `9D`. Moving the outlet from `9D` to `18D` alone barely changes drag and does not correct the Strouhal bias.
+
+This supports using the `6D upstream / 9D downstream` case as the cheaper best-supported D8 placement for the next resolution study. It is an evidence-derived result for this Re60 cylinder setup, **not** a universal clearance rule for arbitrary geometry or Reynolds number.
+
+Against `St_ref=0.137202`, the upstream-only case is `-2.60%` low. Its `Cd*=1.6209` remains about `+10.27%` vs `1.47` and `+14.47%` vs `1.416`, so the remaining force discrepancy cannot be attributed to short outlet distance.
 
 Detailed reference provenance is in `docs/CYLINDER_REFERENCE_COMPARISON.md`.
+
+## Momentum-exchange force status
+
+`solid_force_lattice()` sums the fluid-on-solid bounce-back link reaction `Σ 2 f_i* c_i`; outer-domain wall reactions are excluded. This is structurally a standard link momentum-exchange diagnostic, but the current coefficient normalization still uses nominal geometry dimensions.
+
+For the D8 binary cell-center cylinder mask, the 2D solid cross-section contains 52 cells, giving an area-equivalent diameter of about `8.14`, only ~`1.7%` above nominal `D=8`. That simple area correction is too small to explain the remaining `Cd*` excess by itself. Effective hydrodynamic wall location, coarse voxel shape, BGK relaxation and force normalization remain open error sources.
 
 ## Accurate SU2 backend status
 
@@ -142,14 +159,14 @@ Detailed reference provenance is in `docs/CYLINDER_REFERENCE_COMPARISON.md`.
 - `FarField` must be described as prescribed free-stream NEQ, not generic non-reflecting.
 - Neither cylinder grid sequence is formal grid convergence.
 - H/D=10/15/20 shows a rapidly shrinking transverse-distance effect, not formal domain convergence.
-- X/D=12→24 shows a large streamwise-placement effect; it does not isolate inlet vs outlet influence.
+- Run #213 shows inlet proximity dominates the tested streamwise correction; this does not create a universal 6D inlet-clearance rule.
 - Momentum-exchange Cd/lift remain diagnostics until grid/domain/reference/force evidence improves.
 - BGK physical-scaling warnings remain authoritative even when regressions are GREEN.
 - Accurate SU2 results must retain solver version, mesh/config provenance, convergence history, geometry revision and source-translation decisions.
 
 ## Next validation milestones
 
-1. Split the X24D correction into inlet-distance and outlet-distance sensitivity at fixed D8/H20.
-2. Re-run the best-supported streamwise placement at finer voxel resolution before tightening any cylinder acceptance band.
-3. Extend momentum exchange to per-object force provenance and examine effective hydrodynamic diameter / force normalization.
+1. Run D8→D10 resolution sensitivity using the best-supported `6D upstream / 9D downstream`, H/D=20 placement.
+2. If D10 is coherent, decide whether a D12 point is justified before making any grid-convergence claim.
+3. Extend momentum exchange to per-object force provenance and effective-diameter/force-normalization diagnostics.
 4. Run an upstream SU2 known-case cross-validation, followed by an AeroForge-generated-mesh case.
