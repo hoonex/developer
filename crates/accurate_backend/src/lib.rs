@@ -2,6 +2,7 @@ mod generated_case;
 mod scene_provenance;
 mod su2;
 mod su2_mesh;
+mod voxel_case;
 mod voxel_mesh;
 
 pub use generated_case::{
@@ -18,6 +19,9 @@ pub use su2::{
 pub use su2_mesh::{
     render_su2_volume_mesh, validate_case_marker_provenance, BoundaryRole, BoundarySource,
     DomainAxis, DomainSide, Su2MarkerBinding, Su2MarkerMap, Su2MeshError, Su2MeshExport,
+};
+pub use voxel_case::{
+    build_voxel_generated_su2_case, GeneratedVoxelSu2Case, GeneratedVoxelSu2CaseError,
 };
 pub use voxel_mesh::{
     tetrahedralize_voxel_fluid_domain, VoxelFluidDomainSpec, VoxelMeshError,
