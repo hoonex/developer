@@ -8,10 +8,13 @@ const Q: usize = 19;
 const STEPS: usize = 3;
 const TAU: f32 = 0.8;
 const FORCED_VELOCITY: [f32; 3] = [0.04, 0.01, 0.0];
+const LID_VELOCITY: [f32; 3] = [0.03, 0.0, 0.0];
 const MAX_ALLOWED_ERROR: f32 = 2.0e-4;
 const REQUIRED_STORAGE_BUFFERS_PER_STAGE: u32 = 5;
-// WGSL face bits: x-/x+/y-/y+/z-/z+. Exercise y-min + y-max no-slip walls.
-const BOUNDARY_MASK: u32 = 4 | 8;
+// WGSL face bits: x-/x+/y-/y+/z-/z+.
+// Exercise a cavity-like boundary: stationary x-/x+/y- and moving y+.
+const STATIONARY_BOUNDARY_MASK: u32 = 1 | 2 | 4;
+const MOVING_BOUNDARY_MASK: u32 = 8;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -19,6 +22,12 @@ struct Params {
     dims_stride: [u32; 4],
     control: [u32; 4],
     physics: [f32; 4],
+    wall_x_min: [f32; 4],
+    wall_x_max: [f32; 4],
+    wall_y_min: [f32; 4],
+    wall_y_max: [f32; 4],
+    wall_z_min: [f32; 4],
+    wall_z_max: [f32; 4],
 }
 
 fn main() {
@@ -57,21 +66,21 @@ fn main() {
     let mut required_limits = wgpu::Limits::downlevel_defaults();
     required_limits.max_storage_buffers_per_shader_stage = REQUIRED_STORAGE_BUFFERS_PER_STAGE;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("AeroForge GPU parity smoke"),
+        label: Some("AeroForge GPU moving-wall parity smoke"),
         required_features: wgpu::Features::empty(),
         required_limits,
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
         memory_hints: wgpu::MemoryHints::MemoryUsage,
         trace: wgpu::Trace::Off,
     }))
-    .expect("failed to create wgpu device for AeroForge parity smoke");
+    .expect("failed to create wgpu device for AeroForge moving-wall parity smoke");
 
     let cells = DIMS.iter().product::<usize>();
     let state_bytes = (cells * Q * std::mem::size_of::<f32>()) as u64;
     let sample_bytes = (cells * std::mem::size_of::<[f32; 4]>()) as u64;
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("AeroForge LBM parity shader"),
+        label: Some("AeroForge LBM moving-wall parity shader"),
         source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader_source)),
     });
 
@@ -133,8 +142,19 @@ fn main() {
 
     let params = Params {
         dims_stride: [DIMS[0] as u32, DIMS[1] as u32, DIMS[2] as u32, 1],
-        control: [cells as u32, BOUNDARY_MASK, 0, 0],
+        control: [
+            cells as u32,
+            STATIONARY_BOUNDARY_MASK,
+            MOVING_BOUNDARY_MASK,
+            0,
+        ],
         physics: [1.0 / TAU, 0.12, 0.0, 0.0],
+        wall_x_min: [0.0; 4],
+        wall_x_max: [0.0; 4],
+        wall_y_min: [0.0; 4],
+        wall_y_max: [LID_VELOCITY[0], LID_VELOCITY[1], LID_VELOCITY[2], 0.0],
+        wall_z_min: [0.0; 4],
+        wall_z_max: [0.0; 4],
     };
     let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("params"),
@@ -143,7 +163,7 @@ fn main() {
     });
 
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("AeroForge LBM parity layout"),
+        label: Some("AeroForge LBM moving-wall parity layout"),
         entries: &[
             storage_entry(0, false),
             storage_entry(1, false),
@@ -163,7 +183,7 @@ fn main() {
         ],
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("AeroForge LBM parity pipeline layout"),
+        label: Some("AeroForge LBM moving-wall parity pipeline layout"),
         bind_group_layouts: &[Some(&bind_group_layout)],
         immediate_size: 0,
     });
@@ -196,13 +216,13 @@ fn main() {
     );
 
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("AeroForge LBM parity encoder"),
+        label: Some("AeroForge LBM moving-wall parity encoder"),
     });
     let workgroups = (cells as u32).div_ceil(64);
     let mut ping_is_a = true;
     {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("AeroForge LBM parity pass"),
+            label: Some("AeroForge LBM moving-wall parity pass"),
             timestamp_writes: None,
         });
         pass.set_pipeline(&init_pipeline);
@@ -227,7 +247,7 @@ fn main() {
     slice.map_async(wgpu::MapMode::Read, |_| {});
     device
         .poll(wgpu::PollType::wait_indefinitely())
-        .expect("failed while waiting for GPU parity readback");
+        .expect("failed while waiting for GPU moving-wall parity readback");
     let mapped = slice.get_mapped_range();
     let gpu = decode_samples(&mapped);
     assert_eq!(gpu.len(), cells, "GPU parity sample count mismatch");
@@ -250,10 +270,10 @@ fn main() {
 
     assert!(
         max_error <= MAX_ALLOWED_ERROR,
-        "AEROFORGE_GPU_PARITY=FAIL max_error={max_error:.8} limit={MAX_ALLOWED_ERROR:.8}"
+        "AEROFORGE_GPU_MOVING_WALL_PARITY=FAIL max_error={max_error:.8} limit={MAX_ALLOWED_ERROR:.8}"
     );
     println!(
-        "AEROFORGE_GPU_BOUNDARY_PARITY=PASS mask={BOUNDARY_MASK} steps={STEPS} cells={cells} max_error={max_error:.8}"
+        "AEROFORGE_GPU_MOVING_WALL_PARITY=PASS stationary_mask={STATIONARY_BOUNDARY_MASK} moving_mask={MOVING_BOUNDARY_MASK} steps={STEPS} cells={cells} max_error={max_error:.8}"
     );
 }
 
@@ -287,8 +307,8 @@ fn request_adapter(instance: &wgpu::Instance) -> wgpu::Adapter {
 fn cpu_reference() -> Vec<[f32; 3]> {
     let mut solver = CpuLbm::new(DIMS, TAU);
     solver
-        .set_boundary_policy(BoundaryPolicy::channel_y_no_slip())
-        .expect("GPU parity boundary policy must be valid");
+        .set_boundary_policy(BoundaryPolicy::lid_driven_cavity_xy(LID_VELOCITY))
+        .expect("GPU moving-wall parity boundary policy must be valid");
     let cells = DIMS.iter().product::<usize>();
     let mut solid = vec![false; cells];
     solid[index([2, 2, 2])] = true;
