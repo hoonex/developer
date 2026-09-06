@@ -5,12 +5,13 @@ use std::fmt::{Display, Formatter};
 use aeroforge_volume_core::VolumeMesh;
 
 use crate::generated_case::{
-    build_generated_su2_case_bundle, GeneratedSu2CaseBundle, GeneratedSu2CaseError,
+    build_generated_su2_case_bundle_with_reference, GeneratedSu2CaseBundle,
+    GeneratedSu2CaseError,
 };
 use crate::scene_provenance::{
     build_active_scene_owner_marker_provenance, SceneOwnerProvenanceError,
 };
-use crate::su2::Su2Case;
+use crate::su2::{Su2Case, Su2CoefficientReference};
 use crate::su2_mesh::Su2MarkerBinding;
 use crate::voxel_mesh::{
     tetrahedralize_voxel_fluid_domain, VoxelFluidDomainSpec, VoxelMeshError,
@@ -74,6 +75,28 @@ pub fn build_voxel_generated_su2_case(
     owner_object_ids: &[u64],
     domain_bindings: Vec<Su2MarkerBinding>,
 ) -> Result<GeneratedVoxelSu2Case, GeneratedVoxelSu2CaseError> {
+    build_voxel_generated_su2_case_with_reference(
+        case,
+        domain,
+        solid_owner,
+        owner_object_ids,
+        domain_bindings,
+        None,
+    )
+}
+
+/// Adds an explicit SU2 force/moment coefficient normalization reference while preserving the same
+/// voxel geometry and stable scene-object marker provenance. The reference is deliberately not
+/// inferred from voxelized geometry because multi-body/reference-area semantics are user/model
+/// decisions rather than a safe automatic consequence of the staircase mesh.
+pub fn build_voxel_generated_su2_case_with_reference(
+    case: &Su2Case,
+    domain: VoxelFluidDomainSpec,
+    solid_owner: &[u32],
+    owner_object_ids: &[u64],
+    domain_bindings: Vec<Su2MarkerBinding>,
+    coefficient_reference: Option<&Su2CoefficientReference>,
+) -> Result<GeneratedVoxelSu2Case, GeneratedVoxelSu2CaseError> {
     let active_owner_labels = solid_owner
         .iter()
         .copied()
@@ -89,8 +112,12 @@ pub fn build_voxel_generated_su2_case(
         solid_owner,
         &provenance.owner_markers,
     )?;
-    let bundle =
-        build_generated_su2_case_bundle(case, &volume_mesh, &provenance.marker_map)?;
+    let bundle = build_generated_su2_case_bundle_with_reference(
+        case,
+        &volume_mesh,
+        &provenance.marker_map,
+        coefficient_reference,
+    )?;
 
     Ok(GeneratedVoxelSu2Case {
         volume_mesh,
@@ -205,6 +232,33 @@ mod tests {
             BoundarySource::SceneObject {
                 scene_object_id: 42,
             }
+        );
+    }
+
+    #[test]
+    fn explicit_reference_reaches_voxel_generated_config() {
+        let reference = Su2CoefficientReference {
+            area_m2: 3.0,
+            length_m: 2.0,
+        };
+        let result = build_voxel_generated_su2_case_with_reference(
+            &case(&["body_42"]),
+            domain(),
+            &center_owned_voxels(),
+            &[42],
+            domain_bindings(),
+            Some(&reference),
+        )
+        .unwrap();
+        assert!(result.bundle.config_text.contains("REF_AREA= 3.000000000000e0"));
+        assert!(result.bundle.config_text.contains("REF_LENGTH= 2.000000000000e0"));
+        assert_eq!(
+            result
+                .bundle
+                .config_text
+                .lines()
+                .find(|line| line.starts_with("MARKER_MONITORING=")),
+            Some("MARKER_MONITORING= ( body_42 )")
         );
     }
 
