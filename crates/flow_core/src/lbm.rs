@@ -594,36 +594,82 @@ impl CpuLbm {
         let boundary_coordinate = if lower { 0 } else { self.dims[axis] - 1 };
         let fluid_coordinate = if lower { 1 } else { self.dims[axis] - 2 };
 
-        for z in 0..nz {
-            for y in 0..ny {
-                for x in 0..nx {
-                    let mut boundary_p = [x, y, z];
-                    if boundary_p[axis] != boundary_coordinate {
-                        continue;
-                    }
-                    let mut fluid_p = boundary_p;
-                    fluid_p[axis] = fluid_coordinate;
-                    let boundary_i = self.index(boundary_p);
-                    let fluid_i = self.index(fluid_p);
-                    if self.solid[boundary_i] || self.solid[fluid_i] {
-                        continue;
-                    }
-
-                    let fluid_distribution = self.next[fluid_i];
-                    let (fluid_density, fluid_velocity) = macroscopic(&fluid_distribution);
-                    let fluid_equilibrium = equilibrium(fluid_density, fluid_velocity);
-                    let (boundary_density, boundary_velocity) = match kind {
-                        FaceBoundary::VelocityInlet => (fluid_density, prescribed_velocity),
-                        FaceBoundary::PressureOutlet => (prescribed_density, fluid_velocity),
-                        _ => unreachable!("only open boundary types are reconstructed"),
-                    };
-                    let boundary_equilibrium = equilibrium(boundary_density, boundary_velocity);
-                    for q in 0..Q {
-                        self.next[boundary_i][q] = boundary_equilibrium[q]
-                            + (fluid_distribution[q] - fluid_equilibrium[q]);
+        match axis {
+            0 => {
+                for z in 0..nz {
+                    for y in 0..ny {
+                        self.reconstruct_open_cell(
+                            [boundary_coordinate, y, z],
+                            axis,
+                            fluid_coordinate,
+                            kind,
+                            prescribed_velocity,
+                            prescribed_density,
+                        );
                     }
                 }
             }
+            1 => {
+                for z in 0..nz {
+                    for x in 0..nx {
+                        self.reconstruct_open_cell(
+                            [x, boundary_coordinate, z],
+                            axis,
+                            fluid_coordinate,
+                            kind,
+                            prescribed_velocity,
+                            prescribed_density,
+                        );
+                    }
+                }
+            }
+            2 => {
+                for y in 0..ny {
+                    for x in 0..nx {
+                        self.reconstruct_open_cell(
+                            [x, y, boundary_coordinate],
+                            axis,
+                            fluid_coordinate,
+                            kind,
+                            prescribed_velocity,
+                            prescribed_density,
+                        );
+                    }
+                }
+            }
+            _ => unreachable!("boundary axis must be 0..3"),
+        }
+    }
+
+    fn reconstruct_open_cell(
+        &mut self,
+        boundary_p: [usize; 3],
+        axis: usize,
+        fluid_coordinate: usize,
+        kind: FaceBoundary,
+        prescribed_velocity: [f32; 3],
+        prescribed_density: f32,
+    ) {
+        let mut fluid_p = boundary_p;
+        fluid_p[axis] = fluid_coordinate;
+        let boundary_i = self.index(boundary_p);
+        let fluid_i = self.index(fluid_p);
+        if self.solid[boundary_i] || self.solid[fluid_i] {
+            return;
+        }
+
+        let fluid_distribution = self.next[fluid_i];
+        let (fluid_density, fluid_velocity) = macroscopic(&fluid_distribution);
+        let fluid_equilibrium = equilibrium(fluid_density, fluid_velocity);
+        let (boundary_density, boundary_velocity) = match kind {
+            FaceBoundary::VelocityInlet => (fluid_density, prescribed_velocity),
+            FaceBoundary::PressureOutlet => (prescribed_density, fluid_velocity),
+            _ => unreachable!("only open boundary types are reconstructed"),
+        };
+        let boundary_equilibrium = equilibrium(boundary_density, boundary_velocity);
+        for q in 0..Q {
+            self.next[boundary_i][q] = boundary_equilibrium[q]
+                + (fluid_distribution[q] - fluid_equilibrium[q]);
         }
     }
 
