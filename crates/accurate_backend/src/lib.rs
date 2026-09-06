@@ -1,4 +1,5 @@
 mod generated_case;
+mod history;
 mod prepared_case;
 mod primitive_voxel;
 mod scene_provenance;
@@ -9,6 +10,10 @@ mod voxel_mesh;
 
 pub use generated_case::{
     build_generated_su2_case_bundle, GeneratedSu2CaseBundle, GeneratedSu2CaseError,
+};
+pub use history::{
+    evaluate_su2_history_quality, summarize_su2_history_csv, Su2HistoryError,
+    Su2HistoryGateStatus, Su2HistoryQuality, Su2HistorySummary, Su2HistoryValue,
 };
 pub use prepared_case::{
     prepare_generated_su2_case_directory, run_prepared_generated_su2_case,
