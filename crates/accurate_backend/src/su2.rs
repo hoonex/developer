@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::env;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -28,7 +29,11 @@ pub struct Su2Case {
     pub flow_model: FlowModel,
     pub inlets: Vec<InletBoundary>,
     pub outlet_marker: String,
+    /// All physical no-slip/heat-flux wall markers in the generated case.
     pub wall_markers: Vec<String>,
+    /// Wall markers whose integrated loads SU2 should monitor. This must be a subset of
+    /// `wall_markers`; keeping it separate prevents tunnel walls from contaminating body loads.
+    pub monitoring_markers: Vec<String>,
     pub max_iterations: u32,
     /// SU2 residual target is expressed as log10 residual, commonly around -6.
     pub convergence_log10: f64,
@@ -40,6 +45,7 @@ pub enum Su2CaseError {
     InvalidMeshFilename,
     InvalidOutputBasename,
     InvalidMarker(String),
+    MonitoringMarkerNotWall(String),
     MissingInlet,
     NonPositiveDensity,
     NonPositiveViscosity,
@@ -53,16 +59,33 @@ pub enum Su2CaseError {
 impl fmt::Display for Su2CaseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidMeshFilename => write!(f, "mesh filename must be a safe non-empty relative filename"),
-            Self::InvalidOutputBasename => write!(f, "output basename contains unsupported characters"),
+            Self::InvalidMeshFilename => {
+                write!(f, "mesh filename must be a safe non-empty relative filename")
+            }
+            Self::InvalidOutputBasename => {
+                write!(f, "output basename contains unsupported characters")
+            }
             Self::InvalidMarker(marker) => write!(f, "invalid SU2 marker: {marker}"),
+            Self::MonitoringMarkerNotWall(marker) => write!(
+                f,
+                "monitoring marker `{marker}` must also be declared as a wall marker"
+            ),
             Self::MissingInlet => write!(f, "at least one inlet is required"),
             Self::NonPositiveDensity => write!(f, "density must be positive"),
             Self::NonPositiveViscosity => write!(f, "kinematic viscosity must be positive"),
-            Self::NonPositiveSpeed(marker) => write!(f, "inlet {marker} must have positive speed"),
-            Self::InvalidTemperature(marker) => write!(f, "inlet {marker} must have a positive finite temperature"),
-            Self::InvalidDirection(marker) => write!(f, "inlet {marker} has a zero/invalid direction"),
-            Self::InvalidTurbulence(marker) => write!(f, "inlet {marker} has invalid turbulence settings"),
+            Self::NonPositiveSpeed(marker) => {
+                write!(f, "inlet {marker} must have positive speed")
+            }
+            Self::InvalidTemperature(marker) => write!(
+                f,
+                "inlet {marker} must have a positive finite temperature"
+            ),
+            Self::InvalidDirection(marker) => {
+                write!(f, "inlet {marker} has a zero/invalid direction")
+            }
+            Self::InvalidTurbulence(marker) => {
+                write!(f, "inlet {marker} has invalid turbulence settings")
+            }
             Self::ZeroIterations => write!(f, "max_iterations must be > 0"),
         }
     }
@@ -72,7 +95,9 @@ impl std::error::Error for Su2CaseError {}
 
 impl Su2Case {
     pub fn validate(&self) -> Result<(), Su2CaseError> {
-        if !safe_filename(&self.mesh_filename) || !self.mesh_filename.to_ascii_lowercase().ends_with(".su2") {
+        if !safe_filename(&self.mesh_filename)
+            || !self.mesh_filename.to_ascii_lowercase().ends_with(".su2")
+        {
             return Err(Su2CaseError::InvalidMeshFilename);
         }
         if !safe_token(&self.output_basename) {
@@ -81,7 +106,9 @@ impl Su2Case {
         if self.density_kg_m3 <= 0.0 || !self.density_kg_m3.is_finite() {
             return Err(Su2CaseError::NonPositiveDensity);
         }
-        if self.kinematic_viscosity_m2_s <= 0.0 || !self.kinematic_viscosity_m2_s.is_finite() {
+        if self.kinematic_viscosity_m2_s <= 0.0
+            || !self.kinematic_viscosity_m2_s.is_finite()
+        {
             return Err(Su2CaseError::NonPositiveViscosity);
         }
         if self.max_iterations == 0 {
@@ -91,9 +118,19 @@ impl Su2Case {
             return Err(Su2CaseError::MissingInlet);
         }
         validate_marker(&self.outlet_marker)?;
+
+        let mut wall_markers = BTreeSet::new();
         for marker in &self.wall_markers {
             validate_marker(marker)?;
+            wall_markers.insert(marker.as_str());
         }
+        for marker in &self.monitoring_markers {
+            validate_marker(marker)?;
+            if !wall_markers.contains(marker.as_str()) {
+                return Err(Su2CaseError::MonitoringMarkerNotWall(marker.clone()));
+            }
+        }
+
         for inlet in &self.inlets {
             validate_marker(&inlet.marker)?;
             if inlet.speed_mps <= 0.0 || !inlet.speed_mps.is_finite() {
@@ -131,7 +168,11 @@ impl Su2Case {
         push_kv(&mut cfg, "INC_NONDIM", "DIMENSIONAL");
         push_kv(&mut cfg, "INC_DENSITY_MODEL", "CONSTANT");
         push_kv(&mut cfg, "FLUID_MODEL", "CONSTANT_DENSITY");
-        push_kv(&mut cfg, "INC_DENSITY_INIT", &fmt_float(self.density_kg_m3));
+        push_kv(
+            &mut cfg,
+            "INC_DENSITY_INIT",
+            &fmt_float(self.density_kg_m3),
+        );
         push_kv(&mut cfg, "VISCOSITY_MODEL", "CONSTANT_VISCOSITY");
         push_kv(&mut cfg, "MU_CONSTANT", &fmt_float(dynamic_viscosity));
         if self.flow_model == FlowModel::RansSst {
@@ -161,7 +202,11 @@ impl Su2Case {
             })
             .collect::<Vec<_>>()
             .join(", ");
-        push_kv(&mut cfg, "MARKER_INLET", &format!("( {inlet_values} )"));
+        push_kv(
+            &mut cfg,
+            "MARKER_INLET",
+            &format!("( {inlet_values} )"),
+        );
         push_kv(
             &mut cfg,
             "MARKER_OUTLET",
@@ -175,16 +220,22 @@ impl Su2Case {
                 .map(|marker| format!("{marker}, 0.0"))
                 .collect::<Vec<_>>()
                 .join(", ");
-            push_kv(&mut cfg, "MARKER_HEATFLUX", &format!("( {heatflux} )"));
             push_kv(
                 &mut cfg,
-                "MARKER_MONITORING",
-                &format!("( {} )", self.wall_markers.join(", ")),
+                "MARKER_HEATFLUX",
+                &format!("( {heatflux} )"),
             );
             push_kv(
                 &mut cfg,
                 "MARKER_PLOTTING",
                 &format!("( {} )", self.wall_markers.join(", ")),
+            );
+        }
+        if !self.monitoring_markers.is_empty() {
+            push_kv(
+                &mut cfg,
+                "MARKER_MONITORING",
+                &format!("( {} )", self.monitoring_markers.join(", ")),
             );
         }
 
@@ -223,9 +274,21 @@ impl Su2Case {
             "CONV_RESIDUAL_MINVAL",
             &fmt_float(self.convergence_log10),
         );
-        push_kv(&mut cfg, "RESTART_FILENAME", &format!("{}_restart", self.output_basename));
-        push_kv(&mut cfg, "VOLUME_FILENAME", &format!("{}_volume", self.output_basename));
-        push_kv(&mut cfg, "SURFACE_FILENAME", &format!("{}_surface", self.output_basename));
+        push_kv(
+            &mut cfg,
+            "RESTART_FILENAME",
+            &format!("{}_restart", self.output_basename),
+        );
+        push_kv(
+            &mut cfg,
+            "VOLUME_FILENAME",
+            &format!("{}_volume", self.output_basename),
+        );
+        push_kv(
+            &mut cfg,
+            "SURFACE_FILENAME",
+            &format!("{}_surface", self.output_basename),
+        );
         push_kv(
             &mut cfg,
             "OUTPUT_FILES",
@@ -322,7 +385,9 @@ fn safe_filename(value: &str) -> bool {
         && !value.contains('\\')
         && value != "."
         && value != ".."
-        && value.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
 }
 
 fn safe_token(value: &str) -> bool {
@@ -367,7 +432,8 @@ mod tests {
                 turbulent_to_laminar_viscosity_ratio: 10.0,
             }],
             outlet_marker: "outlet".into(),
-            wall_markers: vec!["body".into()],
+            wall_markers: vec!["tunnel_wall".into(), "body".into()],
+            monitoring_markers: vec!["body".into()],
             max_iterations: 1_000,
             convergence_log10: -6.0,
             output_basename: "aeroforge".into(),
@@ -384,7 +450,9 @@ mod tests {
         assert!(cfg.contains("MARKER_INLET= ( inlet_main"));
         assert!(cfg.contains("MARKER_INLET_TURBULENT= ( inlet_main"));
         assert!(cfg.contains("MARKER_OUTLET= ( outlet, 0.0 )"));
-        assert!(cfg.contains("MARKER_HEATFLUX= ( body, 0.0 )"));
+        assert!(cfg.contains("MARKER_HEATFLUX= ( tunnel_wall, 0.0, body, 0.0 )"));
+        assert!(cfg.contains("MARKER_MONITORING= ( body )"));
+        assert!(cfg.contains("MARKER_PLOTTING= ( tunnel_wall, body )"));
         assert!(cfg.contains("CONV_NUM_METHOD_FLOW= FDS"));
         assert!(cfg.contains("MUSCL_FLOW= YES"));
         assert!(cfg.contains("SLOPE_LIMITER_FLOW= NONE"));
@@ -392,23 +460,61 @@ mod tests {
     }
 
     #[test]
+    fn monitoring_is_separate_from_physical_wall_boundary_set() {
+        let cfg = sample_case().render_config().unwrap();
+        let monitoring = cfg
+            .lines()
+            .find(|line| line.starts_with("MARKER_MONITORING="))
+            .unwrap();
+        assert_eq!(monitoring, "MARKER_MONITORING= ( body )");
+        assert!(!monitoring.contains("tunnel_wall"));
+    }
+
+    #[test]
+    fn empty_monitoring_set_omits_marker_monitoring() {
+        let mut case = sample_case();
+        case.monitoring_markers.clear();
+        let cfg = case.render_config().unwrap();
+        assert!(!cfg.lines().any(|line| line.starts_with("MARKER_MONITORING=")));
+        assert!(cfg.contains("MARKER_HEATFLUX= ( tunnel_wall, 0.0, body, 0.0 )"));
+    }
+
+    #[test]
+    fn monitoring_marker_must_be_a_declared_wall() {
+        let mut case = sample_case();
+        case.monitoring_markers = vec!["ghost_body".into()];
+        assert_eq!(
+            case.validate(),
+            Err(Su2CaseError::MonitoringMarkerNotWall("ghost_body".into()))
+        );
+    }
+
+    #[test]
     fn direction_is_normalized_in_config() {
         let cfg = sample_case().render_config().unwrap();
-        assert!(cfg.contains("1.000000000000e0, 0.000000000000e0, 0.000000000000e0"));
+        assert!(cfg.contains(
+            "1.000000000000e0, 0.000000000000e0, 0.000000000000e0"
+        ));
     }
 
     #[test]
     fn unsafe_marker_is_rejected() {
         let mut case = sample_case();
         case.outlet_marker = "outlet, injected".into();
-        assert!(matches!(case.validate(), Err(Su2CaseError::InvalidMarker(_))));
+        assert!(matches!(
+            case.validate(),
+            Err(Su2CaseError::InvalidMarker(_))
+        ));
     }
 
     #[test]
     fn invalid_temperature_is_reported_separately() {
         let mut case = sample_case();
         case.inlets[0].temperature_k = -1.0;
-        assert!(matches!(case.validate(), Err(Su2CaseError::InvalidTemperature(_))));
+        assert!(matches!(
+            case.validate(),
+            Err(Su2CaseError::InvalidTemperature(_))
+        ));
     }
 
     #[test]
