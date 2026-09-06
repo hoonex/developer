@@ -8,6 +8,7 @@ mod accurate_prepare;
 mod accurate_scene_geometry;
 mod editor_toolbar;
 mod gpu_preview;
+mod imported_inspector;
 mod model;
 mod scene;
 mod simulation;
@@ -65,6 +66,7 @@ fn main() {
             (
                 ui::draw_ui,
                 surface_import::draw_surface_import_ui,
+                imported_inspector::draw_imported_inspector,
                 editor_toolbar::draw_transform_toolbar,
                 accurate_prepare::draw_accurate_prepare_ui,
                 accurate_execute::draw_accurate_execute_ui,
