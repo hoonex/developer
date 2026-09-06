@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
@@ -5,8 +6,8 @@ use aeroforge_volume_core::VolumeMesh;
 
 use crate::su2::{Su2Case, Su2CaseError};
 use crate::su2_mesh::{
-    render_su2_volume_mesh, validate_case_marker_provenance, Su2MarkerBinding, Su2MarkerMap,
-    Su2MeshError,
+    render_su2_volume_mesh, validate_case_marker_provenance, BoundaryRole, Su2MarkerBinding,
+    Su2MarkerMap, Su2MeshError,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -21,6 +22,8 @@ pub struct GeneratedSu2CaseBundle {
 pub enum GeneratedSu2CaseError {
     Case(Su2CaseError),
     Mesh(Su2MeshError),
+    UnreferencedBoundary { tag: String, role: BoundaryRole },
+    UnsupportedBoundaryRole { tag: String, role: BoundaryRole },
 }
 
 impl Display for GeneratedSu2CaseError {
@@ -28,6 +31,14 @@ impl Display for GeneratedSu2CaseError {
         match self {
             Self::Case(error) => write!(f, "SU2 case validation failed: {error}"),
             Self::Mesh(error) => write!(f, "SU2 mesh/provenance validation failed: {error}"),
+            Self::UnreferencedBoundary { tag, role } => write!(
+                f,
+                "mesh boundary `{tag}` ({role:?}) is not referenced by the SU2 case config"
+            ),
+            Self::UnsupportedBoundaryRole { tag, role } => write!(
+                f,
+                "mesh boundary `{tag}` uses {role:?}, which the generated SU2 case model does not yet render"
+            ),
         }
     }
 }
@@ -47,8 +58,12 @@ impl From<Su2MeshError> for GeneratedSu2CaseError {
 }
 
 /// Builds an in-memory accurate-case bundle only after the solver config and volume-mesh marker
-/// provenance have both passed their contracts. No filesystem writes or SU2 process execution are
-/// performed here; orchestration can persist these exact strings atomically later.
+/// provenance have both passed their contracts. Every exported mesh boundary must also be consumed
+/// by the current `Su2Case` model; unsupported semantic roles fail closed instead of being written
+/// to the mesh and silently omitted from the config.
+///
+/// No filesystem writes or SU2 process execution are performed here; orchestration can persist
+/// these exact strings atomically later.
 pub fn build_generated_su2_case_bundle(
     case: &Su2Case,
     mesh: &VolumeMesh,
@@ -57,6 +72,7 @@ pub fn build_generated_su2_case_bundle(
     case.validate()?;
     marker_map.validate_for_mesh(mesh)?;
     validate_case_marker_provenance(case, marker_map)?;
+    validate_complete_boundary_consumption(case, marker_map)?;
 
     let mesh_export = render_su2_volume_mesh(mesh, marker_map)?;
     let config_text = case.render_config()?;
@@ -69,6 +85,43 @@ pub fn build_generated_su2_case_bundle(
     })
 }
 
+fn validate_complete_boundary_consumption(
+    case: &Su2Case,
+    marker_map: &Su2MarkerMap,
+) -> Result<(), GeneratedSu2CaseError> {
+    let inlet_tags = case
+        .inlets
+        .iter()
+        .map(|inlet| inlet.marker.as_str())
+        .collect::<BTreeSet<_>>();
+    let wall_tags = case
+        .wall_markers
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+
+    for binding in &marker_map.bindings {
+        let consumed = match binding.role {
+            BoundaryRole::Inlet => inlet_tags.contains(binding.tag.as_str()),
+            BoundaryRole::Outlet => binding.tag == case.outlet_marker,
+            BoundaryRole::Wall => wall_tags.contains(binding.tag.as_str()),
+            BoundaryRole::FarField | BoundaryRole::Symmetry | BoundaryRole::Custom => {
+                return Err(GeneratedSu2CaseError::UnsupportedBoundaryRole {
+                    tag: binding.tag.clone(),
+                    role: binding.role,
+                });
+            }
+        };
+        if !consumed {
+            return Err(GeneratedSu2CaseError::UnreferencedBoundary {
+                tag: binding.tag.clone(),
+                role: binding.role,
+            });
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,7 +132,7 @@ mod tests {
 
     use crate::su2::{FlowModel, InletBoundary};
     use crate::su2_mesh::{
-        BoundaryRole, BoundarySource, DomainAxis, DomainSide, Su2MarkerBinding,
+        BoundarySource, DomainAxis, DomainSide, Su2MarkerBinding,
     };
 
     fn fixture() -> (VolumeMesh, Su2MarkerMap, Su2Case) {
@@ -163,5 +216,31 @@ mod tests {
                 Su2MeshError::CaseMarkerRoleMismatch { .. }
             ))
         ));
+    }
+
+    #[test]
+    fn bundle_rejects_unreferenced_wall_even_when_mesh_binding_is_valid() {
+        let (mesh, marker_map, mut case) = fixture();
+        case.wall_markers.retain(|tag| tag != "z_max");
+        assert_eq!(
+            build_generated_su2_case_bundle(&case, &mesh, &marker_map),
+            Err(GeneratedSu2CaseError::UnreferencedBoundary {
+                tag: "z_max".into(),
+                role: BoundaryRole::Wall,
+            })
+        );
+    }
+
+    #[test]
+    fn unsupported_far_field_is_explicitly_fail_closed() {
+        let (mesh, mut marker_map, case) = fixture();
+        marker_map.bindings[2].role = BoundaryRole::FarField;
+        assert_eq!(
+            build_generated_su2_case_bundle(&case, &mesh, &marker_map),
+            Err(GeneratedSu2CaseError::UnsupportedBoundaryRole {
+                tag: "y_min".into(),
+                role: BoundaryRole::FarField,
+            })
+        );
     }
 }
