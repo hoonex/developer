@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::env;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -31,9 +30,6 @@ pub struct Su2Case {
     pub outlet_marker: String,
     /// All physical no-slip/heat-flux wall markers in the generated case.
     pub wall_markers: Vec<String>,
-    /// Wall markers whose integrated loads SU2 should monitor. This must be a subset of
-    /// `wall_markers`; keeping it separate prevents tunnel walls from contaminating body loads.
-    pub monitoring_markers: Vec<String>,
     pub max_iterations: u32,
     /// SU2 residual target is expressed as log10 residual, commonly around -6.
     pub convergence_log10: f64,
@@ -118,19 +114,9 @@ impl Su2Case {
             return Err(Su2CaseError::MissingInlet);
         }
         validate_marker(&self.outlet_marker)?;
-
-        let mut wall_markers = BTreeSet::new();
         for marker in &self.wall_markers {
             validate_marker(marker)?;
-            wall_markers.insert(marker.as_str());
         }
-        for marker in &self.monitoring_markers {
-            validate_marker(marker)?;
-            if !wall_markers.contains(marker.as_str()) {
-                return Err(Su2CaseError::MonitoringMarkerNotWall(marker.clone()));
-            }
-        }
-
         for inlet in &self.inlets {
             validate_marker(&inlet.marker)?;
             if inlet.speed_mps <= 0.0 || !inlet.speed_mps.is_finite() {
@@ -156,7 +142,24 @@ impl Su2Case {
     }
 
     pub fn render_config(&self) -> Result<String, Su2CaseError> {
+        self.render_config_with_monitoring(&[])
+    }
+
+    /// Renders the same physical case while explicitly selecting the wall markers whose integrated
+    /// loads SU2 should monitor. Monitoring markers are required to be a subset of `wall_markers`
+    /// so post-processing cannot silently reference an undeclared or non-wall boundary.
+    pub fn render_config_with_monitoring(
+        &self,
+        monitoring_markers: &[String],
+    ) -> Result<String, Su2CaseError> {
         self.validate()?;
+        for marker in monitoring_markers {
+            validate_marker(marker)?;
+            if !self.wall_markers.iter().any(|wall| wall == marker) {
+                return Err(Su2CaseError::MonitoringMarkerNotWall(marker.clone()));
+            }
+        }
+
         let solver = match self.flow_model {
             FlowModel::Laminar => "INC_NAVIER_STOKES",
             FlowModel::RansSst => "INC_RANS",
@@ -231,11 +234,11 @@ impl Su2Case {
                 &format!("( {} )", self.wall_markers.join(", ")),
             );
         }
-        if !self.monitoring_markers.is_empty() {
+        if !monitoring_markers.is_empty() {
             push_kv(
                 &mut cfg,
                 "MARKER_MONITORING",
-                &format!("( {} )", self.monitoring_markers.join(", ")),
+                &format!("( {} )", monitoring_markers.join(", ")),
             );
         }
 
@@ -433,7 +436,6 @@ mod tests {
             }],
             outlet_marker: "outlet".into(),
             wall_markers: vec!["tunnel_wall".into(), "body".into()],
-            monitoring_markers: vec!["body".into()],
             max_iterations: 1_000,
             convergence_log10: -6.0,
             output_basename: "aeroforge".into(),
@@ -442,7 +444,10 @@ mod tests {
 
     #[test]
     fn rans_config_contains_dimensional_air_and_sst() {
-        let cfg = sample_case().render_config().unwrap();
+        let monitoring = vec!["body".to_owned()];
+        let cfg = sample_case()
+            .render_config_with_monitoring(&monitoring)
+            .unwrap();
         assert!(cfg.contains("SOLVER= INC_RANS"));
         assert!(cfg.contains("INC_NONDIM= DIMENSIONAL"));
         assert!(cfg.contains("KIND_TURB_MODEL= SST"));
@@ -461,30 +466,32 @@ mod tests {
 
     #[test]
     fn monitoring_is_separate_from_physical_wall_boundary_set() {
-        let cfg = sample_case().render_config().unwrap();
-        let monitoring = cfg
+        let monitoring = vec!["body".to_owned()];
+        let cfg = sample_case()
+            .render_config_with_monitoring(&monitoring)
+            .unwrap();
+        let line = cfg
             .lines()
             .find(|line| line.starts_with("MARKER_MONITORING="))
             .unwrap();
-        assert_eq!(monitoring, "MARKER_MONITORING= ( body )");
-        assert!(!monitoring.contains("tunnel_wall"));
+        assert_eq!(line, "MARKER_MONITORING= ( body )");
+        assert!(!line.contains("tunnel_wall"));
     }
 
     #[test]
-    fn empty_monitoring_set_omits_marker_monitoring() {
-        let mut case = sample_case();
-        case.monitoring_markers.clear();
-        let cfg = case.render_config().unwrap();
-        assert!(!cfg.lines().any(|line| line.starts_with("MARKER_MONITORING=")));
+    fn default_render_omits_marker_monitoring() {
+        let cfg = sample_case().render_config().unwrap();
+        assert!(!cfg
+            .lines()
+            .any(|line| line.starts_with("MARKER_MONITORING=")));
         assert!(cfg.contains("MARKER_HEATFLUX= ( tunnel_wall, 0.0, body, 0.0 )"));
     }
 
     #[test]
     fn monitoring_marker_must_be_a_declared_wall() {
-        let mut case = sample_case();
-        case.monitoring_markers = vec!["ghost_body".into()];
+        let monitoring = vec!["ghost_body".to_owned()];
         assert_eq!(
-            case.validate(),
+            sample_case().render_config_with_monitoring(&monitoring),
             Err(Su2CaseError::MonitoringMarkerNotWall("ghost_body".into()))
         );
     }
