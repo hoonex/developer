@@ -63,7 +63,7 @@ struct MacroState {
 
 struct BoundaryHit {
     bounce: bool,
-    discard: bool,
+    drop_stream: bool,
     wall_velocity: vec3<f32>,
 };
 
@@ -329,7 +329,7 @@ fn step(@builtin(global_invocation_id) gid: vec3<u32>) {
             state_out[base + OPPOSITE[q]] = post - correction;
             continue;
         }
-        if (hit.discard) {
+        if (hit.drop_stream) {
             continue;
         }
         let destination = vec3<u32>(
