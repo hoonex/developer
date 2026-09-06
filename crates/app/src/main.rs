@@ -5,6 +5,7 @@ use bevy_panorbit_camera::PanOrbitCameraPlugin;
 
 mod accurate_execute;
 mod accurate_prepare;
+mod accurate_scene_geometry;
 mod editor_toolbar;
 mod gpu_preview;
 mod model;
