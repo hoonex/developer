@@ -298,7 +298,7 @@ impl CpuLbm {
     pub fn set_solid_mask(&mut self, solid: &[bool]) {
         assert_eq!(solid.len(), self.solid.len(), "solid-mask cell count mismatch");
         self.solid = solid.to_vec();
-        let rest = equilibrium(1.0, [0.0; Q]);
+        let rest = equilibrium(1.0, [0.0; 3]);
         self.f.fill(rest);
         self.next.fill([0.0; Q]);
         self.density.fill(1.0);
