@@ -1,16 +1,21 @@
-use aeroforge_flow_core::{assess_physical_scaling, CpuLbm, PhysicalScalingReport, VelocityField};
+use aeroforge_flow_core::{
+    assess_physical_scaling, BoundaryPolicy, CpuLbm, PhysicalScalingReport, VelocityField,
+};
 use bevy::prelude::*;
 
 use crate::gpu_preview::{GpuPreviewRequest, GpuPreviewSnapshot, MAX_GPU_SAMPLES};
 use crate::model::{
-    rotation_from_degrees, PrimitiveKind, ProjectState, SceneObject, SolverMode, WindProfile,
-    WindSource, WindSourceKind,
+    rotation_from_degrees, PreviewBoundaryPreset, PrimitiveKind, ProjectState, SceneObject,
+    SolverMode, WindProfile, WindSource, WindSourceKind,
 };
 
 pub(crate) const PREVIEW_TAU: f32 = 0.8;
 pub(crate) const TARGET_MAX_LATTICE_SPEED: f32 = 0.075;
 pub(crate) const CPU_PREVIEW_CELL_LIMIT: u64 = 2_000_000;
 pub(crate) const GPU_PREVIEW_UPLOAD_CELL_LIMIT: u64 = 4_000_000;
+
+const GPU_BOUNDARY_Y_MIN: u32 = 4;
+const GPU_BOUNDARY_Y_MAX: u32 = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PreviewBackend {
@@ -219,10 +224,16 @@ fn rebuild_runtime(
     runtime.max_source_speed_mps = max_source_speed_mps;
     runtime.lattice_velocity_scale = lattice_velocity_scale;
 
+    let (boundary_policy, gpu_boundary_mask) =
+        preview_boundary_config(state.simulation.preview_boundary);
+
     match runtime.backend {
         PreviewBackend::CpuReference => {
             gpu_request.disable();
             let mut solver = CpuLbm::new(dims, PREVIEW_TAU);
+            solver
+                .set_boundary_policy(boundary_policy)
+                .expect("validated preview boundary preset must map to a valid CPU policy");
             solver.set_solid_mask(&solid_mask);
             runtime.forcing = Some(forcing);
             runtime.solver = Some(solver);
@@ -237,6 +248,7 @@ fn rebuild_runtime(
                 state.revision,
                 state.simulation.grid,
                 PREVIEW_TAU,
+                gpu_boundary_mask,
                 gpu_solid,
                 packed_forcing,
             );
@@ -247,6 +259,16 @@ fn rebuild_runtime(
             );
             runtime.status = PreviewStatus::GpuInitializing;
         }
+    }
+}
+
+fn preview_boundary_config(preset: PreviewBoundaryPreset) -> (BoundaryPolicy, u32) {
+    match preset {
+        PreviewBoundaryPreset::Periodic => (BoundaryPolicy::periodic(), 0),
+        PreviewBoundaryPreset::ChannelYNoSlip => (
+            BoundaryPolicy::channel_y_no_slip(),
+            GPU_BOUNDARY_Y_MIN | GPU_BOUNDARY_Y_MAX,
+        ),
     }
 }
 
@@ -404,7 +426,7 @@ fn index(dims: [usize; 3], [x, y, z]: [usize; 3]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{SimulationSettings, SolverMode};
+    use crate::model::{PreviewBoundaryPreset, SimulationSettings, SolverMode};
 
     #[test]
     fn rotated_box_contains_expected_point() {
@@ -442,6 +464,7 @@ mod tests {
                 air_density: 1.225,
                 kinematic_viscosity: 1.48e-5,
                 mode: SolverMode::InteractivePreview,
+                preview_boundary: PreviewBoundaryPreset::Periodic,
             },
             selection: crate::model::SelectedItem::None,
             running: false,
@@ -457,6 +480,18 @@ mod tests {
         let gpu_target = packed[index(dims, [4, 2, 4])];
         assert!(gpu_target[3] > 0.0);
         assert!((gpu_target[2] - target[2]).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn boundary_presets_map_to_matching_cpu_and_gpu_semantics() {
+        let (periodic, periodic_mask) = preview_boundary_config(PreviewBoundaryPreset::Periodic);
+        assert_eq!(periodic, BoundaryPolicy::periodic());
+        assert_eq!(periodic_mask, 0);
+
+        let (channel, channel_mask) =
+            preview_boundary_config(PreviewBoundaryPreset::ChannelYNoSlip);
+        assert_eq!(channel, BoundaryPolicy::channel_y_no_slip());
+        assert_eq!(channel_mask, GPU_BOUNDARY_Y_MIN | GPU_BOUNDARY_Y_MAX);
     }
 
     #[test]
