@@ -22,6 +22,7 @@ The native LBM backend remains an interactive preview solver. GREEN numerical re
 | NEQ velocity-inlet / pressure-outlet plug flow | CPU | GREEN |
 | x-open + y free-stream uniform flow | CPU | GREEN |
 | Voxel-solid momentum exchange | CPU | GREEN |
+| Per-object momentum-exchange provenance | CPU | GREEN implementation regression |
 | Periodic/no-slip/moving/open/far-field parity | CPU + exact app WGSL | GREEN |
 | WindTunnelX / ExternalFlowX runtime mapping | CPU + GPU + UI | GREEN |
 | Re=60 cylinder shedding | Native preview | GREEN |
@@ -34,7 +35,8 @@ The native LBM backend remains an interactive preview solver. GREEN numerical re
 | Formal domain convergence | Native preview | **NOT ESTABLISHED** |
 | Trusted external-cylinder reference agreement | Native preview | PARTIAL / NOT VALIDATED |
 | Pinned upstream SU2 8.5.0 known-case | SU2 adapter | GREEN |
-| AeroForge-generated-mesh SU2 cross-validation | SU2 adapter | PLANNED |
+| AeroForge-generated empty-tunnel SU2 execution | SU2 adapter | GREEN execution smoke |
+| AeroForge-generated primitive-body/marker SU2 execution | SU2 adapter | GREEN execution smoke |
 
 ## Boundary-policy contract
 
@@ -170,7 +172,7 @@ Detailed reference provenance is in `docs/CYLINDER_REFERENCE_COMPARISON.md` and 
 
 ## Momentum-exchange force status
 
-`solid_force_lattice()` sums the fluid-on-solid bounce-back link reaction `Σ 2 f_i* c_i`; outer-domain wall reactions are excluded. This is structurally a standard link momentum-exchange diagnostic, but the current coefficient normalization still uses nominal geometry dimensions and the runtime currently exposes aggregate solid force only.
+`solid_force_lattice()` sums the fluid-on-solid bounce-back link reaction `Σ 2 f_i* c_i`; outer-domain wall reactions are excluded. The CPU reference path also carries compact per-cell owner labels, maps them back to stable `u64 SceneObject.id` values, and accumulates per-object momentum exchange at the same bounce-back links as the aggregate force. Regression coverage includes aggregate=sum(per-object), separated solids, rest-zero force, deterministic overlap ownership, and provenance invalidation after geometry edits/deletion/rebuild.
 
 For the exact binary cell-center masks:
 
@@ -180,19 +182,26 @@ For the exact binary cell-center masks:
 | 10 | 80 | 10.0925 | +0.93% |
 | 12 | 112 | 11.9416 | -0.49% |
 
-These geometry-denominator differences are too small to explain the observed D8→D10 Cd* reduction by themselves. Effective hydrodynamic wall location, stair-step geometry, BGK relaxation and link-level force behavior remain open error sources.
-
-Per-object force provenance is the next native-force implementation milestone.
+These geometry-denominator differences are too small to explain the observed D8→D10 Cd* reduction by themselves. Effective hydrodynamic wall location, stair-step geometry, BGK relaxation and link-level force behavior remain open error sources. Per-object values and area-equivalent normalization remain diagnostics, not engineering-valid Cd/Cl.
 
 ## Accurate SU2 backend status
 
-`aeroforge-accurate-backend` provides dimensional incompressible laminar/RANS-SST config generation, marker/filename validation, inlet-direction normalization, `SU2_RUN`/PATH discovery, banner probing, and a prepared-case process primitive.
+`aeroforge-accurate-backend` provides dimensional incompressible laminar/RANS-SST config generation, marker/filename validation, inlet-direction normalization, explicit SU2 8.5-compatible flow numerical-method settings, `SU2_RUN`/PATH discovery, banner probing, generated-case persistence, and prepared-case process execution.
 
-The pinned ignored integration test mirrors the official SU2 8.5.0 incompressible laminar-cylinder regression contract: it runs through AeroForge's `discover_su2 → probe_su2_banner → run_su2_case` path, parses solver iteration 10, and compares the four upstream reference values with `1e-5` tolerance.
+The pinned ignored upstream integration test mirrors the official SU2 8.5.0 incompressible laminar-cylinder regression contract: it runs through AeroForge's `discover_su2 → probe_su2_banner → run_su2_case` path, parses solver iteration 10, and compares the four upstream reference values with `1e-5` tolerance.
 
-The external runtime checkpoint is now **GREEN**. PR workflow run #253 verified the pinned outer Linux OMP release archive SHA256 `aadc800cd9df34deff99d4725f5897f620c9f2979f62ab235313311bf501f09b`, extracted its nested `linux64-omp.zip`, and executed `SU2_CFD` with banner `SU2 v8.5.0 "Harrier", The Open-Source CFD Code`. Using SU2 config commit `12eb826f049ef7f67df974dfcb44cf36ee07c0f8` and TestCases commit `790c80ec5b543487b5f8ecf8bb0f0e4d2cc67f3f`, the AeroForge integration path reproduced iteration 10 exactly: `[-4.168180, -3.611108, 0.007850, 4.539924]`, with reported maximum absolute error `0.000e0`.
+The upstream external runtime checkpoint is **GREEN**. PR workflow run #253 verified the pinned outer Linux OMP release archive SHA256 `aadc800cd9df34deff99d4725f5897f620c9f2979f62ab235313311bf501f09b`, extracted its nested `linux64-omp.zip`, and executed `SU2_CFD` with banner `SU2 v8.5.0 "Harrier", The Open-Source CFD Code`. Using SU2 config commit `12eb826f049ef7f67df974dfcb44cf36ee07c0f8` and TestCases commit `790c80ec5b543487b5f8ecf8bb0f0e4d2cc67f3f`, the AeroForge integration path reproduced iteration 10 exactly: `[-4.168180, -3.611108, 0.007850, 4.539924]`, with reported maximum absolute error `0.000e0`.
 
-The temporary SU2 one-shot job was removed from routine CI after this evidence was captured. This validates the pinned upstream known-case adapter/process path only. A real AeroForge-generated geometry/volume mesh has **not** completed end-to-end SU2 validation.
+A second external-runtime checkpoint now covers **AeroForge-generated** cases. PR workflow run #365 used the same pinned SU2 8.5.0 Linux OMP release and completed both ignored `su2_generated` evidence tests GREEN:
+
+- empty closed tunnel: AeroForge-generated Cartesian fluid occupancy → conforming six-tetra-per-fluid-voxel mesh → inlet/outlet/four wall markers → persisted mesh/config/provenance → `SU2_CFD` → configured volume output;
+- primitive body: `VoxelSolidPrimitive` box with stable `SceneObject.id=42` → compact owner field → internal `body_42` wall marker → persisted `scene_object:42` provenance → `SU2_CFD` → configured volume output.
+
+The empty `4×3×3` case contains `216` tetrahedra and audited fluid volume `36`. The body-containing `5×5×5` case removes one solid voxel, contains `744` fluid tetrahedra, exposes 12 body-wall triangles, and preserves the body marker as boundary marker 7. Volume assertions use a scale-aware `1e-12` relative-style tolerance to avoid treating harmless floating-point accumulation error as a topology failure.
+
+The temporary generated-SU2 one-shot job was removed from routine CI after evidence capture. These generated-case tests establish **mesh/config/marker/provenance persistence and SU2 parser/solver execution compatibility**. They do **not** establish body-fitted meshing, aerodynamic coefficient accuracy, convergence, turbulence-model validity, or engineering validation. The current generated volume mesh is deliberately staircase/voxel-derived.
+
+The desktop accurate-mode integration is currently prepare-only: scene primitives can be translated into the accurate generated-case path and inspected/prepared without automatically launching a solver from the UI. Solver execution/result ingestion remains a separate orchestration milestone.
 
 ## Claims policy
 
@@ -203,14 +212,17 @@ The temporary SU2 one-shot job was removed from routine CI after this evidence w
 - H/D=10/15/20 shows a rapidly shrinking transverse-distance effect, not formal domain convergence.
 - Run #213 shows inlet proximity dominates the tested streamwise correction; this does not create a universal 6D inlet-clearance rule.
 - Best-domain D8/D10/D12 shows a shrinking Cd* refinement increment, while St remains non-monotonic; do not report GCI or an extrapolated engineering coefficient.
-- Momentum-exchange Cd/lift remain diagnostics until grid/domain/reference/force evidence improves.
+- Momentum-exchange Cd/lift and per-object force remain diagnostics until grid/domain/reference/force evidence improves.
 - BGK physical-scaling warnings remain authoritative even when regressions are GREEN.
-- The GREEN upstream SU2 known-case establishes pinned adapter/process compatibility, not AeroForge-generated-mesh end-to-end validation.
+- The GREEN upstream SU2 known-case establishes pinned adapter/process compatibility.
+- The GREEN generated SU2 smoke establishes generated mesh/config/marker/provenance execution compatibility only; it is not an engineering CFD validation result.
+- Staircase voxel boundaries must not be described as body-fitted surfaces.
 - Accurate SU2 results must retain solver version, mesh/config provenance, convergence history, geometry revision and source-translation decisions.
 
 ## Next validation milestones
 
-1. Extend native momentum exchange to per-object force provenance and expose effective-diameter/normalization diagnostics.
-2. Harden SU2 history/output provenance using the now-GREEN pinned known-case evidence.
-3. Build geometry import/repair, volume-mesh generation and marker provenance before attempting an AeroForge-generated-mesh accurate case.
-4. Do not extend the native D8/D10/D12 cylinder ladder by brute force unless a later force/boundary change requires revalidation.
+1. Add solver-launch/result-ingestion orchestration on top of the existing prepare-only accurate UI while retaining explicit user control and provenance.
+2. Connect imported audited surfaces to a deterministic repair/body-fitted or otherwise declared higher-fidelity volume-meshing path; keep staircase voxel meshing explicitly labeled as such.
+3. Add aerodynamic result extraction plus case-level convergence/history checks before presenting coefficients as accurate-mode outputs.
+4. Validate a body-containing generated case against trusted dimensional reference data with grid/domain/model sensitivity before making engineering claims.
+5. Do not extend the native D8/D10/D12 cylinder ladder by brute force unless a later force/boundary change requires revalidation.
