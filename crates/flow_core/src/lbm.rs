@@ -26,9 +26,10 @@ const OPPOSITE: [usize; Q] = [
 pub enum FaceBoundary {
     Periodic,
     NoSlipWall,
+    MovingWall,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoundaryPolicy {
     pub x_min: FaceBoundary,
     pub x_max: FaceBoundary,
@@ -36,6 +37,7 @@ pub struct BoundaryPolicy {
     pub y_max: FaceBoundary,
     pub z_min: FaceBoundary,
     pub z_max: FaceBoundary,
+    wall_velocities: [[f32; 3]; 6],
 }
 
 impl Default for BoundaryPolicy {
@@ -53,6 +55,7 @@ impl BoundaryPolicy {
             y_max: FaceBoundary::Periodic,
             z_min: FaceBoundary::Periodic,
             z_max: FaceBoundary::Periodic,
+            wall_velocities: [[0.0; 3]; 6],
         }
     }
 
@@ -64,7 +67,33 @@ impl BoundaryPolicy {
             y_max: FaceBoundary::NoSlipWall,
             z_min: FaceBoundary::Periodic,
             z_max: FaceBoundary::Periodic,
+            wall_velocities: [[0.0; 3]; 6],
         }
+    }
+
+    /// Planar Couette channel: x/z are periodic, y-min is stationary and y-max moves tangentially.
+    pub fn couette_y(lid_velocity: [f32; 3]) -> Self {
+        let mut policy = Self::channel_y_no_slip();
+        policy.y_max = FaceBoundary::MovingWall;
+        policy.wall_velocities[3] = lid_velocity;
+        policy
+    }
+
+    /// Quasi-2D lid-driven cavity: x/y are walls, y-max moves and z remains periodic.
+    /// At x/y corner links, the first crossed stationary side wall takes precedence; this keeps
+    /// the lid endpoints stationary, which is a common discrete cavity corner convention.
+    pub fn lid_driven_cavity_xy(lid_velocity: [f32; 3]) -> Self {
+        let mut policy = Self {
+            x_min: FaceBoundary::NoSlipWall,
+            x_max: FaceBoundary::NoSlipWall,
+            y_min: FaceBoundary::NoSlipWall,
+            y_max: FaceBoundary::MovingWall,
+            z_min: FaceBoundary::Periodic,
+            z_max: FaceBoundary::Periodic,
+            wall_velocities: [[0.0; 3]; 6],
+        };
+        policy.wall_velocities[3] = lid_velocity;
+        policy
     }
 
     pub fn validate(self) -> Result<(), BoundaryPolicyError> {
@@ -73,8 +102,26 @@ impl BoundaryPolicy {
             if (min == FaceBoundary::Periodic) != (max == FaceBoundary::Periodic) {
                 return Err(BoundaryPolicyError::UnpairedPeriodicAxis(axis));
             }
+
+            for lower in [true, false] {
+                let (kind, velocity, face_index) = self.face_condition(axis, lower);
+                if !velocity.iter().all(|value| value.is_finite()) {
+                    return Err(BoundaryPolicyError::NonFiniteWallVelocity(face_index));
+                }
+                if kind == FaceBoundary::MovingWall {
+                    if velocity[axis].abs() > 1.0e-7 {
+                        return Err(BoundaryPolicyError::MovingWallNormalVelocity(face_index));
+                    }
+                } else if velocity.iter().any(|value| value.abs() > f32::EPSILON) {
+                    return Err(BoundaryPolicyError::VelocityOnNonMovingFace(face_index));
+                }
+            }
         }
         Ok(())
+    }
+
+    pub fn wall_velocity(&self, axis: usize, lower: bool) -> [f32; 3] {
+        self.face_condition(axis, lower).1
     }
 
     fn axis_faces(self, axis: usize) -> [FaceBoundary; 2] {
@@ -86,15 +133,23 @@ impl BoundaryPolicy {
         }
     }
 
-    fn face(self, axis: usize, lower: bool) -> FaceBoundary {
+    fn face_condition(self, axis: usize, lower: bool) -> (FaceBoundary, [f32; 3], usize) {
+        let face_index = 2 * axis + usize::from(!lower);
         let faces = self.axis_faces(axis);
-        faces[usize::from(!lower)]
+        (
+            faces[usize::from(!lower)],
+            self.wall_velocities[face_index],
+            face_index,
+        )
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BoundaryPolicyError {
     UnpairedPeriodicAxis(usize),
+    NonFiniteWallVelocity(usize),
+    MovingWallNormalVelocity(usize),
+    VelocityOnNonMovingFace(usize),
 }
 
 #[derive(Clone, Debug)]
@@ -213,7 +268,7 @@ impl CpuLbm {
     }
 
     /// Update the outer-domain boundary policy without resetting the solver state.
-    /// Periodic faces must be paired on the same axis; no-slip faces use half-way bounce-back.
+    /// Periodic faces must be paired. Stationary and moving walls use half-way bounce-back.
     pub fn set_boundary_policy(
         &mut self,
         boundary: BoundaryPolicy,
@@ -356,8 +411,13 @@ impl CpuLbm {
 
                     for q in 0..Q {
                         match self.stream_destination(p, C[q]) {
-                            StreamDestination::BounceBack => {
-                                self.next[i][OPPOSITE[q]] += post[q];
+                            StreamDestination::BounceBack(wall_velocity) => {
+                                let correction = moving_wall_bounce_correction(
+                                    rho,
+                                    q,
+                                    wall_velocity,
+                                );
+                                self.next[i][OPPOSITE[q]] += post[q] - correction;
                             }
                             StreamDestination::Cell(dst_p) => {
                                 let dst = self.index(dst_p);
@@ -417,14 +477,26 @@ impl CpuLbm {
         for axis in 0..3 {
             let raw = p[axis] as isize + direction[axis];
             if raw < 0 {
-                match self.boundary.face(axis, true) {
+                let (kind, velocity, _) = self.boundary.face_condition(axis, true);
+                match kind {
                     FaceBoundary::Periodic => destination[axis] = self.dims[axis] - 1,
-                    FaceBoundary::NoSlipWall => return StreamDestination::BounceBack,
+                    FaceBoundary::NoSlipWall => {
+                        return StreamDestination::BounceBack([0.0; 3]);
+                    }
+                    FaceBoundary::MovingWall => {
+                        return StreamDestination::BounceBack(velocity);
+                    }
                 }
             } else if raw >= self.dims[axis] as isize {
-                match self.boundary.face(axis, false) {
+                let (kind, velocity, _) = self.boundary.face_condition(axis, false);
+                match kind {
                     FaceBoundary::Periodic => destination[axis] = 0,
-                    FaceBoundary::NoSlipWall => return StreamDestination::BounceBack,
+                    FaceBoundary::NoSlipWall => {
+                        return StreamDestination::BounceBack([0.0; 3]);
+                    }
+                    FaceBoundary::MovingWall => {
+                        return StreamDestination::BounceBack(velocity);
+                    }
                 }
             } else {
                 destination[axis] = raw as usize;
@@ -438,10 +510,10 @@ impl CpuLbm {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum StreamDestination {
     Cell([usize; 3]),
-    BounceBack,
+    BounceBack([f32; 3]),
 }
 
 fn field_index(dims: [usize; 3], [x, y, z]: [usize; 3]) -> usize {
@@ -457,6 +529,14 @@ fn equilibrium(rho: f32, u: [f32; 3]) -> [f32; Q] {
         out[q] = W[q] * rho * (1.0 + 3.0 * cu + 4.5 * cu * cu - 1.5 * u2);
     }
     out
+}
+
+fn moving_wall_bounce_correction(rho: f32, q: usize, wall_velocity: [f32; 3]) -> f32 {
+    let c_dot_u = C[q][0] as f32 * wall_velocity[0]
+        + C[q][1] as f32 * wall_velocity[1]
+        + C[q][2] as f32 * wall_velocity[2];
+    // c_s^2 = 1/3, so 2*w*rho*(c_i·u_wall)/c_s^2 = 6*w*rho*(c_i·u_wall).
+    6.0 * W[q] * rho * c_dot_u
 }
 
 fn guo_force_term(rho: f32, u: [f32; 3], acceleration: [f32; 3], q: usize, omega: f32) -> f32 {
@@ -609,5 +689,25 @@ mod tests {
         assert_eq!(channel.y_max, FaceBoundary::NoSlipWall);
         assert_eq!(channel.z_min, FaceBoundary::Periodic);
         assert_eq!(channel.z_max, FaceBoundary::Periodic);
+    }
+
+    #[test]
+    fn moving_wall_must_be_tangential_and_finite() {
+        let valid = BoundaryPolicy::couette_y([0.04, 0.0, 0.0]);
+        assert_eq!(valid.validate(), Ok(()));
+        assert_eq!(valid.y_max, FaceBoundary::MovingWall);
+        assert_eq!(valid.wall_velocity(1, false), [0.04, 0.0, 0.0]);
+
+        let normal = BoundaryPolicy::couette_y([0.04, 0.01, 0.0]);
+        assert_eq!(
+            normal.validate(),
+            Err(BoundaryPolicyError::MovingWallNormalVelocity(3))
+        );
+
+        let non_finite = BoundaryPolicy::couette_y([f32::NAN, 0.0, 0.0]);
+        assert_eq!(
+            non_finite.validate(),
+            Err(BoundaryPolicyError::NonFiniteWallVelocity(3))
+        );
     }
 }
