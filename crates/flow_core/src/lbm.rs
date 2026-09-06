@@ -80,8 +80,9 @@ impl BoundaryPolicy {
     }
 
     /// Quasi-2D lid-driven cavity: x/y are walls, y-max moves and z remains periodic.
-    /// At x/y corner links, the first crossed stationary side wall takes precedence; this keeps
-    /// the lid endpoints stationary, which is a common discrete cavity corner convention.
+    /// At mixed x/y corner links the moving lid takes precedence over a stationary side wall.
+    /// This keeps the opposing moving-wall diagonal corrections paired and avoids artificial
+    /// global mass drift at the two top corners.
     pub fn lid_driven_cavity_xy(lid_velocity: [f32; 3]) -> Self {
         let mut policy = Self {
             x_min: FaceBoundary::NoSlipWall,
@@ -297,7 +298,7 @@ impl CpuLbm {
     pub fn set_solid_mask(&mut self, solid: &[bool]) {
         assert_eq!(solid.len(), self.solid.len(), "solid-mask cell count mismatch");
         self.solid = solid.to_vec();
-        let rest = equilibrium(1.0, [0.0; 3]);
+        let rest = equilibrium(1.0, [0.0; Q]);
         self.f.fill(rest);
         self.next.fill([0.0; Q]);
         self.density.fill(1.0);
@@ -474,35 +475,37 @@ impl CpuLbm {
 
     fn stream_destination(&self, p: [usize; 3], direction: [isize; 3]) -> StreamDestination {
         let mut destination = p;
+        let mut hit_stationary_wall = false;
+        let mut moving_wall_velocity = None;
+
         for axis in 0..3 {
             let raw = p[axis] as isize + direction[axis];
             if raw < 0 {
                 let (kind, velocity, _) = self.boundary.face_condition(axis, true);
                 match kind {
                     FaceBoundary::Periodic => destination[axis] = self.dims[axis] - 1,
-                    FaceBoundary::NoSlipWall => {
-                        return StreamDestination::BounceBack([0.0; 3]);
-                    }
-                    FaceBoundary::MovingWall => {
-                        return StreamDestination::BounceBack(velocity);
-                    }
+                    FaceBoundary::NoSlipWall => hit_stationary_wall = true,
+                    FaceBoundary::MovingWall => moving_wall_velocity = Some(velocity),
                 }
             } else if raw >= self.dims[axis] as isize {
                 let (kind, velocity, _) = self.boundary.face_condition(axis, false);
                 match kind {
                     FaceBoundary::Periodic => destination[axis] = 0,
-                    FaceBoundary::NoSlipWall => {
-                        return StreamDestination::BounceBack([0.0; 3]);
-                    }
-                    FaceBoundary::MovingWall => {
-                        return StreamDestination::BounceBack(velocity);
-                    }
+                    FaceBoundary::NoSlipWall => hit_stationary_wall = true,
+                    FaceBoundary::MovingWall => moving_wall_velocity = Some(velocity),
                 }
             } else {
                 destination[axis] = raw as usize;
             }
         }
-        StreamDestination::Cell(destination)
+
+        if let Some(velocity) = moving_wall_velocity {
+            StreamDestination::BounceBack(velocity)
+        } else if hit_stationary_wall {
+            StreamDestination::BounceBack([0.0; 3])
+        } else {
+            StreamDestination::Cell(destination)
+        }
     }
 
     fn index(&self, xyz: [usize; 3]) -> usize {
@@ -708,6 +711,24 @@ mod tests {
         assert_eq!(
             non_finite.validate(),
             Err(BoundaryPolicyError::NonFiniteWallVelocity(3))
+        );
+    }
+
+    #[test]
+    fn moving_lid_dominates_stationary_side_at_top_corners() {
+        let lid = [0.04, 0.0, 0.0];
+        let mut solver = CpuLbm::new([8, 8, 2], 0.8);
+        solver
+            .set_boundary_policy(BoundaryPolicy::lid_driven_cavity_xy(lid))
+            .unwrap();
+
+        assert_eq!(
+            solver.stream_destination([0, 7, 0], [-1, 1, 0]),
+            StreamDestination::BounceBack(lid)
+        );
+        assert_eq!(
+            solver.stream_destination([7, 7, 0], [1, 1, 0]),
+            StreamDestination::BounceBack(lid)
         );
     }
 }
