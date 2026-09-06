@@ -25,6 +25,7 @@ const WORKGROUP_SIZE: u32 = 64;
 const REQUIRED_STORAGE_BUFFERS_PER_STAGE: u32 = 5;
 const BOUNDARY_FACE_MASK: u32 = 0x3f;
 const PRESSURE_MASK_SHIFT: u32 = 6;
+const FAR_FIELD_MASK_SHIFT: u32 = 12;
 const FACE_BITS: [u32; 6] = [1, 2, 4, 8, 16, 32];
 pub const MAX_GPU_SAMPLES: usize = 4096;
 
@@ -38,9 +39,12 @@ pub struct GpuPreviewRequest {
     pub moving_boundary_mask: u32,
     pub velocity_inlet_mask: u32,
     pub pressure_outlet_mask: u32,
+    pub far_field_mask: u32,
     pub wall_velocities: [[f32; 3]; 6],
     pub inlet_velocities: [[f32; 3]; 6],
     pub pressure_densities: [f32; 6],
+    pub far_field_velocities: [[f32; 3]; 6],
+    pub far_field_densities: [f32; 6],
     pub running: bool,
     pub steps_per_frame: u32,
     pub sample_stride: u32,
@@ -60,9 +64,12 @@ impl Default for GpuPreviewRequest {
             moving_boundary_mask: 0,
             velocity_inlet_mask: 0,
             pressure_outlet_mask: 0,
+            far_field_mask: 0,
             wall_velocities: [[0.0; 3]; 6],
             inlet_velocities: [[0.0; 3]; 6],
             pressure_densities: [0.0; 6],
+            far_field_velocities: [[0.0; 3]; 6],
+            far_field_densities: [0.0; 6],
             running: false,
             steps_per_frame: 1,
             sample_stride: 1,
@@ -101,9 +108,12 @@ impl GpuPreviewRequest {
         self.moving_boundary_mask = 0;
         self.velocity_inlet_mask = 0;
         self.pressure_outlet_mask = 0;
+        self.far_field_mask = 0;
         self.wall_velocities = [[0.0; 3]; 6];
         self.inlet_velocities = [[0.0; 3]; 6];
         self.pressure_densities = [0.0; 6];
+        self.far_field_velocities = [[0.0; 3]; 6];
+        self.far_field_densities = [0.0; 6];
         self.solid = Arc::new(solid);
         self.forcing = Arc::new(forcing);
         self.set_sample_budget(MAX_GPU_SAMPLES);
@@ -121,7 +131,8 @@ impl GpuPreviewRequest {
             "stationary and moving boundary masks must not overlap"
         );
         assert_eq!(
-            (self.velocity_inlet_mask | self.pressure_outlet_mask) & moving_boundary_mask,
+            (self.velocity_inlet_mask | self.pressure_outlet_mask | self.far_field_mask)
+                & moving_boundary_mask,
             0,
             "open and moving boundary masks must not overlap"
         );
@@ -152,9 +163,9 @@ impl GpuPreviewRequest {
         );
         let open_mask = velocity_inlet_mask | pressure_outlet_mask;
         assert_eq!(
-            open_mask & (self.boundary_mask | self.moving_boundary_mask),
+            open_mask & (self.boundary_mask | self.moving_boundary_mask | self.far_field_mask),
             0,
-            "open boundaries must not overlap wall boundaries"
+            "open boundaries must not overlap wall or far-field boundaries"
         );
         assert!(
             open_mask == 0 || open_mask.count_ones() == 2,
@@ -188,6 +199,56 @@ impl GpuPreviewRequest {
         self.pressure_densities = pressure_densities;
     }
 
+    pub fn set_far_field_boundaries(
+        &mut self,
+        far_field_mask: u32,
+        far_field_velocities: [[f32; 3]; 6],
+        far_field_densities: [f32; 6],
+    ) {
+        assert_eq!(far_field_mask & !BOUNDARY_FACE_MASK, 0, "invalid far-field boundary bits");
+        assert_eq!(
+            far_field_mask
+                & (self.boundary_mask
+                    | self.moving_boundary_mask
+                    | self.velocity_inlet_mask
+                    | self.pressure_outlet_mask),
+            0,
+            "far-field boundaries must not overlap wall or inlet/outlet boundaries"
+        );
+        if far_field_mask != 0 {
+            assert_eq!(
+                far_field_mask.count_ones(),
+                2,
+                "GPU far-field contract requires one complete opposite face pair"
+            );
+            let axis = boundary_axis(far_field_mask);
+            assert!(axis < 3, "GPU far-field pair must belong to one axis");
+            let expected_pair = 0b11_u32 << (axis * 2);
+            assert_eq!(
+                far_field_mask, expected_pair,
+                "GPU far-field faces must be the opposite pair on one axis"
+            );
+        }
+        assert!(
+            far_field_velocities
+                .iter()
+                .flatten()
+                .all(|value| value.is_finite()),
+            "GPU far-field velocities must be finite"
+        );
+        for (index, bit) in FACE_BITS.iter().copied().enumerate() {
+            if far_field_mask & bit != 0 {
+                assert!(
+                    far_field_densities[index].is_finite() && far_field_densities[index] > 0.0,
+                    "GPU far-field density must be finite and positive"
+                );
+            }
+        }
+        self.far_field_mask = far_field_mask;
+        self.far_field_velocities = far_field_velocities;
+        self.far_field_densities = far_field_densities;
+    }
+
     pub fn set_control(&mut self, running: bool, steps_per_frame: u32, max_samples: usize) {
         self.running = running;
         self.steps_per_frame = steps_per_frame.clamp(1, 64);
@@ -205,16 +266,11 @@ impl GpuPreviewRequest {
     }
 
     fn open_face_cells(&self) -> u32 {
-        let mask = self.velocity_inlet_mask | self.pressure_outlet_mask;
-        if mask & 0b000011 != 0 {
-            self.dims[1].saturating_mul(self.dims[2])
-        } else if mask & 0b001100 != 0 {
-            self.dims[0].saturating_mul(self.dims[2])
-        } else if mask & 0b110000 != 0 {
-            self.dims[0].saturating_mul(self.dims[1])
-        } else {
-            0
-        }
+        face_cells_for_mask(self.dims, self.velocity_inlet_mask | self.pressure_outlet_mask)
+    }
+
+    fn far_field_face_cells(&self) -> u32 {
+        face_cells_for_mask(self.dims, self.far_field_mask)
     }
 
     fn params(&self) -> GpuParams {
@@ -224,18 +280,23 @@ impl GpuPreviewRequest {
                 self.wall_velocities[index]
             } else if self.velocity_inlet_mask & bit != 0 {
                 self.inlet_velocities[index]
+            } else if self.far_field_mask & bit != 0 {
+                self.far_field_velocities[index]
             } else {
                 [0.0; 3]
             };
             let density = if self.pressure_outlet_mask & bit != 0 {
                 self.pressure_densities[index]
+            } else if self.far_field_mask & bit != 0 {
+                self.far_field_densities[index]
             } else {
                 0.0
             };
             Vec4::new(velocity[0], velocity[1], velocity[2], density)
         };
-        let packed_open_masks = (self.velocity_inlet_mask & BOUNDARY_FACE_MASK)
-            | ((self.pressure_outlet_mask & BOUNDARY_FACE_MASK) << PRESSURE_MASK_SHIFT);
+        let packed_boundary_masks = (self.velocity_inlet_mask & BOUNDARY_FACE_MASK)
+            | ((self.pressure_outlet_mask & BOUNDARY_FACE_MASK) << PRESSURE_MASK_SHIFT)
+            | ((self.far_field_mask & BOUNDARY_FACE_MASK) << FAR_FIELD_MASK_SHIFT);
         GpuParams {
             dims_stride: UVec4::new(
                 self.dims[0],
@@ -247,7 +308,7 @@ impl GpuPreviewRequest {
                 self.sample_count,
                 self.boundary_mask,
                 self.moving_boundary_mask,
-                packed_open_masks,
+                packed_boundary_masks,
             ),
             physics: Vec4::new(1.0 / self.tau.max(0.500_001), 0.12, 0.0, 0.0),
             wall_x_min: face(0),
@@ -269,6 +330,18 @@ fn boundary_axis(mask: u32) -> usize {
         2
     } else {
         usize::MAX
+    }
+}
+
+fn face_cells_for_mask(dims: [u32; 3], mask: u32) -> u32 {
+    if mask & 0b000011 != 0 {
+        dims[1].saturating_mul(dims[2])
+    } else if mask & 0b001100 != 0 {
+        dims[0].saturating_mul(dims[2])
+    } else if mask & 0b110000 != 0 {
+        dims[0].saturating_mul(dims[1])
+    } else {
+        0
     }
 }
 
@@ -418,6 +491,7 @@ struct GpuPreviewPipeline {
     init_pipeline: CachedComputePipelineId,
     step_pipeline: CachedComputePipelineId,
     reconstruct_open_pipeline: CachedComputePipelineId,
+    reconstruct_far_field_pipeline: CachedComputePipelineId,
     sample_pipeline: CachedComputePipelineId,
 }
 
@@ -472,6 +546,14 @@ fn init_compute_pipeline(
         entry_point: Some(Cow::Borrowed("reconstruct_open")),
         ..default()
     });
+    let reconstruct_far_field_pipeline =
+        pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
+            label: Some("AeroForge GPU LBM free-stream far-field reconstruction".into()),
+            layout: vec![layout.clone()],
+            shader: shader.clone(),
+            entry_point: Some(Cow::Borrowed("reconstruct_far_field")),
+            ..default()
+        });
     let sample_pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
         label: Some("AeroForge GPU LBM sample".into()),
         layout: vec![layout.clone()],
@@ -484,6 +566,7 @@ fn init_compute_pipeline(
         init_pipeline,
         step_pipeline,
         reconstruct_open_pipeline,
+        reconstruct_far_field_pipeline,
         sample_pipeline,
     });
 }
@@ -673,10 +756,22 @@ fn run_gpu_preview(
     } else {
         None
     };
+    let far_field_face_cells = request.far_field_face_cells();
+    let reconstruct_far_field_pipeline = if far_field_face_cells > 0 {
+        let Some(far_field_pipeline) =
+            pipeline_cache.get_compute_pipeline(pipeline.reconstruct_far_field_pipeline)
+        else {
+            return;
+        };
+        Some(far_field_pipeline)
+    } else {
+        None
+    };
 
     let cell_workgroups = buffers.cell_count.div_ceil(WORKGROUP_SIZE);
     let sample_workgroups = request.sample_count.div_ceil(WORKGROUP_SIZE);
     let open_face_workgroups = open_face_cells.div_ceil(WORKGROUP_SIZE);
+    let far_field_workgroups = far_field_face_cells.div_ceil(WORKGROUP_SIZE);
     let mut ping_is_a = buffers.ping_is_a;
     let mut initialized = buffers.initialized;
     let mut completed_steps = buffers.steps;
@@ -712,6 +807,11 @@ fn run_gpu_preview(
                     pass.set_pipeline(open_pipeline);
                     pass.set_bind_group(0, bind, &[]);
                     pass.dispatch_workgroups(open_face_workgroups, 1, 1);
+                }
+                if let Some(far_field_pipeline) = reconstruct_far_field_pipeline {
+                    pass.set_pipeline(far_field_pipeline);
+                    pass.set_bind_group(0, bind, &[]);
+                    pass.dispatch_workgroups(far_field_workgroups, 1, 1);
                 }
                 ping_is_a = !ping_is_a;
                 completed_steps = completed_steps.saturating_add(1);
@@ -807,5 +907,47 @@ mod tests {
         assert_eq!(params.wall_x_min.xyz(), Vec3::new(0.03, 0.0, 0.0));
         assert_eq!(params.wall_x_max.w, 1.0);
         assert_eq!(request.open_face_cells(), 24);
+    }
+
+    #[test]
+    fn params_carry_far_field_metadata_and_face_budget() {
+        let mut request = GpuPreviewRequest::default();
+        request.dims = [8, 4, 6];
+        request.sample_count = 20;
+        let mut velocities = [[0.0; 3]; 6];
+        velocities[2] = [0.03, 0.0, 0.0];
+        velocities[3] = [0.03, 0.0, 0.0];
+        let mut densities = [0.0; 6];
+        densities[2] = 1.0;
+        densities[3] = 1.0;
+        request.set_far_field_boundaries(4 | 8, velocities, densities);
+        let params = request.params();
+        assert_eq!(params.control.w, (12 << FAR_FIELD_MASK_SHIFT));
+        assert_eq!(params.wall_y_min.xyz(), Vec3::new(0.03, 0.0, 0.0));
+        assert_eq!(params.wall_y_min.w, 1.0);
+        assert_eq!(params.wall_y_max.w, 1.0);
+        assert_eq!(request.far_field_face_cells(), 48);
+    }
+
+    #[test]
+    fn open_and_far_field_masks_pack_without_overlap() {
+        let mut request = GpuPreviewRequest::default();
+        request.dims = [8, 4, 6];
+        let mut inlet_velocities = [[0.0; 3]; 6];
+        inlet_velocities[0] = [0.03, 0.0, 0.0];
+        let mut pressure_densities = [0.0; 6];
+        pressure_densities[1] = 1.0;
+        request.set_open_boundaries(1, 2, inlet_velocities, pressure_densities);
+        let mut far_velocities = [[0.0; 3]; 6];
+        far_velocities[2] = [0.03, 0.0, 0.0];
+        far_velocities[3] = [0.03, 0.0, 0.0];
+        let mut far_densities = [0.0; 6];
+        far_densities[2] = 1.0;
+        far_densities[3] = 1.0;
+        request.set_far_field_boundaries(12, far_velocities, far_densities);
+        assert_eq!(
+            request.params().control.w,
+            1 | (2 << PRESSURE_MASK_SHIFT) | (12 << FAR_FIELD_MASK_SHIFT)
+        );
     }
 }
