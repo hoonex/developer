@@ -47,6 +47,8 @@ jobs:
             ${{ runner.os }}-cargo-
       - name: Check desktop editor and test targets
         run: cargo check -p aeroforge-app --all-targets
+      - name: Run desktop editor unit tests
+        run: cargo test -p aeroforge-app -- --nocapture
 
   gpu-smoke:
     runs-on: windows-latest
