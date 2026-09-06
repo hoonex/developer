@@ -1,5 +1,6 @@
 mod generated_case;
 mod history;
+mod imported_surface;
 mod prepared_case;
 mod primitive_voxel;
 mod scene_provenance;
@@ -17,6 +18,10 @@ pub use history::{
     extract_su2_world_axis_diagnostics, summarize_su2_history_csv, Su2DiagnosticError,
     Su2HistoryError, Su2HistoryGateStatus, Su2HistoryQuality, Su2HistorySummary,
     Su2HistoryValue, Su2SurfaceWorldAxisDiagnostics, Su2WorldAxisDiagnostics,
+};
+pub use imported_surface::{
+    audit_imported_surface_for_accurate_meshing, AccurateImportedSurfacePolicy,
+    AuditedImportedSurfaceBody, ImportedSurfaceAuditError,
 };
 pub use prepared_case::{
     prepare_generated_su2_case_directory, run_prepared_generated_su2_case,
