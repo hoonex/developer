@@ -3,7 +3,8 @@ use bevy_egui::{egui, EguiContexts};
 
 use crate::gpu_preview::{GpuPreviewRequest, GpuPreviewSnapshot, MAX_GPU_SAMPLES};
 use crate::model::{
-    PrimitiveKind, ProjectState, SelectedItem, SolverMode, WindProfile, WindSourceKind,
+    PreviewBoundaryPreset, PrimitiveKind, ProjectState, SelectedItem, SolverMode, WindProfile,
+    WindSourceKind,
 };
 use crate::simulation::{
     PreviewBackend, PreviewStatus, SimulationRuntime, CPU_PREVIEW_CELL_LIMIT,
@@ -245,6 +246,33 @@ pub fn draw_ui(
                         .changed();
                 });
 
+            egui::ComboBox::from_label("Preview boundary")
+                .selected_text(match state.simulation.preview_boundary {
+                    PreviewBoundaryPreset::Periodic => "Periodic (all faces)",
+                    PreviewBoundaryPreset::ChannelYNoSlip => {
+                        "Channel: Y no-slip / XZ periodic"
+                    }
+                })
+                .show_ui(ui, |ui| {
+                    dirty |= ui
+                        .selectable_value(
+                            &mut state.simulation.preview_boundary,
+                            PreviewBoundaryPreset::Periodic,
+                            "Periodic (all faces)",
+                        )
+                        .changed();
+                    dirty |= ui
+                        .selectable_value(
+                            &mut state.simulation.preview_boundary,
+                            PreviewBoundaryPreset::ChannelYNoSlip,
+                            "Channel: Y no-slip / XZ periodic",
+                        )
+                        .changed();
+                });
+            ui.small(
+                "Validated preview preset only. Channel mode adds stationary Y walls; X/Z still wrap periodically and this is not a physical inlet/outlet wind-tunnel boundary.",
+            );
+
             let cells = state.simulation.cell_count();
             let gib = state.simulation.lbm_distribution_memory_bytes() as f64 / 1024.0_f64.powi(3);
             ui.monospace(format!("Cells: {cells}"));
@@ -359,6 +387,7 @@ pub fn draw_ui(
                 PreviewBackend::GpuCompute => {
                     ui.monospace(format!("GPU sample stride: {}", gpu_request.sample_stride));
                     ui.monospace(format!("GPU sample vectors: {}", gpu_request.sample_count));
+                    ui.monospace(format!("GPU boundary mask: {}", gpu_request.boundary_mask));
                     ui.monospace(format!("GPU readback frames: {}", gpu_snapshot.frames_received));
                     ui.small(
                         "D3Q19 distributions stay in VRAM and ping-pong there. Only the sampled velocity vectors needed for viewport arrows are read back.",
