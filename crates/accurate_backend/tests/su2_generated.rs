@@ -3,10 +3,11 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aeroforge_accurate_backend::{
-    build_voxel_generated_su2_case, discover_su2, prepare_generated_su2_case_directory,
-    probe_su2_banner, run_prepared_generated_su2_case, voxelize_scene_primitives, BoundaryRole,
-    BoundarySource, DomainAxis, DomainSide, FlowModel, InletBoundary, Su2Case,
-    Su2MarkerBinding, VoxelFluidDomainSpec, VoxelPrimitiveKind, VoxelSolidPrimitive,
+    build_voxel_generated_su2_case_with_reference, discover_su2,
+    prepare_generated_su2_case_directory, probe_su2_banner, run_prepared_generated_su2_case,
+    voxelize_scene_primitives, BoundaryRole, BoundarySource, DomainAxis, DomainSide, FlowModel,
+    InletBoundary, Su2Case, Su2CoefficientReference, Su2MarkerBinding, VoxelFluidDomainSpec,
+    VoxelPrimitiveKind, VoxelSolidPrimitive,
 };
 use aeroforge_volume_core::{BlockBoundaryMarkers, BoundaryMarkerId};
 
@@ -135,6 +136,13 @@ fn laminar_smoke_case(mesh_filename: &str, output_basename: &str, body_id: Optio
     }
 }
 
+fn smoke_coefficient_reference() -> Su2CoefficientReference {
+    Su2CoefficientReference {
+        area_m2: 1.0,
+        length_m: 1.0,
+    }
+}
+
 fn pinned_su2_850() -> PathBuf {
     let executable = discover_su2().expect("SU2_CFD must be discoverable through SU2_RUN or PATH");
     let banner = probe_su2_banner(&executable)
@@ -155,6 +163,12 @@ fn assert_volume_close(actual: f64, expected: f64) {
     );
 }
 
+fn assert_explicit_reference(config: &str) {
+    assert!(config.contains("SYSTEM_MEASUREMENTS= SI"));
+    assert!(config.contains("REF_AREA= 1.000000000000e0"));
+    assert!(config.contains("REF_LENGTH= 1.000000000000e0"));
+}
+
 fn assert_volume_output(prepared_dir: &std::path::Path, output_basename: &str) {
     assert!(
         prepared_dir
@@ -173,7 +187,8 @@ fn generated_closed_tunnel_runs_through_su2_850() {
     let executable = pinned_su2_850();
     let domain = closed_tunnel_domain();
     let solid_owner = vec![0_u32; domain.cells.iter().product()];
-    let generated = build_voxel_generated_su2_case(
+    let reference = smoke_coefficient_reference();
+    let generated = build_voxel_generated_su2_case_with_reference(
         &laminar_smoke_case(
             "aeroforge_generated_smoke.su2",
             "aeroforge_generated_smoke",
@@ -183,6 +198,7 @@ fn generated_closed_tunnel_runs_through_su2_850() {
         &solid_owner,
         &[],
         closed_tunnel_bindings(),
+        Some(&reference),
     )
     .expect("AeroForge must build a valid generated SU2 case");
 
@@ -193,6 +209,7 @@ fn generated_closed_tunnel_runs_through_su2_850() {
     assert_eq!(generated.volume_mesh.cells.len(), 4 * 3 * 3 * 6);
     assert_volume_close(audit.total_volume, 36.0);
     assert_eq!(generated.bundle.marker_bindings.len(), 6);
+    assert_explicit_reference(&generated.bundle.config_text);
     assert!(
         generated
             .bundle
@@ -257,7 +274,8 @@ fn generated_primitive_body_marker_runs_through_su2_850() {
     assert_eq!(voxelized.owner_object_ids, vec![42]);
     assert_eq!(voxelized.solid_cells, 1);
 
-    let generated = build_voxel_generated_su2_case(
+    let reference = smoke_coefficient_reference();
+    let generated = build_voxel_generated_su2_case_with_reference(
         &laminar_smoke_case(
             "aeroforge_generated_body.su2",
             "aeroforge_generated_body",
@@ -267,6 +285,7 @@ fn generated_primitive_body_marker_runs_through_su2_850() {
         &voxelized.solid_owner,
         &voxelized.owner_object_ids,
         closed_tunnel_bindings(),
+        Some(&reference),
     )
     .expect("primitive ownership must reach a valid generated SU2 case");
 
@@ -278,6 +297,7 @@ fn generated_primitive_body_marker_runs_through_su2_850() {
     assert_volume_close(audit.total_volume, 124.0);
     assert_eq!(audit.marker_triangle_counts[&BoundaryMarkerId(7)], 12);
     assert_eq!(generated.bundle.marker_bindings.len(), 7);
+    assert_explicit_reference(&generated.bundle.config_text);
     let body_binding = generated
         .bundle
         .marker_bindings
