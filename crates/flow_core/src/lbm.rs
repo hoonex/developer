@@ -131,6 +131,11 @@ impl CpuLbm {
         self.steps
     }
 
+    /// Lattice-unit kinematic viscosity for the D3Q19 BGK kernel.
+    pub fn lattice_kinematic_viscosity(&self) -> f32 {
+        (1.0 / self.omega - 0.5) / 3.0
+    }
+
     pub fn set_solid(&mut self, xyz: [usize; 3], solid: bool) {
         let i = self.index(xyz);
         self.solid[i] = solid;
@@ -180,16 +185,38 @@ impl CpuLbm {
     /// Advance one D3Q19 BGK step. Outer boundaries are periodic in this reference kernel.
     /// Production domains will expose explicit open/inlet/outlet boundary policies.
     pub fn step(&mut self, velocity_regions: &[VelocityRegion]) {
-        self.step_impl(None, velocity_regions);
+        self.step_impl(None, velocity_regions, None);
     }
 
     /// Advance using a pre-rasterized arbitrary 3D target-velocity field.
     pub fn step_with_field(&mut self, field: &VelocityField) {
         assert_eq!(field.dims(), self.dims, "velocity-field dimensions must match solver");
-        self.step_impl(Some(field), &[]);
+        self.step_impl(Some(field), &[], None);
     }
 
-    fn step_impl(&mut self, field: Option<&VelocityField>, velocity_regions: &[VelocityRegion]) {
+    /// Advance using a spatially uniform lattice acceleration with Guo forcing.
+    ///
+    /// This is a low-level numerical primitive intended for canonical forcing/pressure-gradient
+    /// benchmarks and future physically defined source terms. Values are lattice acceleration,
+    /// not m/s², and are deliberately not silently clamped or mixed with target-velocity forcing.
+    pub fn step_with_uniform_acceleration(&mut self, acceleration: [f32; 3]) {
+        assert!(
+            acceleration.iter().all(|value| value.is_finite()),
+            "lattice acceleration must be finite"
+        );
+        self.step_impl(None, &[], Some(acceleration));
+    }
+
+    fn step_impl(
+        &mut self,
+        field: Option<&VelocityField>,
+        velocity_regions: &[VelocityRegion],
+        acceleration: Option<[f32; 3]>,
+    ) {
+        debug_assert!(
+            acceleration.is_none() || (field.is_none() && velocity_regions.is_empty()),
+            "Guo acceleration and target-velocity forcing are intentionally separate APIs"
+        );
         self.next.fill([0.0; Q]);
         let [nx, ny, nz] = self.dims;
 
@@ -204,6 +231,11 @@ impl CpuLbm {
                     }
 
                     let (rho, mut u) = macroscopic(&self.f[i]);
+                    if let Some(a) = acceleration {
+                        for axis in 0..3 {
+                            u[axis] += 0.5 * a[axis];
+                        }
+                    }
                     if let Some(target) = field.and_then(|f| f.target(p)) {
                         u = clamp_lattice_velocity(target);
                     } else if !velocity_regions.is_empty() {
@@ -226,6 +258,9 @@ impl CpuLbm {
                     let mut post = [0.0_f32; Q];
                     for q in 0..Q {
                         post[q] = self.f[i][q] - self.omega * (self.f[i][q] - eq[q]);
+                        if let Some(a) = acceleration {
+                            post[q] += guo_force_term(rho, u, a, q, self.omega);
+                        }
                     }
 
                     for q in 0..Q {
@@ -245,7 +280,7 @@ impl CpuLbm {
 
         std::mem::swap(&mut self.f, &mut self.next);
         self.steps += 1;
-        self.refresh_macroscopic();
+        self.refresh_macroscopic(acceleration);
     }
 
     pub fn snapshot(&self) -> FlowSnapshot {
@@ -264,13 +299,18 @@ impl CpuLbm {
             .fold(0.0, f32::max)
     }
 
-    fn refresh_macroscopic(&mut self) {
+    fn refresh_macroscopic(&mut self, acceleration: Option<[f32; 3]>) {
         for i in 0..self.f.len() {
             if self.solid[i] {
                 self.density[i] = 1.0;
                 self.velocity[i] = [0.0; 3];
             } else {
-                let (rho, u) = macroscopic(&self.f[i]);
+                let (rho, mut u) = macroscopic(&self.f[i]);
+                if let Some(a) = acceleration {
+                    for axis in 0..3 {
+                        u[axis] += 0.5 * a[axis];
+                    }
+                }
                 self.density[i] = rho;
                 self.velocity[i] = u;
             }
@@ -295,6 +335,22 @@ fn equilibrium(rho: f32, u: [f32; 3]) -> [f32; Q] {
         out[q] = W[q] * rho * (1.0 + 3.0 * cu + 4.5 * cu * cu - 1.5 * u2);
     }
     out
+}
+
+fn guo_force_term(rho: f32, u: [f32; 3], acceleration: [f32; 3], q: usize, omega: f32) -> f32 {
+    let c = [C[q][0] as f32, C[q][1] as f32, C[q][2] as f32];
+    let cu = c[0] * u[0] + c[1] * u[1] + c[2] * u[2];
+    let force = [
+        rho * acceleration[0],
+        rho * acceleration[1],
+        rho * acceleration[2],
+    ];
+    let mut projection = 0.0_f32;
+    for axis in 0..3 {
+        let basis = 3.0 * (c[axis] - u[axis]) + 9.0 * cu * c[axis];
+        projection += basis * force[axis];
+    }
+    (1.0 - 0.5 * omega) * W[q] * projection
 }
 
 fn macroscopic(f: &[f32; Q]) -> (f32, [f32; 3]) {
@@ -405,5 +461,11 @@ mod tests {
             solver.step_with_field(&field);
         }
         assert_eq!(solver.velocity_at([3, 3, 2]), [0.0; 3]);
+    }
+
+    #[test]
+    fn lattice_viscosity_matches_bgk_relation() {
+        let solver = CpuLbm::new([4, 4, 4], 0.8);
+        assert!((solver.lattice_kinematic_viscosity() - 0.1).abs() < 1.0e-6);
     }
 }
