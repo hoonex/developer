@@ -1,7 +1,11 @@
+mod generated_case;
 mod su2;
 mod su2_mesh;
 mod voxel_mesh;
 
+pub use generated_case::{
+    build_generated_su2_case_bundle, GeneratedSu2CaseBundle, GeneratedSu2CaseError,
+};
 pub use su2::{
     discover_su2, probe_su2_banner, run_su2_case, FlowModel, InletBoundary, Su2Case,
     Su2CaseError, Su2RunResult,
