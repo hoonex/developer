@@ -5,13 +5,14 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aeroforge_accurate_backend::{
-    discover_su2, prepare_generated_su2_case_directory, probe_su2_banner,
-    run_prepared_generated_su2_case, GeneratedSu2CaseBundle,
+    discover_su2, evaluate_su2_history_quality, prepare_generated_su2_case_directory,
+    probe_su2_banner, run_prepared_generated_su2_case, summarize_su2_history_csv,
+    GeneratedSu2CaseBundle, Su2HistoryGateStatus, Su2HistoryQuality,
 };
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
-use crate::accurate_prepare::{AccuratePrepareStatus, AccurateRuntime};
+use crate::accurate_prepare::{AccurateRuntime, AccurateSettings};
 use crate::model::{ProjectState, SolverMode};
 
 const SUPPORTED_SU2_BANNER_FRAGMENT: &str = "SU2 v8.5.0";
@@ -26,6 +27,21 @@ pub enum AccurateExecutionStatus {
     Failed,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct AccurateRunContract {
+    requested_iterations: u32,
+    residual_target_log10: f64,
+}
+
+impl From<&AccurateSettings> for AccurateRunContract {
+    fn from(settings: &AccurateSettings) -> Self {
+        Self {
+            requested_iterations: settings.max_iterations,
+            residual_target_log10: settings.convergence_log10,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct AccurateRunSummary {
     pub revision: u64,
@@ -33,6 +49,8 @@ pub struct AccurateRunSummary {
     pub su2_banner: String,
     pub exit_code: Option<i32>,
     pub history_tail: Option<String>,
+    pub history_quality: Option<Su2HistoryQuality>,
+    pub history_error: Option<String>,
     pub stdout_tail: String,
     pub stderr_tail: String,
 }
@@ -44,6 +62,13 @@ enum AccurateRunCompletion {
         message: String,
         summary: Option<AccurateRunSummary>,
     },
+}
+
+#[derive(Default)]
+struct HistoryEvidence {
+    tail: Option<String>,
+    quality: Option<Su2HistoryQuality>,
+    error: Option<String>,
 }
 
 #[derive(Resource)]
@@ -100,13 +125,11 @@ pub fn draw_accurate_execute_ui(
             });
             ui.small("Relative paths resolve from the AeroForge process working directory. Existing case directories are never overwritten.");
 
-            let fresh = prepared.status == AccuratePrepareStatus::Prepared
-                && prepared.bundle.is_some()
-                && prepared.prepared_revision == Some(state.revision);
+            let fresh = prepared.is_fresh_for(state.revision);
             if !fresh {
                 ui.colored_label(
                     egui::Color32::YELLOW,
-                    "Prepare the current scene revision before execution.",
+                    "Prepare the current scene revision and solver settings before execution.",
                 );
             }
 
@@ -120,9 +143,17 @@ pub fn draw_accurate_execute_ui(
                 .clicked();
 
             if run_clicked {
-                if let Some(bundle) = prepared.bundle.clone() {
+                if let (Some(bundle), Some(settings)) =
+                    (prepared.bundle.clone(), prepared.prepared_settings.as_ref())
+                {
                     let root = PathBuf::from(execution.case_root.trim());
-                    launch_run(&mut execution, root, state.revision, bundle);
+                    launch_run(
+                        &mut execution,
+                        root,
+                        state.revision,
+                        AccurateRunContract::from(settings),
+                        bundle,
+                    );
                 }
             }
 
@@ -139,7 +170,10 @@ pub fn draw_accurate_execute_ui(
                     ui.spinner();
                 }
                 AccurateExecutionStatus::Succeeded => {
-                    ui.colored_label(egui::Color32::GREEN, "Execution: SU2 process completed successfully");
+                    ui.colored_label(
+                        egui::Color32::GREEN,
+                        "Execution: SU2 process completed successfully",
+                    );
                 }
                 AccurateExecutionStatus::Failed => {
                     ui.colored_label(egui::Color32::RED, "Execution: failed");
@@ -152,8 +186,37 @@ pub fn draw_accurate_execute_ui(
                 ui.monospace(format!("Exit code: {:?}", run.exit_code));
                 ui.monospace(format!("Case: {}", run.case_directory.display()));
                 ui.monospace(format!("Run manifest: {RUN_MANIFEST_FILENAME}"));
+
+                if let Some(quality) = &run.history_quality {
+                    let worst_residual = quality
+                        .max_residual_log10
+                        .map(|value| format!("{value:.4}"))
+                        .unwrap_or_else(|| "n/a".into());
+                    let last_iteration = quality
+                        .last_iteration
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "n/a".into());
+                    let label = format!(
+                        "History gate: {} | last iter {last_iteration} | worst RMS {worst_residual} | target {:.4}",
+                        history_gate_name(quality.status),
+                        quality.residual_target_log10
+                    );
+                    let color = match quality.status {
+                        Su2HistoryGateStatus::ResidualTargetMet => egui::Color32::GREEN,
+                        Su2HistoryGateStatus::IterationBudgetReached
+                        | Su2HistoryGateStatus::Incomplete => egui::Color32::YELLOW,
+                        Su2HistoryGateStatus::NoHistoryRows => egui::Color32::RED,
+                    };
+                    ui.colored_label(color, label);
+                }
+                if let Some(error) = &run.history_error {
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        format!("History quality unavailable: {error}"),
+                    );
+                }
                 if let Some(history) = &run.history_tail {
-                    ui.collapsing("history.csv tail", |ui| {
+                    ui.collapsing("history CSV tail", |ui| {
                         ui.monospace(history);
                     });
                 }
@@ -168,7 +231,7 @@ pub fn draw_accurate_execute_ui(
                     });
                 }
                 ui.small(
-                    "A successful process run is execution evidence only. AeroForge does not yet promote these staircase-mesh outputs to engineering-valid aerodynamic coefficients.",
+                    "Process success and history quality are separate signals. Even a residual-target pass on the current staircase mesh is not an engineering-valid aerodynamic coefficient result.",
                 );
             }
             if let Some(error) = &execution.last_error {
@@ -210,6 +273,7 @@ fn launch_run(
     execution: &mut AccurateExecutionRuntime,
     root: PathBuf,
     revision: u64,
+    contract: AccurateRunContract,
     bundle: GeneratedSu2CaseBundle,
 ) {
     let sequence = execution.next_sequence;
@@ -223,7 +287,7 @@ fn launch_run(
     execution.last_error = None;
 
     thread::spawn(move || {
-        let result = execute_case(root, case_name, revision, bundle);
+        let result = execute_case(root, case_name, revision, contract, bundle);
         let mut slot = completion
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -235,6 +299,7 @@ fn execute_case(
     root: PathBuf,
     case_name: String,
     revision: u64,
+    contract: AccurateRunContract,
     bundle: GeneratedSu2CaseBundle,
 ) -> AccurateRunCompletion {
     let executable = match discover_su2() {
@@ -295,6 +360,8 @@ fn execute_case(
                     su2_banner: banner,
                     exit_code: None,
                     history_tail: None,
+                    history_quality: None,
+                    history_error: None,
                     stdout_tail: String::new(),
                     stderr_tail: String::new(),
                 }),
@@ -302,12 +369,15 @@ fn execute_case(
         }
     };
 
+    let history = read_history_evidence(&prepared.working_directory, contract);
     let summary = AccurateRunSummary {
         revision,
         case_directory: prepared.working_directory.clone(),
         su2_banner: banner.clone(),
         exit_code: run.exit_code,
-        history_tail: read_history_tail(&prepared.working_directory),
+        history_tail: history.tail,
+        history_quality: history.quality,
+        history_error: history.error,
         stdout_tail: tail_lines(&run.stdout, OUTPUT_TAIL_LINES),
         stderr_tail: tail_lines(&run.stderr, OUTPUT_TAIL_LINES),
     };
@@ -318,6 +388,9 @@ fn execute_case(
         &banner,
         run.success,
         run.exit_code,
+        contract,
+        summary.history_quality.as_ref(),
+        summary.history_error.as_deref(),
     ) {
         return AccurateRunCompletion::Failed {
             message: format!(
@@ -348,20 +421,63 @@ fn case_directory_name(revision: u64, sequence: u64, nonce: u128) -> String {
     format!("case_r{revision}_{sequence:04}_{nonce}")
 }
 
+fn history_gate_name(status: Su2HistoryGateStatus) -> &'static str {
+    match status {
+        Su2HistoryGateStatus::ResidualTargetMet => "residual_target_met",
+        Su2HistoryGateStatus::IterationBudgetReached => "iteration_budget_reached",
+        Su2HistoryGateStatus::Incomplete => "incomplete",
+        Su2HistoryGateStatus::NoHistoryRows => "no_history_rows",
+    }
+}
+
 fn write_run_manifest(
     case_directory: &Path,
     revision: u64,
     banner: &str,
     success: bool,
     exit_code: Option<i32>,
+    contract: AccurateRunContract,
+    history_quality: Option<&Su2HistoryQuality>,
+    history_error: Option<&str>,
 ) -> std::io::Result<()> {
     let exit_code = exit_code
         .map(|value| value.to_string())
         .unwrap_or_else(|| "none".into());
-    let text = format!(
-        "key\tvalue\nformat_version\t1\nscene_revision\t{revision}\nsu2_banner\t{}\nprocess_success\t{success}\nexit_code\t{exit_code}\n",
-        escape_manifest_value(banner)
+    let mut text = format!(
+        "key\tvalue\nformat_version\t2\nscene_revision\t{revision}\nsu2_banner\t{}\nprocess_success\t{success}\nexit_code\t{exit_code}\nhistory_requested_iterations\t{}\nhistory_residual_target_log10\t{}\n",
+        escape_manifest_value(banner),
+        contract.requested_iterations,
+        contract.residual_target_log10
     );
+
+    if let Some(quality) = history_quality {
+        text.push_str(&format!(
+            "history_gate\t{}\nhistory_last_iteration\t{}\nhistory_max_residual_log10\t{}\nhistory_residual_count\t{}\nhistory_all_residuals_finite\t{}\n",
+            history_gate_name(quality.status),
+            quality
+                .last_iteration
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".into()),
+            quality
+                .max_residual_log10
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".into()),
+            quality.residual_count,
+            quality.all_residuals_finite
+        ));
+    } else {
+        text.push_str(
+            "history_gate\tunavailable\nhistory_last_iteration\tnone\nhistory_max_residual_log10\tnone\nhistory_residual_count\tnone\nhistory_all_residuals_finite\tfalse\n",
+        );
+    }
+
+    text.push_str(&format!(
+        "history_error\t{}\n",
+        history_error
+            .map(escape_manifest_value)
+            .unwrap_or_else(|| "none".into())
+    ));
+
     fs::write(case_directory.join(RUN_MANIFEST_FILENAME), text)
 }
 
@@ -369,28 +485,66 @@ fn escape_manifest_value(value: &str) -> String {
     value.chars().flat_map(char::escape_default).collect()
 }
 
-fn read_history_tail(case_directory: &Path) -> Option<String> {
+fn find_history_path(case_directory: &Path) -> Option<PathBuf> {
     let direct = case_directory.join("history.csv");
     if direct.is_file() {
-        return fs::read_to_string(direct)
-            .ok()
-            .map(|text| tail_lines(&text, OUTPUT_TAIL_LINES));
+        return Some(direct);
     }
 
-    let history = fs::read_dir(case_directory)
+    let mut candidates = fs::read_dir(case_directory)
         .ok()?
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .find(|path| {
+        .filter(|path| {
             path.extension().and_then(|value| value.to_str()) == Some("csv")
                 && path
                     .file_stem()
                     .and_then(|value| value.to_str())
                     .is_some_and(|stem| stem.starts_with("history"))
-        })?;
-    fs::read_to_string(history)
-        .ok()
-        .map(|text| tail_lines(&text, OUTPUT_TAIL_LINES))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates.into_iter().next()
+}
+
+fn read_history_evidence(
+    case_directory: &Path,
+    contract: AccurateRunContract,
+) -> HistoryEvidence {
+    let Some(path) = find_history_path(case_directory) else {
+        return HistoryEvidence {
+            error: Some("no SU2 history CSV was found in the persisted case directory".into()),
+            ..Default::default()
+        };
+    };
+
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) => {
+            return HistoryEvidence {
+                error: Some(format!("failed to read {}: {error}", path.display())),
+                ..Default::default()
+            };
+        }
+    };
+    let tail = Some(tail_lines(&text, OUTPUT_TAIL_LINES));
+
+    match summarize_su2_history_csv(&text) {
+        Ok(summary) => HistoryEvidence {
+            tail,
+            quality: Some(evaluate_su2_history_quality(
+                &summary,
+                contract.requested_iterations,
+                contract.residual_target_log10,
+            )),
+            error: None,
+        },
+        Err(error) => HistoryEvidence {
+            tail,
+            quality: None,
+            error: Some(format!("failed to parse {}: {error}", path.display())),
+        },
+    }
 }
 
 fn tail_lines(text: &str, max_lines: usize) -> String {
@@ -414,6 +568,13 @@ mod tests {
         ))
     }
 
+    fn test_contract() -> AccurateRunContract {
+        AccurateRunContract {
+            requested_iterations: 100,
+            residual_target_log10: -6.0,
+        }
+    }
+
     #[test]
     fn case_directory_name_preserves_revision_sequence_and_nonce() {
         assert_eq!(
@@ -430,41 +591,77 @@ mod tests {
     }
 
     #[test]
-    fn history_tail_prefers_standard_history_csv() {
-        let root = temp_root("history-tail");
+    fn history_evidence_prefers_standard_history_csv_and_evaluates_quality() {
+        let root = temp_root("history-evidence");
         fs::create_dir_all(&root).unwrap();
-        let rows = (0..20)
-            .map(|index| format!("row-{index}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        fs::write(root.join("history.csv"), rows).unwrap();
+        let mut rows = vec!["\"Inner_Iter\",\"rms[P]\",\"CD\"".to_owned()];
+        rows.extend((0..20).map(|index| format!("{index},-7.0,1.0")));
+        fs::write(root.join("history.csv"), rows.join("\n")).unwrap();
+        fs::write(
+            root.join("history_secondary.csv"),
+            "\"Inner_Iter\",\"rms[P]\"\n0,-2.0\n",
+        )
+        .unwrap();
 
-        let tail = read_history_tail(&root).unwrap();
-        assert!(tail.starts_with("row-8"));
-        assert!(tail.ends_with("row-19"));
+        let evidence = read_history_evidence(&root, test_contract());
+        let quality = evidence.quality.unwrap();
+        assert_eq!(quality.status, Su2HistoryGateStatus::ResidualTargetMet);
+        assert_eq!(quality.last_iteration, Some(19));
+        let tail = evidence.tail.unwrap();
+        assert!(tail.starts_with("8,-7.0,1.0"));
+        assert!(tail.ends_with("19,-7.0,1.0"));
         assert_eq!(tail.lines().count(), OUTPUT_TAIL_LINES);
+        assert!(evidence.error.is_none());
 
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn run_manifest_persists_revision_runtime_and_exit_status() {
+    fn missing_history_is_explicitly_unavailable() {
+        let root = temp_root("missing-history");
+        fs::create_dir_all(&root).unwrap();
+        let evidence = read_history_evidence(&root, test_contract());
+        assert!(evidence.quality.is_none());
+        assert!(evidence.tail.is_none());
+        assert!(evidence.error.unwrap().contains("no SU2 history CSV"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn run_manifest_persists_runtime_and_history_quality() {
         let root = temp_root("run-manifest");
         fs::create_dir_all(&root).unwrap();
+        let history = summarize_su2_history_csv(
+            "\"Inner_Iter\",\"rms[P]\"\n0,-4.0\n1,-6.5\n",
+        )
+        .unwrap();
+        let quality = evaluate_su2_history_quality(&history, 100, -6.0);
         write_run_manifest(
             &root,
             81,
             "SU2 v8.5.0 \"Harrier\"\tvalidated",
             true,
             Some(0),
+            test_contract(),
+            Some(&quality),
+            None,
         )
         .unwrap();
 
         let text = fs::read_to_string(root.join(RUN_MANIFEST_FILENAME)).unwrap();
+        assert!(text.contains("format_version\t2"));
         assert!(text.contains("scene_revision\t81"));
         assert!(text.contains(r#"SU2 v8.5.0 \"Harrier\"\tvalidated"#));
         assert!(text.contains("process_success\ttrue"));
         assert!(text.contains("exit_code\t0"));
+        assert!(text.contains("history_requested_iterations\t100"));
+        assert!(text.contains("history_residual_target_log10\t-6"));
+        assert!(text.contains("history_gate\tresidual_target_met"));
+        assert!(text.contains("history_last_iteration\t1"));
+        assert!(text.contains("history_max_residual_log10\t-6.5"));
+        assert!(text.contains("history_residual_count\t1"));
+        assert!(text.contains("history_all_residuals_finite\ttrue"));
+        assert!(text.contains("history_error\tnone"));
 
         fs::remove_dir_all(root).unwrap();
     }
