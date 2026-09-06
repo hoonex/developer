@@ -8,7 +8,7 @@ use crate::model::{
 };
 use crate::simulation::{
     PreviewBackend, PreviewStatus, SimulationRuntime, CPU_PREVIEW_CELL_LIMIT,
-    GPU_PREVIEW_UPLOAD_CELL_LIMIT,
+    GPU_PREVIEW_UPLOAD_CELL_LIMIT, IMPORTED_PREVIEW_CELL_LIMIT,
 };
 
 pub fn draw_ui(
@@ -68,6 +68,15 @@ pub fn draw_ui(
                 {
                     state.selection = SelectedItem::Object(id);
                 }
+            }
+
+            if !state.imported_surfaces.is_empty() {
+                ui.separator();
+                ui.heading("Imported surfaces");
+                for object in &state.imported_surfaces {
+                    ui.label(format!("◇ {} · SceneObject {}", object.name, object.id));
+                }
+                ui.small("Imported-surface transforms and deletion are available in the Surface geometry import window.");
             }
 
             ui.separator();
@@ -349,6 +358,14 @@ pub fn draw_ui(
                 }
                 _ => {}
             }
+            if !state.imported_surfaces.is_empty() && cells > IMPORTED_PREVIEW_CELL_LIMIT {
+                ui.colored_label(
+                    egui::Color32::YELLOW,
+                    format!(
+                        "Imported-surface preview rasterization is blocked above {IMPORTED_PREVIEW_CELL_LIMIT} cells. The grid is never silently reduced."
+                    ),
+                );
+            }
 
             let scaling = runtime.physical_scaling_report(&state);
             ui.collapsing("Physical scaling diagnostics", |ui| {
@@ -431,6 +448,14 @@ pub fn draw_ui(
             ui.monospace(format!("Solid cells: {}", runtime.solid_cells));
             ui.monospace(format!("Forced cells: {}", runtime.active_forcing_cells));
             ui.monospace(format!("Max lattice speed: {:.5}", runtime.max_lattice_speed));
+            if let Some(error) = &runtime.geometry_error {
+                let color = if runtime.status == PreviewStatus::BlockedGeometry {
+                    egui::Color32::RED
+                } else {
+                    egui::Color32::YELLOW
+                };
+                ui.colored_label(color, format!("Geometry preparation: {error}"));
+            }
 
             match runtime.backend {
                 PreviewBackend::CpuReference => {
@@ -477,10 +502,21 @@ pub fn draw_ui(
                         "GPU preview request was blocked by the explicit host-side preparation budget.",
                     );
                 }
-                PreviewStatus::AccurateSolverPending => {
+                PreviewStatus::BlockedGeometryBudget => {
                     ui.colored_label(
                         egui::Color32::YELLOW,
-                        "SU2 adapter foundation exists, but mesh generation and in-app accurate-case execution are not wired yet.",
+                        "Imported-surface preview uses the audited cell-center staircase rasterizer and is blocked by its explicit preparation budget at this grid size.",
+                    );
+                }
+                PreviewStatus::BlockedGeometry => {
+                    ui.colored_label(
+                        egui::Color32::RED,
+                        "Preview geometry failed closed. Imported surfaces must pass the same closed-surface audit used by generated SU2 preparation.",
+                    );
+                }
+                PreviewStatus::AccurateSolverPending => {
+                    ui.label(
+                        "Accurate mode is selected, so native preview stepping is paused. Prepare the generated case and launch SU2 only through the separate explicit accurate-mode actions.",
                     );
                 }
                 _ => {}
@@ -491,7 +527,14 @@ pub fn draw_ui(
         ui.horizontal(|ui| {
             ui.label(if state.running { "● Solving" } else { "○ Idle" });
             ui.separator();
-            ui.label(format!("{} geometry objects", state.objects.len()));
+            ui.label(format!(
+                "{} geometry objects",
+                state.objects.len() + state.imported_surfaces.len()
+            ));
+            if !state.imported_surfaces.is_empty() {
+                ui.separator();
+                ui.label(format!("{} imported", state.imported_surfaces.len()));
+            }
             ui.separator();
             ui.label(format!("{} wind sources", state.wind_sources.len()));
             ui.separator();
