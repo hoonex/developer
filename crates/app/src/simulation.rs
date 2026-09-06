@@ -42,6 +42,9 @@ pub struct SimulationRuntime {
     forcing: Option<VelocityField>,
     prepared_revision: u64,
     prepared_backend: PreviewBackend,
+    /// Compact owner label N maps to `solid_owner_object_ids[N - 1]`.
+    /// The vector is sorted by stable SceneObject.id and is rebuilt with scene geometry.
+    solid_owner_object_ids: Vec<u64>,
     pub backend: PreviewBackend,
     pub status: PreviewStatus,
     pub steps_per_frame: u32,
@@ -60,6 +63,7 @@ impl Default for SimulationRuntime {
             forcing: None,
             prepared_revision: 0,
             prepared_backend: PreviewBackend::CpuReference,
+            solid_owner_object_ids: Vec::new(),
             backend: PreviewBackend::CpuReference,
             status: PreviewStatus::Idle,
             steps_per_frame: 1,
@@ -78,6 +82,7 @@ impl SimulationRuntime {
         self.solver = None;
         self.forcing = None;
         self.prepared_revision = 0;
+        self.solid_owner_object_ids.clear();
         self.status = PreviewStatus::Idle;
         self.active_forcing_cells = 0;
         self.solid_cells = 0;
@@ -92,6 +97,21 @@ impl SimulationRuntime {
 
     pub fn dims(&self) -> Option<[usize; 3]> {
         self.solver.as_ref().map(CpuLbm::dims)
+    }
+
+    /// Last CPU-reference lattice force for one stable scene object ID.
+    /// Returns None when the object is not part of the current rasterization or when the active
+    /// backend has no CPU solver. This remains a momentum-exchange diagnostic, not engineering Cd/Cl.
+    pub fn solid_force_lattice_for_object(&self, object_id: u64) -> Option<[f32; 3]> {
+        let owner_index = self.solid_owner_object_ids.binary_search(&object_id).ok()?;
+        let owner = u32::try_from(owner_index + 1).ok()?;
+        self.solver
+            .as_ref()
+            .map(|solver| solver.solid_force_lattice_for_owner(owner))
+    }
+
+    pub fn solid_owner_object_ids(&self) -> &[u64] {
+        &self.solid_owner_object_ids
     }
 
     pub fn physical_scaling_report(&self, state: &ProjectState) -> PhysicalScalingReport {
@@ -175,6 +195,7 @@ fn rebuild_runtime(
     runtime.prepared_backend = runtime.backend;
     runtime.solver = None;
     runtime.forcing = None;
+    runtime.solid_owner_object_ids.clear();
     runtime.active_forcing_cells = 0;
     runtime.solid_cells = 0;
     runtime.max_source_speed_mps = 0.0;
@@ -218,10 +239,11 @@ fn rebuild_runtime(
         return;
     }
 
-    let solid_mask = rasterize_solids(state, dims);
-    runtime.solid_cells = solid_mask.iter().filter(|&&solid| solid).count();
+    let solids = rasterize_solids(state, dims);
+    runtime.solid_cells = solids.owners.iter().filter(|&&owner| owner != 0).count();
+    runtime.solid_owner_object_ids = solids.owner_object_ids.clone();
     let (forcing, packed_forcing, max_source_speed_mps, lattice_velocity_scale) =
-        rasterize_wind_sources(state, dims, &solid_mask);
+        rasterize_wind_sources(state, dims, &solids.owners);
     runtime.active_forcing_cells = forcing.active_cells();
     runtime.max_source_speed_mps = max_source_speed_mps;
     runtime.lattice_velocity_scale = lattice_velocity_scale;
@@ -237,15 +259,16 @@ fn rebuild_runtime(
             solver
                 .set_boundary_policy(boundary.cpu_policy)
                 .expect("validated preview boundary preset must map to a valid CPU policy");
-            solver.set_solid_mask(&solid_mask);
+            solver.set_solid_owner_mask(&solids.owners);
             runtime.forcing = Some(forcing);
             runtime.solver = Some(solver);
             runtime.status = PreviewStatus::Ready;
         }
         PreviewBackend::GpuCompute => {
-            let gpu_solid = solid_mask
+            let gpu_solid = solids
+                .owners
                 .iter()
-                .map(|&solid| if solid { 1_u32 } else { 0_u32 })
+                .map(|&owner| if owner != 0 { 1_u32 } else { 0_u32 })
                 .collect::<Vec<_>>();
             gpu_request.configure_domain(
                 state.revision,
@@ -386,25 +409,56 @@ fn max_preview_speed_mps(state: &ProjectState) -> f32 {
     }
 }
 
-fn rasterize_solids(state: &ProjectState, dims: [usize; 3]) -> Vec<bool> {
+#[derive(Debug, PartialEq, Eq)]
+struct SolidRasterization {
+    owners: Vec<u32>,
+    /// Label N maps to `owner_object_ids[N - 1]`.
+    owner_object_ids: Vec<u64>,
+}
+
+fn rasterize_solids(state: &ProjectState, dims: [usize; 3]) -> SolidRasterization {
     let cells = dims[0] * dims[1] * dims[2];
-    let mut mask = vec![false; cells];
+    let mut owners = vec![0_u32; cells];
+    let mut ordered_objects = state.objects.iter().collect::<Vec<_>>();
+    ordered_objects.sort_by_key(|object| object.id);
+    assert!(
+        ordered_objects.len() < u32::MAX as usize,
+        "scene contains too many geometry objects for compact u32 ownership labels"
+    );
+    debug_assert!(
+        ordered_objects.windows(2).all(|pair| pair[0].id != pair[1].id),
+        "SceneObject ids must be unique"
+    );
+    let owner_object_ids = ordered_objects.iter().map(|object| object.id).collect::<Vec<_>>();
+
     for z in 0..dims[2] {
         for y in 0..dims[1] {
             for x in 0..dims[0] {
-                let world = cell_center_world([x, y, z], dims, state.simulation.domain_size_m);
-                let solid = state.objects.iter().any(|object| object_contains(object, world));
-                mask[index(dims, [x, y, z])] = solid;
+                let p = [x, y, z];
+                let world = cell_center_world(p, dims, state.simulation.domain_size_m);
+                // Deterministic overlap policy: the lowest stable SceneObject.id owns a voxel.
+                // Object vector order therefore cannot change momentum-exchange provenance.
+                if let Some(owner_index) = ordered_objects
+                    .iter()
+                    .position(|object| object_contains(object, world))
+                {
+                    owners[index(dims, p)] = u32::try_from(owner_index + 1)
+                        .expect("scene-object owner index was bounded above");
+                }
             }
         }
     }
-    mask
+
+    SolidRasterization {
+        owners,
+        owner_object_ids,
+    }
 }
 
 fn rasterize_wind_sources(
     state: &ProjectState,
     dims: [usize; 3],
-    solid_mask: &[bool],
+    solid_owners: &[u32],
 ) -> (VelocityField, Vec<[f32; 4]>, f32, f32) {
     let max_source_speed_mps = max_preview_speed_mps(state);
 
@@ -427,7 +481,7 @@ fn rasterize_wind_sources(
             for x in 0..dims[0] {
                 let p = [x, y, z];
                 let i = index(dims, p);
-                if solid_mask[i] {
+                if solid_owners[i] != 0 {
                     continue;
                 }
                 let world = cell_center_world(p, dims, state.simulation.domain_size_m);
@@ -537,6 +591,17 @@ mod tests {
     use super::*;
     use crate::model::{PreviewBoundaryPreset, SimulationSettings, SolverMode};
 
+    fn test_box(id: u64, position: Vec3, scale: Vec3) -> SceneObject {
+        SceneObject {
+            id,
+            name: format!("box-{id}"),
+            kind: PrimitiveKind::Box,
+            position,
+            rotation_deg: Vec3::ZERO,
+            scale,
+        }
+    }
+
     #[test]
     fn rotated_box_contains_expected_point() {
         let object = SceneObject {
@@ -549,6 +614,43 @@ mod tests {
         };
         assert!(object_contains(&object, Vec3::new(0.5, 0.0, -0.5)));
         assert!(!object_contains(&object, Vec3::new(1.5, 0.0, 1.5)));
+    }
+
+    #[test]
+    fn solid_overlap_owner_is_lowest_stable_object_id() {
+        let mut state = ProjectState::default();
+        state.simulation.domain_size_m = Vec3::new(2.0, 2.0, 2.0);
+        state.simulation.grid = [2, 2, 2];
+        state.objects = vec![
+            test_box(9, Vec3::new(0.0, 1.0, 0.0), Vec3::splat(4.0)),
+            test_box(3, Vec3::new(0.0, 1.0, 0.0), Vec3::splat(4.0)),
+        ];
+
+        let first = rasterize_solids(&state, [2, 2, 2]);
+        assert_eq!(first.owner_object_ids, vec![3, 9]);
+        assert!(first.owners.iter().all(|&owner| owner == 1));
+
+        state.objects.swap(0, 1);
+        let reordered = rasterize_solids(&state, [2, 2, 2]);
+        assert_eq!(reordered, first);
+    }
+
+    #[test]
+    fn runtime_maps_compact_owner_force_back_to_scene_object_id() {
+        let dims = [10, 8, 4];
+        let mut owners = vec![0_u32; dims[0] * dims[1] * dims[2]];
+        owners[index(dims, [5, 4, 2])] = 1;
+        let mut solver = CpuLbm::new(dims, 0.8);
+        solver.set_solid_owner_mask(&owners);
+        solver.set_uniform_velocity([0.03, 0.0, 0.0]);
+        solver.step(&[]);
+
+        let mut runtime = SimulationRuntime::default();
+        runtime.solid_owner_object_ids = vec![42];
+        runtime.solver = Some(solver);
+        let force = runtime.solid_force_lattice_for_object(42).unwrap();
+        assert!(force[0] > 0.0, "expected positive object drag diagnostic: {force:?}");
+        assert_eq!(runtime.solid_force_lattice_for_object(999), None);
     }
 
     #[test]
@@ -582,8 +684,8 @@ mod tests {
             next_id: 2,
         };
         let dims = [8, 4, 8];
-        let solid = vec![false; dims[0] * dims[1] * dims[2]];
-        let (field, packed, _, _) = rasterize_wind_sources(&state, dims, &solid);
+        let solid_owners = vec![0_u32; dims[0] * dims[1] * dims[2]];
+        let (field, packed, _, _) = rasterize_wind_sources(&state, dims, &solid_owners);
         assert!(field.active_cells() > 0);
         let target = field.target([4, 2, 4]).unwrap();
         assert!(target[2].abs() > target[0].abs());
@@ -645,8 +747,8 @@ mod tests {
         state.simulation.preview_inlet_speed_mps = 20.0;
         state.wind_sources[0].speed_mps = 10.0;
         let dims = state.simulation.grid.map(|n| n as usize);
-        let solid = vec![false; dims[0] * dims[1] * dims[2]];
-        let (_, _, max_speed, scale) = rasterize_wind_sources(&state, dims, &solid);
+        let solid_owners = vec![0_u32; dims[0] * dims[1] * dims[2]];
+        let (_, _, max_speed, scale) = rasterize_wind_sources(&state, dims, &solid_owners);
         assert_eq!(max_speed, 20.0);
         assert!((scale - TARGET_MAX_LATTICE_SPEED / 20.0).abs() < 1.0e-7);
         assert!(
@@ -662,8 +764,8 @@ mod tests {
         state.simulation.preview_inlet_speed_mps = 20.0;
         state.wind_sources[0].speed_mps = 10.0;
         let dims = state.simulation.grid.map(|n| n as usize);
-        let solid = vec![false; dims[0] * dims[1] * dims[2]];
-        let (_, _, max_speed, scale) = rasterize_wind_sources(&state, dims, &solid);
+        let solid_owners = vec![0_u32; dims[0] * dims[1] * dims[2]];
+        let (_, _, max_speed, scale) = rasterize_wind_sources(&state, dims, &solid_owners);
         assert_eq!(max_speed, 20.0);
         assert!((scale - TARGET_MAX_LATTICE_SPEED / 20.0).abs() < 1.0e-7);
     }
