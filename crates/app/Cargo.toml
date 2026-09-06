@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 aeroforge-accurate-backend = { path = "../accurate_backend" }
 aeroforge-flow-core = { path = "../flow_core" }
+aeroforge-geometry-core = { path = "../geometry_core" }
 aeroforge-volume-core = { path = "../volume_core" }
 bevy = { version = "0.19.1", features = ["mesh_picking"] }
 bevy_egui = "0.40.1"
