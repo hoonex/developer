@@ -69,3 +69,5 @@ jobs:
         run: cargo run -p aeroforge-gpu-smoke --bin aeroforge-gpu-smoke
       - name: Validate NEQ open-boundary GPU parity
         run: cargo run -p aeroforge-gpu-smoke --bin open_boundary
+      - name: Validate free-stream far-field GPU parity
+        run: cargo run -p aeroforge-gpu-smoke --bin far_field
