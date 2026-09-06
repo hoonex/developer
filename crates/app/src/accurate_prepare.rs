@@ -1,16 +1,16 @@
 use std::collections::BTreeSet;
 
 use aeroforge_accurate_backend::{
-    build_voxel_generated_su2_case_with_reference, scene_object_wall_tag,
-    voxelize_scene_primitives, BoundaryRole, BoundarySource, DomainAxis, DomainSide, FlowModel,
-    GeneratedSu2CaseBundle, InletBoundary, Su2Case, Su2CoefficientReference, Su2MarkerBinding,
-    VoxelFluidDomainSpec, VoxelPrimitiveKind, VoxelSolidPrimitive,
+    build_voxel_generated_su2_case_with_reference, scene_object_wall_tag, BoundaryRole,
+    BoundarySource, DomainAxis, DomainSide, FlowModel, GeneratedSu2CaseBundle, InletBoundary,
+    Su2Case, Su2CoefficientReference, Su2MarkerBinding, VoxelFluidDomainSpec,
 };
 use aeroforge_volume_core::{BlockBoundaryMarkers, BoundaryMarkerId};
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
-use crate::model::{rotation_from_degrees, PrimitiveKind, ProjectState, SolverMode};
+use crate::accurate_scene_geometry::voxelize_project_geometry_for_accurate;
+use crate::model::{ProjectState, SolverMode};
 
 pub const ACCURATE_PREPARE_CELL_LIMIT: u64 = 200_000;
 
@@ -118,6 +118,9 @@ pub fn draw_accurate_prepare_ui(
             );
             ui.small(
                 "The current generated mesh is a Cartesian staircase tetra mesh. It preserves boundary/object provenance but is not yet a body-fitted engineering-quality mesh.",
+            );
+            ui.small(
+                "Imported surfaces must pass the closed-surface accurate audit before they are rasterized into the same staircase ownership field as analytic primitives.",
             );
             ui.small(
                 "Local WindSource volumes/nozzles are not translated to SU2 boundary conditions yet; this case uses the dedicated inlet setting below.",
@@ -332,34 +335,7 @@ fn prepare_from_state(
         outer_markers,
     };
 
-    let primitives = state
-        .objects
-        .iter()
-        .map(|object| {
-            let orientation = rotation_from_degrees(object.rotation_deg).to_array();
-            VoxelSolidPrimitive {
-                scene_object_id: object.id,
-                kind: match object.kind {
-                    PrimitiveKind::Box => VoxelPrimitiveKind::Box,
-                    PrimitiveKind::Sphere => VoxelPrimitiveKind::Sphere,
-                    PrimitiveKind::Cylinder => VoxelPrimitiveKind::CylinderY,
-                },
-                center: [
-                    object.position.x as f64,
-                    object.position.y as f64,
-                    object.position.z as f64,
-                ],
-                orientation_xyzw: orientation.map(|value| value as f64),
-                size: [
-                    object.scale.x as f64,
-                    object.scale.y as f64,
-                    object.scale.z as f64,
-                ],
-            }
-        })
-        .collect::<Vec<_>>();
-    let voxelized = voxelize_scene_primitives(domain, &primitives)
-        .map_err(|error| error.to_string())?;
+    let voxelized = voxelize_project_geometry_for_accurate(state, domain)?;
 
     let active_owner_labels = voxelized
         .solid_owner
@@ -485,6 +461,19 @@ fn closed_wind_tunnel_bindings() -> Vec<Su2MarkerBinding> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aeroforge_geometry_core::SurfaceMesh;
+
+    fn imported_tetra_surface() -> SurfaceMesh {
+        SurfaceMesh {
+            positions: vec![
+                [0.0, 0.0, 0.0],
+                [2.0, 0.0, 0.0],
+                [0.0, 2.0, 0.0],
+                [0.0, 0.0, 2.0],
+            ],
+            triangles: vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
+        }
+    }
 
     #[test]
     fn small_scene_prepares_closed_tunnel_with_object_provenance_and_reference() {
@@ -510,6 +499,53 @@ mod tests {
                         scene_object_id: 1,
                     }
         }));
+    }
+
+    #[test]
+    fn imported_surface_prepares_with_stable_scene_provenance() {
+        let mut state = ProjectState::default();
+        state.objects.clear();
+        state.simulation.mode = SolverMode::Accurate;
+        state.simulation.domain_size_m = Vec3::new(4.0, 4.0, 4.0);
+        state.simulation.grid = [4, 4, 4];
+        let imported_id = state.add_imported_surface("tetra.obj", imported_tetra_surface());
+        state.imported_surfaces[0].position = Vec3::new(-1.0, 1.0, -1.0);
+        state.touch();
+
+        let (bundle, summary) = prepare_from_state(&state, &AccurateSettings::default()).unwrap();
+
+        assert!(summary.solid_cells > 0);
+        assert_eq!(summary.active_body_markers, 1);
+        assert!(bundle
+            .config_text
+            .contains(&format!("MARKER_MONITORING= ( body_{imported_id} )")));
+        assert!(bundle
+            .mesh_text
+            .contains(&format!("MARKER_TAG= body_{imported_id}")));
+        assert!(bundle.marker_bindings.iter().any(|binding| {
+            binding.tag == format!("body_{imported_id}")
+                && binding.source
+                    == BoundarySource::SceneObject {
+                        scene_object_id: imported_id,
+                    }
+        }));
+    }
+
+    #[test]
+    fn invalid_imported_surface_fails_preparation_closed() {
+        let mut state = ProjectState::default();
+        state.objects.clear();
+        state.simulation.grid = [4, 4, 4];
+        state.add_imported_surface(
+            "open.obj",
+            SurfaceMesh {
+                positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                triangles: vec![[0, 1, 2]],
+            },
+        );
+
+        let error = prepare_from_state(&state, &AccurateSettings::default()).unwrap_err();
+        assert!(error.contains("failed accurate audit"));
     }
 
     #[test]
