@@ -84,7 +84,21 @@ jobs:
           echo "SU2_RUN=$(dirname "$SU2_CFD")" >> "$GITHUB_ENV"
           echo "OMP_NUM_THREADS=1" >> "$GITHUB_ENV"
       - name: Run AeroForge two-body surface diagnostic evidence
-        run: cargo test -p aeroforge-accurate-backend --test su2_multi_body_generated -- --ignored --nocapture
+        shell: bash
+        run: |
+          set +e
+          cargo test -p aeroforge-accurate-backend --test su2_multi_body_generated -- --ignored --nocapture
+          status=$?
+          set -e
+          if [[ $status -ne 0 ]]; then
+            echo "AEROFORGE_SU2_HISTORY_EVIDENCE_BEGIN"
+            while IFS= read -r history; do
+              echo "AEROFORGE_SU2_HISTORY_FILE=$history"
+              cat "$history"
+            done < <(find /tmp "$RUNNER_TEMP" -type f -name 'history*.csv' -path '*aeroforge-generated-su2-multi-body-*' -print 2>/dev/null | sort -u)
+            echo "AEROFORGE_SU2_HISTORY_EVIDENCE_END"
+          fi
+          exit "$status"
 
   app-check:
     runs-on: windows-latest
