@@ -255,6 +255,9 @@ pub fn draw_ui(
                     PreviewBoundaryPreset::WindTunnelX => {
                         "Wind tunnel: X inlet → X pressure outlet"
                     }
+                    PreviewBoundaryPreset::ExternalFlowX => {
+                        "External flow: X open / Y free-stream"
+                    }
                 })
                 .show_ui(ui, |ui| {
                     dirty |= ui
@@ -278,24 +281,48 @@ pub fn draw_ui(
                             "Wind tunnel: X inlet → X pressure outlet",
                         )
                         .changed();
-                });
-            if state.simulation.preview_boundary == PreviewBoundaryPreset::WindTunnelX {
-                dirty |= ui
-                    .add(
-                        egui::Slider::new(
-                            &mut state.simulation.preview_inlet_speed_mps,
-                            0.0..=120.0,
+                    dirty |= ui
+                        .selectable_value(
+                            &mut state.simulation.preview_boundary,
+                            PreviewBoundaryPreset::ExternalFlowX,
+                            "External flow: X open / Y free-stream",
                         )
-                        .text("Tunnel inlet m/s"),
-                    )
-                    .changed();
-                ui.small(
-                    "Validated NEQ pair: x-min prescribes +X velocity, x-max prescribes lattice density ρ=1.0. Y/Z remain periodic. Local 3D wind sources may still add jets/forcing inside the domain.",
-                );
-            } else {
-                ui.small(
-                    "Periodic and channel presets are canonical preview boundaries. Channel mode adds stationary Y walls while X/Z remain periodic.",
-                );
+                        .changed();
+                });
+            match state.simulation.preview_boundary {
+                PreviewBoundaryPreset::WindTunnelX => {
+                    dirty |= ui
+                        .add(
+                            egui::Slider::new(
+                                &mut state.simulation.preview_inlet_speed_mps,
+                                0.0..=120.0,
+                            )
+                            .text("Tunnel inlet m/s"),
+                        )
+                        .changed();
+                    ui.small(
+                        "Validated NEQ pair: x-min prescribes +X velocity, x-max prescribes lattice density ρ=1.0. Y/Z remain periodic. Local 3D wind sources may still add jets/forcing inside the domain.",
+                    );
+                }
+                PreviewBoundaryPreset::ExternalFlowX => {
+                    dirty |= ui
+                        .add(
+                            egui::Slider::new(
+                                &mut state.simulation.preview_inlet_speed_mps,
+                                0.0..=120.0,
+                            )
+                            .text("Free-stream m/s"),
+                        )
+                        .changed();
+                    ui.small(
+                        "External-flow preview: x-min velocity inlet, x-max ρ=1.0 pressure outlet, y-min/y-max prescribed free-stream NEQ faces, z periodic. This reduces transverse periodic-image coupling but is not claimed to be a non-reflecting/CBC boundary.",
+                    );
+                }
+                PreviewBoundaryPreset::Periodic | PreviewBoundaryPreset::ChannelYNoSlip => {
+                    ui.small(
+                        "Periodic and channel presets are canonical preview boundaries. Channel mode adds stationary Y walls while X/Z remain periodic.",
+                    );
+                }
             }
 
             let cells = state.simulation.cell_count();
@@ -416,12 +443,13 @@ pub fn draw_ui(
                     ui.monospace(format!("GPU moving mask: {}", gpu_request.moving_boundary_mask));
                     ui.monospace(format!("GPU velocity-inlet mask: {}", gpu_request.velocity_inlet_mask));
                     ui.monospace(format!("GPU pressure-outlet mask: {}", gpu_request.pressure_outlet_mask));
+                    ui.monospace(format!("GPU far-field mask: {}", gpu_request.far_field_mask));
                     ui.monospace(format!("GPU readback frames: {}", gpu_snapshot.frames_received));
                     ui.small(
                         "D3Q19 distributions stay in VRAM and ping-pong there. Only the sampled velocity vectors needed for viewport arrows are read back.",
                     );
                     ui.small(
-                        "Open faces use the validated two-stage step → NEQ face reconstruction path. No open-face dispatch is issued when both open masks are zero.",
+                        "Boundary reconstruction order is step → velocity/pressure NEQ → free-stream far-field NEQ → ping-pong flip. Stages with zero masks issue no dispatch.",
                     );
                     ui.small(
                         "The active graphics device storage-buffer limit is checked again when the GPU buffers are created; exceeding it does not silently reduce the grid.",
@@ -436,7 +464,7 @@ pub fn draw_ui(
                 ));
             }
             ui.small(
-                "Preview preserves relative source and tunnel speeds under one shared mapping. It does not claim physical Reynolds similarity when the scaling diagnostic rejects it.",
+                "Preview preserves relative source, tunnel and free-stream speeds under one shared mapping. It does not claim physical Reynolds similarity when the scaling diagnostic rejects it.",
             );
 
             match runtime.status {
