@@ -25,13 +25,15 @@ The interactive LBM preview is not engineering-validated merely because its CPU 
 | Planar Couette analytical profile | CPU reference | moving-wall linear profile + density / transverse-flow bounds | GREEN |
 | Lid-driven cavity, Re=100 | CPU reference | Ghia et al. centerline data + steady-state / mass / quasi-2D checks | GREEN |
 | NEQ velocity-inlet / pressure-outlet plug flow | CPU reference | uniform-flow recovery + density + mass-flux + steady-state checks | GREEN |
+| Voxel-solid momentum exchange | CPU reference | rest-force zero + force direction under uniform flow | GREEN |
 | CPU ↔ GPU periodic parity | CPU + GPU | 4×4×4, solid + forcing, 3 steps, all sampled velocity/speed values | GREEN |
 | CPU ↔ GPU no-slip face parity | CPU + GPU | y-min/y-max face-mask bounce-back + solid + forcing | GREEN |
 | CPU ↔ GPU moving-wall parity | CPU + GPU | mixed stationary/moving faces + corner precedence + solid + forcing | GREEN |
 | CPU ↔ GPU open-boundary parity | CPU + GPU | two-stage NEQ velocity-inlet / pressure-outlet reconstruction | GREEN |
 | WindTunnelX app/runtime mapping | CPU + GPU + UI | one shared physical→lattice speed scale + identical x-open policy | GREEN |
-| Cylinder flow | Native preview | shedding regime, Strouhal/drag where regime and grid permit | PLANNED |
-| Grid convergence | Native preview | monitored observables vs resolution | PLANNED |
+| Cylinder shedding, Re=60 | Native preview | 10% blockage, wake-spectrum Strouhal + stability checks | GREEN |
+| Cylinder grid sensitivity | Native preview | D=8 → D=10 at fixed Re and 10% blockage | GREEN |
+| Grid convergence | Native preview | ≥3-level monitored observables vs resolution | PLANNED |
 | Upstream SU2 regression/tutorial | SU2 adapter | AeroForge translation reproduces upstream case | PLANNED |
 | NACA / external-flow reference | SU2 adapter | force coefficients + mesh/model sensitivity | PLANNED |
 
@@ -177,6 +179,79 @@ This establishes controlled implementation parity for the declared low-Mach NEQ 
 
 The project default remains the all-periodic preset, so existing scenes do not silently change boundary behavior.
 
+## Voxel-solid momentum-exchange contract
+
+`CpuLbm::solid_force_lattice()` reports the aggregate lattice force exerted by the fluid on stationary voxel solids during the most recent solver step. It sums only fluid→solid half-way bounce-back links using
+
+`F_solid = Σ 2 f_i* c_i`.
+
+Outer-domain wall reactions are deliberately excluded. If several scene objects share the same solid mask, the current API reports their combined force. Unit regressions require zero force at rest and a force aligned with +x when a stationary voxel solid is placed in uniform +x flow.
+
+This is a numerical force primitive, not an engineering coefficient claim. Force normalization, voxel geometry error, boundary influence, and grid convergence remain part of the external-flow validation burden.
+
+## Re=60 cylinder-shedding contract
+
+The first separated external-flow benchmark uses a quasi-2D circular cylinder with the validated x-open NEQ pair. The primary accepted observable is **vortex-shedding frequency**, measured from a transverse wake-velocity probe. Raw momentum-exchange lift is retained as a force diagnostic but is not used as the frequency detector because voxel-link force contains higher-frequency discretization content.
+
+The accepted baseline case is:
+
+- D3Q19 BGK;
+- `Re = 60`;
+- lattice inlet speed `U = 0.06`;
+- cylinder diameter `D = 8` lattice cells;
+- `tau = 0.524` from `nu = U D / Re`;
+- domain `96 × 80 × 2`;
+- cylinder center at `(3D, 5D)` in the x-y plane;
+- transverse blockage `D/H = 0.10`;
+- x-min velocity inlet / x-max `rho = 1.0` pressure outlet;
+- y/z periodic;
+- wake probe at `4D` downstream of the cylinder center;
+- a tiny deterministic transverse startup perturbation is applied for 12 steps only;
+- 5,000 settle steps + 6,000 sampled steps;
+- Hann-window spectral search over a deliberately broad `St = 0.05..0.65` interval rather than a narrow expected-frequency band.
+
+Acceptance requires measurable alternating lift, measurable wake transverse RMS, a dominant spectral peak with prominence `> 4`, `St` in the broad `0.11..0.18` low-Re shedding band, bounded density variation, finite speed, and only a broad drag sanity bound.
+
+GitHub Actions run #113 completed the full core, Windows app and GPU suite and reported:
+
+`AEROFORGE_CYLINDER_RE60=PASS grid=96x80x2 D=8 U=0.06 blockage=0.100 tau=0.524000 St=0.15350 period=868.62 spectral_prominence=17.45 wake_v_rms=0.020519 mean_Cd=1.9243 lift_amp=0.008020 max_rho_error=0.013267`
+
+An earlier exploratory `80 × 40 × 2`, `D = 8` case had **20% transverse blockage** and produced `St = 0.17550`, `mean_Cd = 2.2810`, and maximum density error `0.019762`. It was deliberately rejected as the canonical baseline even though it passed the broad numerical sanity thresholds. Reducing blockage to 10% moved `St`, drag and density variation in the expected free-cylinder direction.
+
+For reference, Williamson & Brown (1998), *Journal of Fluids and Structures* 12(8), DOI `10.1006/jfls.1998.0184`, give the two-term cylinder-wake relation
+
+`St = 0.2698 - 1.0271 / sqrt(Re)`,
+
+which evaluates to approximately `0.1372` at `Re = 60`. The AeroForge D=8 baseline therefore demonstrates the correct shedding regime and a credible frequency, but it is not treated as a converged free-cylinder solution.
+
+## Cylinder grid-sensitivity evidence
+
+The cylinder test is parameterized so the expensive refinement evidence can be run explicitly without adding it to every PR. GitHub Actions run #117 executed both the normal D=8 baseline and a one-shot ignored D=10 refinement. The refinement preserves:
+
+- `Re = 60` and `U = 0.06`;
+- 10% transverse blockage;
+- geometrically similar streamwise placement (`x_c = 3D`, wake probe `x = 7D`, outlet `x = 12D`);
+- the same nondimensional settle/sample durations;
+- the same x-open and y/z-periodic boundary policy.
+
+D=10 refinement:
+
+- grid `120 × 100 × 2`;
+- `D = 10`;
+- `tau = 0.530` from the same Reynolds-number relation;
+- 6,250 settle + 7,500 sample steps;
+- `St = 0.15250`;
+- period `1092.90` steps;
+- spectral prominence `17.24`;
+- wake transverse RMS `0.017517`;
+- mean momentum-exchange `Cd = 1.8346`;
+- lift amplitude `0.008363`;
+- maximum density error `0.013591`.
+
+From D=8 → D=10, `St` changes only about **-0.65%**, while mean `Cd` changes about **-4.66%**. This is strong evidence that the shedding-frequency observable is becoming grid-stable at these resolutions. Drag is still materially resolution-sensitive and remains a diagnostic only. A two-level sensitivity check is not a formal asymptotic grid-convergence study; a third resolution and improved transverse far-field treatment remain required before preview force coefficients can be promoted.
+
+The D=10 test remains `#[ignore]` by default so routine CI keeps the cheaper D=8 regression. The one-shot CI invocation used to collect run #117 evidence was removed immediately afterward.
+
 ## GPU parity contract
 
 The GPU regression path:
@@ -194,7 +269,8 @@ Evidence:
 - run #41: stationary no-slip face parity with internal solid + forcing / max error `0.00000000`;
 - run #75: mixed stationary/moving faces, moving-corner precedence, internal solid + forcing / max error `0.00000000`;
 - run #93: NEQ open-boundary parity, 16×4×3 / 8 steps / 192 cells / max error `0.00000000`;
-- run #101: full core + Windows app + moving-wall GPU + NEQ GPU suite GREEN after desktop WindTunnelX integration.
+- run #101: full core + Windows app + moving-wall GPU + NEQ GPU suite GREEN after desktop WindTunnelX integration;
+- run #117: full app/GPU suite remained GREEN while the explicit D=10 cylinder sensitivity evidence was collected.
 
 These tests establish controlled implementation parity. They do not measure hardware-GPU performance or establish aerodynamic validation.
 
@@ -207,6 +283,8 @@ A result shown in the UI should only inherit claims supported by the relevant ev
 - the Poiseuille and Couette passes establish their declared low-Mach laminar canonical benchmarks only;
 - the Ghia Re=100 cavity pass establishes a canonical laminar vortical-flow benchmark, not external-aerodynamics accuracy;
 - the NEQ plug-flow and CPU↔GPU passes establish the declared open-boundary reconstruction only, not generic non-reflecting/far-field accuracy;
+- the Re=60 cylinder pass establishes controlled periodic shedding and a grid-stable Strouhal trend for the declared 10%-blockage setup, not a general free-field external-aerodynamics validation;
+- the momentum-exchange drag value remains diagnostic because D=8→D=10 still changes mean `Cd` by about 4.66%;
 - BGK physical-scaling warnings remain authoritative even when numerical regressions are GREEN;
-- preview force coefficients are not presented as engineering values until the relevant external-flow benchmarks and grid-convergence evidence exist;
+- preview force coefficients are not presented as engineering values until a third grid level, improved transverse far-field treatment, and suitable external-flow reference evidence exist;
 - accurate SU2 results retain solver version, mesh/config provenance, convergence history, geometry revision, and source-translation decisions.
