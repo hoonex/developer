@@ -22,8 +22,8 @@ The interactive LBM preview is not engineering-validated merely because its CPU 
 | BGK lattice viscosity relation | CPU reference | `nu = (tau - 0.5) / 3` | GREEN |
 | Explicit face-boundary policy | CPU reference | paired periodic axes + half-way no-slip bounce-back | GREEN |
 | Planar Poiseuille analytical profile | CPU reference | Guo body-force, RMSE/max-error/symmetry/transverse-velocity thresholds | GREEN |
-| CPU ↔ GPU tiny-grid parity | CPU + GPU | 4×4×4, solid + forcing, 3 steps, all sampled velocity/speed values | GREEN |
-| GPU no-slip face parity | CPU + GPU | same face-mask bounce-back semantics | IN PROGRESS |
+| CPU ↔ GPU periodic parity | CPU + GPU | 4×4×4, solid + forcing, 3 steps, all sampled velocity/speed values | GREEN |
+| CPU ↔ GPU no-slip face parity | CPU + GPU | y-min/y-max face-mask bounce-back + solid + forcing | GREEN |
 | Lid-driven cavity | Native preview | reference centerline velocities / vortical structure | PLANNED |
 | Cylinder flow | Native preview | shedding regime, Strouhal/drag where regime and grid permit | PLANNED |
 | Grid convergence | Native preview | monitored observables vs resolution | PLANNED |
@@ -33,6 +33,8 @@ The interactive LBM preview is not engineering-validated merely because its CPU 
 ## Boundary-policy contract
 
 The CPU reference now makes outer-domain behavior explicit instead of hard-coding wraparound. `BoundaryPolicy` supports paired periodic faces and stationary no-slip faces. A periodic face cannot be paired with a non-periodic face on the opposite side of the same axis. No-slip domain faces use half-way bounce-back in the streaming step, matching the same bounce-back convention used when a distribution would stream into a voxel solid.
+
+The exact WGSL used by the app mirrors this with a six-face no-slip bitmask in `params.control.y`. Bit values are x-min=1, x-max=2, y-min=4, y-max=8, z-min=16 and z-max=32; unset faces retain periodic wrapping.
 
 Velocity-inlet, pressure-outlet and open/convective faces are intentionally **not** represented by placeholder formulas yet; they remain numerical milestones requiring their own validation.
 
@@ -74,9 +76,9 @@ The dedicated `aeroforge-gpu-smoke` executable:
 - compares x/y/z velocity and speed against the CPU snapshot;
 - fails when the maximum absolute error exceeds the declared tolerance.
 
-GitHub Actions run #27 executed the periodic baseline on the DX12 `Microsoft Basic Render Driver` software adapter and reported `AEROFORGE_WGSL=PASS` and `AEROFORGE_GPU_PARITY=PASS steps=3 cells=64 max_error=0.00000000`. This proves controlled implementation parity across the CPU reference and actual wgpu compute path; it does not measure hardware-GPU performance or establish aerodynamic validation.
+GitHub Actions run #27 executed the periodic baseline on the DX12 `Microsoft Basic Render Driver` software adapter and reported `AEROFORGE_WGSL=PASS` and `AEROFORGE_GPU_PARITY=PASS steps=3 cells=64 max_error=0.00000000`.
 
-The WGSL kernel now also accepts a six-face no-slip bitmask in `params.control.y`; the dedicated smoke case is being extended to compare this wall path against the CPU `BoundaryPolicy` before the UI exposes boundary presets.
+GitHub Actions run #41 exercised the new y-min/y-max no-slip mask (`mask=12`) together with an internal voxel solid and target-velocity forcing. It reported `AEROFORGE_GPU_BOUNDARY_PARITY=PASS mask=12 steps=3 cells=64 max_error=0.00000000`. This proves controlled implementation parity for both periodic and currently implemented no-slip outer-domain streaming across the CPU reference and actual wgpu compute path; it does not measure hardware-GPU performance or establish aerodynamic validation.
 
 ## Claims policy
 
