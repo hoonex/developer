@@ -29,6 +29,8 @@ jobs:
             ${{ runner.os }}-cargo-
       - name: Test numerical and accurate-backend cores
         run: cargo test -p aeroforge-flow-core -p aeroforge-accurate-backend -- --nocapture
+      - name: Run one-shot D10 free-stream cylinder evidence
+        run: cargo test -p aeroforge-flow-core --test cylinder_far_field_grid cylinder_re60_far_field_d10_sensitivity -- --ignored --nocapture
 
   app-check:
     runs-on: windows-latest
