@@ -141,6 +141,8 @@ pub fn evaluate_su2_history_quality(
 
     let status = if summary.row_count == 0 {
         Su2HistoryGateStatus::NoHistoryRows
+    } else if !all_residuals_finite {
+        Su2HistoryGateStatus::Incomplete
     } else if residual_target_met {
         Su2HistoryGateStatus::ResidualTargetMet
     } else if iteration_budget_reached {
@@ -277,6 +279,32 @@ mod tests {
         let summary = summarize_su2_history_csv(text).unwrap();
         let quality = evaluate_su2_history_quality(&summary, 100, -6.0);
         assert_eq!(quality.status, Su2HistoryGateStatus::Incomplete);
+    }
+
+    #[test]
+    fn nonfinite_residual_does_not_pass_as_iteration_budget_completion() {
+        let text = r#""Inner_Iter","rms[P]"
+0,-2.0
+1,NaN
+"#;
+        let summary = summarize_su2_history_csv(text).unwrap();
+        let quality = evaluate_su2_history_quality(&summary, 2, -6.0);
+        assert_eq!(quality.status, Su2HistoryGateStatus::Incomplete);
+        assert!(!quality.all_residuals_finite);
+        assert_eq!(quality.max_residual_log10, None);
+    }
+
+    #[test]
+    fn history_without_rms_columns_is_incomplete() {
+        let text = r#""Inner_Iter","CD"
+0,1.2
+1,1.1
+"#;
+        let summary = summarize_su2_history_csv(text).unwrap();
+        let quality = evaluate_su2_history_quality(&summary, 2, -6.0);
+        assert_eq!(quality.status, Su2HistoryGateStatus::Incomplete);
+        assert_eq!(quality.residual_count, 0);
+        assert!(!quality.all_residuals_finite);
     }
 
     #[test]
