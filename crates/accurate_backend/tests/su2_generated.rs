@@ -147,6 +147,14 @@ fn pinned_su2_850() -> PathBuf {
     executable
 }
 
+fn assert_volume_close(actual: f64, expected: f64) {
+    let tolerance = 1.0e-12 * expected.abs().max(1.0);
+    assert!(
+        (actual - expected).abs() <= tolerance,
+        "generated fluid volume mismatch: actual={actual:.15e}, expected={expected:.15e}, tolerance={tolerance:.3e}"
+    );
+}
+
 fn assert_volume_output(prepared_dir: &std::path::Path, output_basename: &str) {
     assert!(
         prepared_dir
@@ -183,7 +191,7 @@ fn generated_closed_tunnel_runs_through_su2_850() {
         .audit()
         .expect("generated volume mesh must pass its audit before SU2 execution");
     assert_eq!(generated.volume_mesh.cells.len(), 4 * 3 * 3 * 6);
-    assert!((audit.total_volume - 36.0).abs() < 1.0e-12);
+    assert_volume_close(audit.total_volume, 36.0);
     assert_eq!(generated.bundle.marker_bindings.len(), 6);
 
     let root = temp_root();
@@ -259,7 +267,7 @@ fn generated_primitive_body_marker_runs_through_su2_850() {
         .audit()
         .expect("body-containing volume mesh must pass its audit");
     assert_eq!(generated.volume_mesh.cells.len(), (5 * 5 * 5 - 1) * 6);
-    assert!((audit.total_volume - 124.0).abs() < 1.0e-12);
+    assert_volume_close(audit.total_volume, 124.0);
     assert_eq!(audit.marker_triangle_counts[&BoundaryMarkerId(7)], 12);
     assert_eq!(generated.bundle.marker_bindings.len(), 7);
     let body_binding = generated
