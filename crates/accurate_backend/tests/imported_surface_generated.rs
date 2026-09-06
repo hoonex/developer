@@ -4,7 +4,7 @@ use aeroforge_accurate_backend::{
     BoundarySource, DomainAxis, DomainSide, FlowModel, InletBoundary, Su2Case,
     Su2CoefficientReference, Su2MarkerBinding, VoxelFluidDomainSpec,
 };
-use aeroforge_geometry_core::SurfaceMesh;
+use aeroforge_geometry_core::{import_obj, SurfaceMesh};
 use aeroforge_volume_core::{BlockBoundaryMarkers, BoundaryMarkerId};
 
 fn domain() -> VoxelFluidDomainSpec {
@@ -180,5 +180,68 @@ fn audited_imported_surface_reaches_staircase_su2_with_scene_provenance() {
         BoundarySource::SceneObject {
             scene_object_id: 42,
         }
+    );
+}
+
+#[test]
+fn obj_parser_composes_with_audit_and_generated_staircase_provenance() {
+    let obj = b"\
+v 1 1 1\n\
+v 3 1 1\n\
+v 1 3 1\n\
+v 1 1 3\n\
+f 1 3 2\n\
+f 1 2 4\n\
+f 1 4 3\n\
+f 2 3 4\n";
+    let imported = import_obj(obj).expect("tetra OBJ fixture must parse");
+    assert_eq!(imported.mesh, imported_tetra_surface());
+
+    let audited = audit_imported_surface_for_accurate_meshing(
+        42,
+        &imported.mesh,
+        AccurateImportedSurfacePolicy::default(),
+    )
+    .expect("parsed OBJ must satisfy the explicit closed-surface audit");
+    let voxelized = voxelize_audited_imported_surfaces(domain(), &[audited])
+        .expect("audited OBJ must rasterize into stable ownership");
+    assert_eq!(voxelized.owner_object_ids, vec![42]);
+    assert_eq!(voxelized.solid_cells, 1);
+
+    let reference = Su2CoefficientReference {
+        area_m2: 1.0,
+        length_m: 1.0,
+    };
+    let generated = build_voxel_generated_su2_case_with_reference(
+        &case(),
+        domain(),
+        &voxelized.solid_owner,
+        &voxelized.owner_object_ids,
+        domain_bindings(),
+        Some(&reference),
+    )
+    .expect("OBJ-derived ownership must reach the existing generated SU2 builder");
+
+    assert_eq!(generated.volume_mesh.cells.len(), 63 * 6);
+    let body = generated
+        .bundle
+        .marker_bindings
+        .iter()
+        .find(|binding| binding.tag == "body_42")
+        .expect("OBJ-derived body marker must be preserved");
+    assert_eq!(body.marker, BoundaryMarkerId(7));
+    assert_eq!(
+        body.source,
+        BoundarySource::SceneObject {
+            scene_object_id: 42,
+        }
+    );
+    assert_eq!(
+        generated
+            .bundle
+            .config_text
+            .lines()
+            .find(|line| line.starts_with("MARKER_MONITORING=")),
+        Some("MARKER_MONITORING= ( body_42 )")
     );
 }
