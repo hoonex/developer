@@ -29,10 +29,12 @@ The native LBM backend remains an interactive preview solver. GREEN numerical re
 | Free-stream-y D8/D10/D12 sensitivity | Native preview | GREEN evidence |
 | Fixed-D8 H/D=10/15/20 transverse sensitivity | Native preview | GREEN evidence |
 | Fixed-D8 streamwise extent/split sensitivity | Native preview | GREEN evidence |
+| Best-domain H20/6D-in/9D-out D8/D10/D12 sensitivity | Native preview | GREEN evidence |
 | Formal grid convergence | Native preview | **NOT ESTABLISHED** |
 | Formal domain convergence | Native preview | **NOT ESTABLISHED** |
 | Trusted external-cylinder reference agreement | Native preview | PARTIAL / NOT VALIDATED |
-| Upstream SU2 known-case cross-validation | SU2 adapter | PLANNED |
+| Pinned upstream SU2 8.5.0 known-case | SU2 adapter | TEST HARNESS ADDED / RUNTIME PENDING |
+| AeroForge-generated-mesh SU2 cross-validation | SU2 adapter | PLANNED |
 
 ## Boundary-policy contract
 
@@ -57,7 +59,7 @@ These establish declared numerical behavior only.
 
 The quasi-2D cylinder studies use D3Q19 BGK, `Re=60`, `U=0.06`, x velocity inlet / pressure outlet, z periodic, a deterministic 12-step startup perturbation, wake-v spectral detection over `St=0.05..0.65`, and voxel-solid momentum exchange as a force diagnostic.
 
-### Periodic-y three-grid
+### Earlier periodic-y three-grid
 
 | D | Grid | St | Mean Cd* | Max rho error |
 | ---: | --- | ---: | ---: | ---: |
@@ -67,7 +69,7 @@ The quasi-2D cylinder studies use D3Q19 BGK, `Re=60`, `U=0.06`, x velocity inlet
 
 St is non-monotonic, so no observed order, Richardson extrapolation, or GCI is reported.
 
-### Free-stream-y three-grid
+### Earlier free-stream-y three-grid
 
 | D | Grid | St | Mean Cd* | Max rho error | Max speed |
 | ---: | --- | ---: | ---: | ---: | ---: |
@@ -115,7 +117,7 @@ Run #202 changes streamwise placement while keeping D8, H/D=20, Re, U, tau, voxe
 
 X/D=12→24 changes St by `-12.330%` and Cd* by `-15.315%`. This is far larger than the residual H/D=15→20 transverse effect, so streamwise placement is a major contamination source.
 
-Against Williamson–Brown `St_ref=0.137202`, X12D is `+10.79%` high while X24D is `-2.87%` low. The expansion removes most of the earlier Strouhal bias. `Cd*=1.6216` remains roughly `+10.3%` above a Tritton-oriented `Cd≈1.47` and `+14.5%` above a Henderson-oriented `Cd≈1.416`.
+Against Williamson–Brown `St_ref=0.137202`, X12D is `+10.79%` high while X24D is `-2.87%` low. The expansion removes most of the earlier Strouhal bias.
 
 ## Split inlet/outlet sensitivity
 
@@ -136,37 +138,76 @@ Key deltas:
 
 For this controlled case, **inlet proximity is the dominant streamwise contamination source**. Moving the inlet from `3D` to `6D` reproduces essentially the entire X24D correction while leaving the outlet at `9D`. Moving the outlet from `9D` to `18D` alone barely changes drag and does not correct the Strouhal bias.
 
-This supports using the `6D upstream / 9D downstream` case as the cheaper best-supported D8 placement for the next resolution study. It is an evidence-derived result for this Re60 cylinder setup, **not** a universal clearance rule for arbitrary geometry or Reynolds number.
+This supports using the `6D upstream / 9D downstream` case as the cheaper best-supported placement. It is an evidence-derived result for this Re60 cylinder setup, **not** a universal clearance rule.
 
-Against `St_ref=0.137202`, the upstream-only case is `-2.60%` low. Its `Cd*=1.6209` remains about `+10.27%` vs `1.47` and `+14.47%` vs `1.416`, so the remaining force discrepancy cannot be attributed to short outlet distance.
+## Best-domain D8/D10/D12 refinement evidence
 
-Detailed reference provenance is in `docs/CYLINDER_REFERENCE_COMPARISON.md`.
+Runs #225 and #231 keep H/D=20, inlet `6D`, outlet `9D`, Re60/U=0.06, startup protocol, wake estimator and force definition fixed. Settle/sample lengths scale with D so the nondimensional convective-time window is preserved.
+
+| D | Grid | tau | St | Mean Cd* | Lift amp | Max rho error | Max speed |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 8 | `120×160×2` | 0.524 | 0.133638 | 1.6209 | 0.005409 | 0.007688 | 0.081518 |
+| 10 | `150×200×2` | 0.530 | 0.132244 | 1.5454 | 0.005321 | 0.007380 | 0.078828 |
+| 12 | `180×240×2` | 0.536 | 0.133161 | 1.5276 | 0.006717 | 0.007459 | 0.078731 |
+
+Observed changes:
+
+| Interval | ΔSt | ΔCd* | Δ lift amp | Δ max rho error | Δ max speed |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| D8→D10 | -1.043% | -4.658% | -1.627% | -4.006% | -3.300% |
+| D10→D12 | +0.693% | -1.152% | +26.236% | +1.070% | -0.123% |
+| D8→D12 | -0.357% | -5.756% | +24.182% | -2.979% | -3.419% |
+
+The Cd* decrement shrinks from `0.0755` to `0.0178`; the second decrement is only about `24%` of the first. Cd* is therefore **trending toward refinement stability** over this tested sequence.
+
+St is explicitly non-monotonic (`0.133638 → 0.132244 → 0.133161`), so no observed order, Richardson extrapolation or GCI is reported for St. The lift-amplitude jump at D12 is another reason not to promote the sequence to formal engineering convergence.
+
+Against `St_ref=0.137202`, best-domain D8/D10/D12 errors are approximately `-2.60% / -3.61% / -2.95%`. Against drag orientation values, D12 `Cd*=1.5276` is about `+3.92%` vs `1.47` and `+7.88%` vs `1.416`.
+
+These are materially improved diagnostics, not validated aerodynamic coefficients.
+
+Detailed reference provenance is in `docs/CYLINDER_REFERENCE_COMPARISON.md` and the earlier grid study plus best-domain extension is in `docs/CYLINDER_GRID_STUDY.md`.
 
 ## Momentum-exchange force status
 
-`solid_force_lattice()` sums the fluid-on-solid bounce-back link reaction `Σ 2 f_i* c_i`; outer-domain wall reactions are excluded. This is structurally a standard link momentum-exchange diagnostic, but the current coefficient normalization still uses nominal geometry dimensions.
+`solid_force_lattice()` sums the fluid-on-solid bounce-back link reaction `Σ 2 f_i* c_i`; outer-domain wall reactions are excluded. This is structurally a standard link momentum-exchange diagnostic, but the current coefficient normalization still uses nominal geometry dimensions and the runtime currently exposes aggregate solid force only.
 
-For the D8 binary cell-center cylinder mask, the 2D solid cross-section contains 52 cells, giving an area-equivalent diameter of about `8.14`, only ~`1.7%` above nominal `D=8`. That simple area correction is too small to explain the remaining `Cd*` excess by itself. Effective hydrodynamic wall location, coarse voxel shape, BGK relaxation and force normalization remain open error sources.
+For the exact binary cell-center masks:
+
+| Nominal D | Solid cross-section cells | Area-equivalent D | Relative difference |
+| ---: | ---: | ---: | ---: |
+| 8 | 52 | 8.1369 | +1.71% |
+| 10 | 80 | 10.0925 | +0.93% |
+| 12 | 112 | 11.9416 | -0.49% |
+
+These geometry-denominator differences are too small to explain the observed D8→D10 Cd* reduction by themselves. Effective hydrodynamic wall location, stair-step geometry, BGK relaxation and link-level force behavior remain open error sources.
+
+Per-object force provenance is the next native-force implementation milestone.
 
 ## Accurate SU2 backend status
 
-`aeroforge-accurate-backend` provides dimensional incompressible laminar/RANS-SST config generation, marker/filename validation, inlet-direction normalization, `SU2_RUN`/PATH discovery, banner probing, and a prepared-case process primitive. A real AeroForge-generated volume mesh has not yet completed end-to-end SU2 validation.
+`aeroforge-accurate-backend` provides dimensional incompressible laminar/RANS-SST config generation, marker/filename validation, inlet-direction normalization, `SU2_RUN`/PATH discovery, banner probing, and a prepared-case process primitive.
+
+A pinned ignored integration test now mirrors the official SU2 8.5.0 incompressible laminar-cylinder regression contract: it requires SU2 8.5.0, runs through AeroForge's `discover_su2 → probe_su2_banner → run_su2_case` path, parses solver iteration 10, and compares the four upstream reference values with `1e-5` tolerance. The harness has compiled/unit parser coverage, but the external SU2 binary/mesh runtime evidence is still pending.
+
+A real AeroForge-generated volume mesh has not yet completed end-to-end SU2 validation.
 
 ## Claims policy
 
 - CPU/GPU equality means implementation parity only.
 - Canonical Poiseuille/Couette/Ghia passes validate only those declared cases.
 - `FarField` must be described as prescribed free-stream NEQ, not generic non-reflecting.
-- Neither cylinder grid sequence is formal grid convergence.
+- Neither the earlier nor best-domain cylinder grid sequence is formal grid convergence.
 - H/D=10/15/20 shows a rapidly shrinking transverse-distance effect, not formal domain convergence.
 - Run #213 shows inlet proximity dominates the tested streamwise correction; this does not create a universal 6D inlet-clearance rule.
+- Best-domain D8/D10/D12 shows a shrinking Cd* refinement increment, while St remains non-monotonic; do not report GCI or an extrapolated engineering coefficient.
 - Momentum-exchange Cd/lift remain diagnostics until grid/domain/reference/force evidence improves.
 - BGK physical-scaling warnings remain authoritative even when regressions are GREEN.
 - Accurate SU2 results must retain solver version, mesh/config provenance, convergence history, geometry revision and source-translation decisions.
 
 ## Next validation milestones
 
-1. Run D8→D10 resolution sensitivity using the best-supported `6D upstream / 9D downstream`, H/D=20 placement.
-2. If D10 is coherent, decide whether a D12 point is justified before making any grid-convergence claim.
-3. Extend momentum exchange to per-object force provenance and effective-diameter/force-normalization diagnostics.
-4. Run an upstream SU2 known-case cross-validation, followed by an AeroForge-generated-mesh case.
+1. Execute the pinned official SU2 8.5.0 incompressible-cylinder known-case through AeroForge's accurate-backend process path and record exact runtime evidence.
+2. Extend native momentum exchange to per-object force provenance and expose effective-diameter/normalization diagnostics.
+3. Use the SU2-known-case result to harden history/output parsing and provenance before attempting an AeroForge-generated-mesh accurate case.
+4. Do not extend the native D8/D10/D12 cylinder ladder by brute force unless a later force/boundary change requires revalidation.
