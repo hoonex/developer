@@ -4,7 +4,7 @@ use std::fmt::{Display, Formatter};
 
 use aeroforge_volume_core::VolumeMesh;
 
-use crate::su2::{Su2Case, Su2CaseError};
+use crate::su2::{Su2Case, Su2CaseError, Su2CoefficientReference};
 use crate::su2_mesh::{
     render_su2_volume_mesh, validate_case_marker_provenance, BoundaryRole, BoundarySource,
     Su2MarkerBinding, Su2MarkerMap, Su2MeshError,
@@ -73,6 +73,18 @@ pub fn build_generated_su2_case_bundle(
     mesh: &VolumeMesh,
     marker_map: &Su2MarkerMap,
 ) -> Result<GeneratedSu2CaseBundle, GeneratedSu2CaseError> {
+    build_generated_su2_case_bundle_with_reference(case, mesh, marker_map, None)
+}
+
+/// Same generated-case contract with an optional explicit coefficient-normalization reference.
+/// The reference only controls SU2's force/moment normalization denominator; it does not change
+/// monitored-marker provenance or imply that the resulting coefficients are engineering-valid.
+pub fn build_generated_su2_case_bundle_with_reference(
+    case: &Su2Case,
+    mesh: &VolumeMesh,
+    marker_map: &Su2MarkerMap,
+    coefficient_reference: Option<&Su2CoefficientReference>,
+) -> Result<GeneratedSu2CaseBundle, GeneratedSu2CaseError> {
     case.validate()?;
     marker_map.validate_for_mesh(mesh)?;
     validate_supported_boundary_roles(marker_map)?;
@@ -90,7 +102,10 @@ pub fn build_generated_su2_case_bundle(
         .collect::<Vec<_>>();
 
     let mesh_export = render_su2_volume_mesh(mesh, marker_map)?;
-    let config_text = case.render_config_with_monitoring(&monitoring_markers)?;
+    let config_text = case.render_config_with_monitoring_and_reference(
+        &monitoring_markers,
+        coefficient_reference,
+    )?;
 
     Ok(GeneratedSu2CaseBundle {
         mesh_filename: case.mesh_filename.clone(),
@@ -230,6 +245,7 @@ mod tests {
             .config_text
             .lines()
             .any(|line| line.starts_with("MARKER_MONITORING=")));
+        assert!(!bundle.config_text.lines().any(|line| line.starts_with("REF_AREA=")));
         assert!(bundle.mesh_text.contains("MARKER_TAG= inlet"));
         assert!(bundle.mesh_text.contains("MARKER_TAG= outlet"));
         assert_eq!(bundle.marker_bindings, marker_map.bindings);
@@ -254,6 +270,34 @@ mod tests {
         assert!(bundle
             .config_text
             .contains("MARKER_PLOTTING= ( y_min, y_max, z_min, z_max )"));
+    }
+
+    #[test]
+    fn explicit_reference_reaches_bundle_without_changing_monitoring_selection() {
+        let (mesh, mut marker_map, case) = fixture();
+        marker_map.bindings[2].source = BoundarySource::SceneObject {
+            scene_object_id: 42,
+        };
+        let reference = Su2CoefficientReference {
+            area_m2: 2.5,
+            length_m: 1.25,
+        };
+        let bundle = build_generated_su2_case_bundle_with_reference(
+            &case,
+            &mesh,
+            &marker_map,
+            Some(&reference),
+        )
+        .unwrap();
+        assert!(bundle.config_text.contains("REF_AREA= 2.500000000000e0"));
+        assert!(bundle.config_text.contains("REF_LENGTH= 1.250000000000e0"));
+        assert_eq!(
+            bundle
+                .config_text
+                .lines()
+                .find(|line| line.starts_with("MARKER_MONITORING=")),
+            Some("MARKER_MONITORING= ( y_min )")
+        );
     }
 
     #[test]
