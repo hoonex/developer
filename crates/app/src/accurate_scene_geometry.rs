@@ -4,16 +4,51 @@ use aeroforge_accurate_backend::{
     VoxelSolidPrimitive, VoxelizedMixedScene,
 };
 use aeroforge_geometry_core::SurfaceMesh;
+use aeroforge_volume_core::{BlockBoundaryMarkers, BoundaryMarkerId};
 
 use crate::model::{rotation_from_degrees, ImportedSurfaceObject, PrimitiveKind, ProjectState};
 
-/// Converts the current project geometry into the single deterministic ownership field consumed by
-/// the generated staircase SU2 path. Imported surfaces are transformed into world space, audited,
-/// and only then rasterized alongside analytic primitives.
+/// Builds the project-aligned Cartesian domain used by both interactive preview rasterization and
+/// the generated staircase SU2 path. X/Z are centered around zero while Y spans ground-to-ceiling,
+/// matching `simulation::cell_center_world`.
+pub fn project_voxel_domain(
+    state: &ProjectState,
+    cells: [usize; 3],
+) -> VoxelFluidDomainSpec {
+    let domain_size = state.simulation.domain_size_m;
+    VoxelFluidDomainSpec {
+        min: [
+            -0.5 * domain_size.x as f64,
+            0.0,
+            -0.5 * domain_size.z as f64,
+        ],
+        max: [
+            0.5 * domain_size.x as f64,
+            domain_size.y as f64,
+            0.5 * domain_size.z as f64,
+        ],
+        cells,
+        outer_markers: BlockBoundaryMarkers {
+            x_min: BoundaryMarkerId(1),
+            x_max: BoundaryMarkerId(2),
+            y_min: BoundaryMarkerId(3),
+            y_max: BoundaryMarkerId(4),
+            z_min: BoundaryMarkerId(5),
+            z_max: BoundaryMarkerId(6),
+        },
+    }
+}
+
+/// Converts current project geometry into one deterministic cell-center ownership field shared by
+/// preview solid masks and the generated staircase SU2 path.
 ///
-/// This adapter does not create a body-fitted mesh. Imported surfaces are still reduced to
-/// cell-center occupancy before the existing staircase tetrahedral fluid mesh is generated.
-pub fn voxelize_project_geometry_for_accurate(
+/// Imported surfaces are transformed into world space, passed through the same explicit closed-
+/// surface audit used by accurate preparation, and then rasterized alongside analytic primitives.
+/// Cross-kind overlap ownership therefore remains stable and independent of scene vector order.
+///
+/// This is still a Cartesian staircase representation. It does not create a body-fitted surface or
+/// higher-fidelity exterior-fluid volume mesh.
+pub fn voxelize_project_geometry_for_staircase(
     state: &ProjectState,
     domain: VoxelFluidDomainSpec,
 ) -> Result<VoxelizedMixedScene, String> {
@@ -56,7 +91,7 @@ pub fn voxelize_project_geometry_for_accurate(
             )
             .map_err(|error| {
                 format!(
-                    "imported surface {} ({}) failed accurate audit: {error}",
+                    "imported surface {} ({}) failed closed-surface audit: {error}",
                     object.id, object.name
                 )
             })
@@ -65,6 +100,15 @@ pub fn voxelize_project_geometry_for_accurate(
 
     voxelize_mixed_scene_bodies(domain, &primitives, &imported)
         .map_err(|error| error.to_string())
+}
+
+/// Accurate preparation consumes the same ownership field as preview, then passes it onward to the
+/// generated staircase tetrahedral SU2 case builder.
+pub fn voxelize_project_geometry_for_accurate(
+    state: &ProjectState,
+    domain: VoxelFluidDomainSpec,
+) -> Result<VoxelizedMixedScene, String> {
+    voxelize_project_geometry_for_staircase(state, domain)
 }
 
 fn imported_surface_world_mesh(object: &ImportedSurfaceObject) -> Result<SurfaceMesh, String> {
@@ -142,23 +186,12 @@ fn scale(v: [f64; 3], factor: f64) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aeroforge_volume_core::{BlockBoundaryMarkers, BoundaryMarkerId};
     use bevy::prelude::Vec3;
 
     fn domain() -> VoxelFluidDomainSpec {
-        VoxelFluidDomainSpec {
-            min: [-2.0, 0.0, -2.0],
-            max: [2.0, 4.0, 2.0],
-            cells: [4, 4, 4],
-            outer_markers: BlockBoundaryMarkers {
-                x_min: BoundaryMarkerId(1),
-                x_max: BoundaryMarkerId(2),
-                y_min: BoundaryMarkerId(3),
-                y_max: BoundaryMarkerId(4),
-                z_min: BoundaryMarkerId(5),
-                z_max: BoundaryMarkerId(6),
-            },
-        }
+        let mut state = ProjectState::default();
+        state.simulation.domain_size_m = Vec3::new(4.0, 4.0, 4.0);
+        project_voxel_domain(&state, [4, 4, 4])
     }
 
     fn tetra_surface() -> SurfaceMesh {
@@ -174,6 +207,16 @@ mod tests {
     }
 
     #[test]
+    fn shared_project_domain_matches_editor_coordinate_contract() {
+        let mut state = ProjectState::default();
+        state.simulation.domain_size_m = Vec3::new(8.0, 3.0, 6.0);
+        let domain = project_voxel_domain(&state, [16, 6, 12]);
+        assert_eq!(domain.min, [-4.0, 0.0, -3.0]);
+        assert_eq!(domain.max, [4.0, 3.0, 3.0]);
+        assert_eq!(domain.cells, [16, 6, 12]);
+    }
+
+    #[test]
     fn imported_project_surface_transforms_audits_and_rasterizes() {
         let mut state = ProjectState::default();
         state.objects.clear();
@@ -185,7 +228,7 @@ mod tests {
             .unwrap();
         imported.position = Vec3::new(-1.0, 1.0, -1.0);
 
-        let voxelized = voxelize_project_geometry_for_accurate(&state, domain()).unwrap();
+        let voxelized = voxelize_project_geometry_for_staircase(&state, domain()).unwrap();
         assert_eq!(voxelized.owner_object_ids, vec![id]);
         assert!(voxelized.solid_cells > 0);
         assert!(voxelized.solid_owner.iter().any(|&owner| owner == 1));
@@ -199,7 +242,7 @@ mod tests {
         let imported_id = state.add_imported_surface("tetra.obj", tetra_surface());
         state.imported_surfaces[0].position = Vec3::new(-1.0, 1.0, -1.0);
 
-        let voxelized = voxelize_project_geometry_for_accurate(&state, domain()).unwrap();
+        let voxelized = voxelize_project_geometry_for_staircase(&state, domain()).unwrap();
         assert_eq!(voxelized.owner_object_ids, vec![1, imported_id]);
         assert_eq!(voxelized.solid_cells, 64);
         assert!(voxelized.solid_owner.iter().all(|&owner| owner == 1));
@@ -217,8 +260,8 @@ mod tests {
             },
         );
 
-        let error = voxelize_project_geometry_for_accurate(&state, domain()).unwrap_err();
-        assert!(error.contains("failed accurate audit"));
+        let error = voxelize_project_geometry_for_staircase(&state, domain()).unwrap_err();
+        assert!(error.contains("failed closed-surface audit"));
     }
 
     #[test]
@@ -228,7 +271,17 @@ mod tests {
         state.add_imported_surface("tetra.obj", tetra_surface());
         state.imported_surfaces[0].position.x = f32::NAN;
 
-        let error = voxelize_project_geometry_for_accurate(&state, domain()).unwrap_err();
+        let error = voxelize_project_geometry_for_staircase(&state, domain()).unwrap_err();
         assert!(error.contains("non-finite transform"));
+    }
+
+    #[test]
+    fn accurate_alias_uses_same_shared_ownership_field() {
+        let state = ProjectState::default();
+        let domain = project_voxel_domain(&state, [4, 4, 4]);
+        let shared = voxelize_project_geometry_for_staircase(&state, domain).unwrap();
+        let accurate = voxelize_project_geometry_for_accurate(&state, domain).unwrap();
+        assert_eq!(accurate.solid_owner, shared.solid_owner);
+        assert_eq!(accurate.owner_object_ids, shared.owner_object_ids);
     }
 }
