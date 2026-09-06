@@ -4,7 +4,8 @@ use std::fmt::{Display, Formatter};
 
 use aeroforge_geometry_core::SurfaceMesh;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]\#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
 pub struct BoundaryMarkerId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
