@@ -1,10 +1,10 @@
 # Free-stream far-field boundary evidence
 
-This note records the first validation evidence for AeroForge's transverse free-stream boundary. It deliberately separates implementation parity from external-aerodynamics accuracy.
+This note records validation evidence for AeroForge's transverse free-stream boundary. It deliberately separates implementation parity from external-aerodynamics accuracy.
 
 ## Boundary contract
 
-The new external-flow preview policy uses:
+The external-flow preview policy uses:
 
 - x-min: velocity inlet;
 - x-max: lattice-density pressure outlet;
@@ -70,21 +70,42 @@ The CI summary line was:
 
 `AEROFORGE_CYLINDER_BOUNDARY_COMPARE=PASS St_delta_pct=1.258 Cd_delta_pct=1.022 lift_amp_delta_pct=-6.764 rho_error_ratio=0.7017`
 
+## D10 free-stream refinement
+
+Push run #164 executed the geometrically similar D10 refinement with the same y free-stream policy:
+
+`AEROFORGE_CYLINDER_FAR_FIELD_D10=PASS case=D10_FAR_FIELD grid=120x100x2 D=10 U=0.06 Re=60 tau=0.530000 St=0.154413 spectral_prominence=17.27 wake_v_rms=0.018098 mean_Cd=1.8478 lift_amp=0.007737 max_rho_error=0.008865 max_speed=0.087030`
+
+Relative to the D8 free-stream case:
+
+- `St`: `0.155239 → 0.154413`, about `-0.532%`;
+- mean momentum-exchange `Cd*`: `1.9439 → 1.8478`, about `-4.944%`;
+- max density error: `0.009309 → 0.008865`, about `-4.77%`;
+- max lattice speed: `0.089989 → 0.087030`, about `-3.29%`.
+
+At the same D10 grid, changing y from periodic to free-stream gives approximately:
+
+- `St`: `0.152665 → 0.154413`, `+1.145%`;
+- mean `Cd*`: `1.8346 → 1.8478`, `+0.719%`;
+- max density error: `0.013591 → 0.008865`, `-34.77%`.
+
+The D8→D10 free-stream sequence is monotonic for `St`, `Cd*`, density error and max speed, but two levels are insufficient to infer an observed convergence order or asymptotic regime. D12 is required before any three-grid convergence statement.
+
 ## Interpretation
 
-The first pairwise experiment is encouraging but deliberately limited:
+The evidence so far is encouraging but deliberately limited:
 
-- shedding frequency changes only about 1.3%, so the previous periodic-y result was not dominated by a catastrophic periodic-image frequency shift at this 10% blockage setup;
-- the momentum-exchange drag diagnostic changes about 1.0%, again indicating modest first-order sensitivity for this exact grid;
-- the maximum density deviation drops to about 70.2% of the periodic-y value, a roughly 29.8% reduction, while maximum lattice speed also decreases slightly;
+- changing D8 from periodic-y to free-stream-y moves shedding frequency only about 1.3% and the drag diagnostic about 1.0%; the previous periodic result was therefore not dominated by a catastrophic periodic-image shift at this 10% blockage setup;
+- the maximum D8 density deviation falls by about 29.8% with free-stream-y, and the D10 free-stream case stays lower still;
+- at D10, the free-stream policy reduces maximum density deviation by about 34.8% relative to the periodic-y case while changing St and Cd by roughly 1.1% and 0.7%;
 - this supports using the free-stream-y policy as the better external-flow preview boundary, but it does **not** prove that its `St` or `Cd` is closer to experiment/reference data;
-- the free-stream NEQ boundary is still not a general non-reflecting boundary, so downstream/upstream wave reflection and larger-domain sensitivity remain separate validation tasks.
+- the free-stream NEQ boundary is still not a general non-reflecting boundary, so reflection and domain-distance sensitivity remain separate validation tasks.
 
-Therefore the evidence level is **boundary-sensitivity / implementation validation**, not engineering validation.
+Therefore the evidence level remains **boundary-sensitivity / numerical validation**, not engineering validation.
 
 ## Next evidence
 
-1. Repeat the grid-sensitivity sequence using the y free-stream policy rather than periodic y.
+1. Run D12 with the y free-stream policy and assess the full D8/D10/D12 sequence without forcing a convergence claim.
 2. Add transverse-domain-height sensitivity at fixed lattice resolution to measure residual boundary-distance dependence.
 3. Compare the resulting `St` and force diagnostics against a trusted Re≈60 cylinder reference before tightening acceptance bands.
 4. Consider a convective or characteristic boundary only if measured reflection/domain-size sensitivity justifies the extra complexity.
