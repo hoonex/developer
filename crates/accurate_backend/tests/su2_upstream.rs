@@ -86,7 +86,13 @@ fn solver_iteration_values(output: &str, iteration: i64) -> Option<[f64; 4]> {
             .split('|')
             .map(str::trim)
             .collect::<Vec<_>>();
-        if fields.len() < 5 || fields[0].parse::<i64>().ok()? != iteration {
+        if fields.len() < 5 {
+            continue;
+        }
+        let Ok(iteration_number) = fields[0].parse::<i64>() else {
+            continue;
+        };
+        if iteration_number != iteration {
             continue;
         }
 
@@ -109,6 +115,7 @@ mod parser_tests {
         let output = r#"
 header
 ------------------------------ Begin Solver -----------------------------
+| Inner_Iter | RMS_PRESSURE | RMS_VELOCITY-X | LIFT | DRAG |
 | 9 | junk | -4.100000 | -3.500000 | 0.007000 | 4.400000 |
 | 10 | junk | -4.168180 | -3.611108 | 0.007850 | 4.539924 |
 "#;
