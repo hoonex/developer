@@ -22,6 +22,81 @@ const OPPOSITE: [usize; Q] = [
     0, 2, 1, 4, 3, 6, 5, 10, 9, 8, 7, 14, 13, 12, 11, 18, 17, 16, 15,
 ];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FaceBoundary {
+    Periodic,
+    NoSlipWall,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BoundaryPolicy {
+    pub x_min: FaceBoundary,
+    pub x_max: FaceBoundary,
+    pub y_min: FaceBoundary,
+    pub y_max: FaceBoundary,
+    pub z_min: FaceBoundary,
+    pub z_max: FaceBoundary,
+}
+
+impl Default for BoundaryPolicy {
+    fn default() -> Self {
+        Self::periodic()
+    }
+}
+
+impl BoundaryPolicy {
+    pub const fn periodic() -> Self {
+        Self {
+            x_min: FaceBoundary::Periodic,
+            x_max: FaceBoundary::Periodic,
+            y_min: FaceBoundary::Periodic,
+            y_max: FaceBoundary::Periodic,
+            z_min: FaceBoundary::Periodic,
+            z_max: FaceBoundary::Periodic,
+        }
+    }
+
+    pub const fn channel_y_no_slip() -> Self {
+        Self {
+            x_min: FaceBoundary::Periodic,
+            x_max: FaceBoundary::Periodic,
+            y_min: FaceBoundary::NoSlipWall,
+            y_max: FaceBoundary::NoSlipWall,
+            z_min: FaceBoundary::Periodic,
+            z_max: FaceBoundary::Periodic,
+        }
+    }
+
+    pub fn validate(self) -> Result<(), BoundaryPolicyError> {
+        for axis in 0..3 {
+            let [min, max] = self.axis_faces(axis);
+            if (min == FaceBoundary::Periodic) != (max == FaceBoundary::Periodic) {
+                return Err(BoundaryPolicyError::UnpairedPeriodicAxis(axis));
+            }
+        }
+        Ok(())
+    }
+
+    fn axis_faces(self, axis: usize) -> [FaceBoundary; 2] {
+        match axis {
+            0 => [self.x_min, self.x_max],
+            1 => [self.y_min, self.y_max],
+            2 => [self.z_min, self.z_max],
+            _ => unreachable!("boundary axis must be 0..3"),
+        }
+    }
+
+    fn face(self, axis: usize, lower: bool) -> FaceBoundary {
+        let faces = self.axis_faces(axis);
+        faces[usize::from(!lower)]
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BoundaryPolicyError {
+    UnpairedPeriodicAxis(usize),
+}
+
 #[derive(Clone, Debug)]
 pub struct VelocityRegion {
     pub min: [usize; 3],
@@ -97,6 +172,7 @@ pub struct FlowSnapshot {
 pub struct CpuLbm {
     dims: [usize; 3],
     omega: f32,
+    boundary: BoundaryPolicy,
     f: Vec<[f32; Q]>,
     next: Vec<[f32; Q]>,
     solid: Vec<bool>,
@@ -114,6 +190,7 @@ impl CpuLbm {
         Self {
             dims,
             omega: 1.0 / tau,
+            boundary: BoundaryPolicy::default(),
             f: vec![rest; cells],
             next: vec![[0.0; Q]; cells],
             solid: vec![false; cells],
@@ -129,6 +206,21 @@ impl CpuLbm {
 
     pub fn steps(&self) -> u64 {
         self.steps
+    }
+
+    pub fn boundary_policy(&self) -> BoundaryPolicy {
+        self.boundary
+    }
+
+    /// Update the outer-domain boundary policy without resetting the solver state.
+    /// Periodic faces must be paired on the same axis; no-slip faces use half-way bounce-back.
+    pub fn set_boundary_policy(
+        &mut self,
+        boundary: BoundaryPolicy,
+    ) -> Result<(), BoundaryPolicyError> {
+        boundary.validate()?;
+        self.boundary = boundary;
+        Ok(())
     }
 
     /// Lattice-unit kinematic viscosity for the D3Q19 BGK kernel.
@@ -182,8 +274,7 @@ impl CpuLbm {
         }
     }
 
-    /// Advance one D3Q19 BGK step. Outer boundaries are periodic in this reference kernel.
-    /// Production domains will expose explicit open/inlet/outlet boundary policies.
+    /// Advance one D3Q19 BGK step using the configured outer boundary policy.
     pub fn step(&mut self, velocity_regions: &[VelocityRegion]) {
         self.step_impl(None, velocity_regions, None);
     }
@@ -264,14 +355,18 @@ impl CpuLbm {
                     }
 
                     for q in 0..Q {
-                        let tx = wrap(x as isize + C[q][0], nx);
-                        let ty = wrap(y as isize + C[q][1], ny);
-                        let tz = wrap(z as isize + C[q][2], nz);
-                        let dst = self.index([tx, ty, tz]);
-                        if self.solid[dst] {
-                            self.next[i][OPPOSITE[q]] += post[q];
-                        } else {
-                            self.next[dst][q] += post[q];
+                        match self.stream_destination(p, C[q]) {
+                            StreamDestination::BounceBack => {
+                                self.next[i][OPPOSITE[q]] += post[q];
+                            }
+                            StreamDestination::Cell(dst_p) => {
+                                let dst = self.index(dst_p);
+                                if self.solid[dst] {
+                                    self.next[i][OPPOSITE[q]] += post[q];
+                                } else {
+                                    self.next[dst][q] += post[q];
+                                }
+                            }
                         }
                     }
                 }
@@ -317,9 +412,36 @@ impl CpuLbm {
         }
     }
 
+    fn stream_destination(&self, p: [usize; 3], direction: [isize; 3]) -> StreamDestination {
+        let mut destination = p;
+        for axis in 0..3 {
+            let raw = p[axis] as isize + direction[axis];
+            if raw < 0 {
+                match self.boundary.face(axis, true) {
+                    FaceBoundary::Periodic => destination[axis] = self.dims[axis] - 1,
+                    FaceBoundary::NoSlipWall => return StreamDestination::BounceBack,
+                }
+            } else if raw >= self.dims[axis] as isize {
+                match self.boundary.face(axis, false) {
+                    FaceBoundary::Periodic => destination[axis] = 0,
+                    FaceBoundary::NoSlipWall => return StreamDestination::BounceBack,
+                }
+            } else {
+                destination[axis] = raw as usize;
+            }
+        }
+        StreamDestination::Cell(destination)
+    }
+
     fn index(&self, xyz: [usize; 3]) -> usize {
         field_index(self.dims, xyz)
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StreamDestination {
+    Cell([usize; 3]),
+    BounceBack,
 }
 
 fn field_index(dims: [usize; 3], [x, y, z]: [usize; 3]) -> usize {
@@ -380,11 +502,6 @@ fn clamp_lattice_velocity(mut u: [f32; 3]) -> [f32; 3] {
         }
     }
     u
-}
-
-fn wrap(value: isize, n: usize) -> usize {
-    let n = n as isize;
-    ((value % n + n) % n) as usize
 }
 
 #[cfg(test)]
@@ -467,5 +584,30 @@ mod tests {
     fn lattice_viscosity_matches_bgk_relation() {
         let solver = CpuLbm::new([4, 4, 4], 0.8);
         assert!((solver.lattice_kinematic_viscosity() - 0.1).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn periodic_boundary_must_be_paired_on_an_axis() {
+        let invalid = BoundaryPolicy {
+            x_min: FaceBoundary::Periodic,
+            x_max: FaceBoundary::NoSlipWall,
+            ..BoundaryPolicy::periodic()
+        };
+        assert_eq!(
+            invalid.validate(),
+            Err(BoundaryPolicyError::UnpairedPeriodicAxis(0))
+        );
+    }
+
+    #[test]
+    fn channel_boundary_is_periodic_in_xz_and_walled_in_y() {
+        let channel = BoundaryPolicy::channel_y_no_slip();
+        assert_eq!(channel.validate(), Ok(()));
+        assert_eq!(channel.x_min, FaceBoundary::Periodic);
+        assert_eq!(channel.x_max, FaceBoundary::Periodic);
+        assert_eq!(channel.y_min, FaceBoundary::NoSlipWall);
+        assert_eq!(channel.y_max, FaceBoundary::NoSlipWall);
+        assert_eq!(channel.z_min, FaceBoundary::Periodic);
+        assert_eq!(channel.z_max, FaceBoundary::Periodic);
     }
 }
