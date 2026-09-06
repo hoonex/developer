@@ -35,6 +35,17 @@ const H15D: CylinderCase = CylinderCase {
     sample_steps: 6_000,
 };
 
+const H20D: CylinderCase = CylinderCase {
+    label: "D8_H20D",
+    dims: [96, 160, 2],
+    diameter: 8.0,
+    center: [24.0, 80.0],
+    inlet_speed: 0.06,
+    reynolds: 60.0,
+    settle_steps: 5_000,
+    sample_steps: 6_000,
+};
+
 #[derive(Clone, Copy, Debug)]
 struct Metrics {
     tau: f32,
@@ -58,16 +69,21 @@ fn cylinder_re60_far_field_transverse_height_sensitivity() {
 
     print_metrics("AEROFORGE_CYLINDER_FAR_FIELD_H10D", H10D, h10);
     print_metrics("AEROFORGE_CYLINDER_FAR_FIELD_H15D", H15D, h15);
+    print_comparison("AEROFORGE_CYLINDER_DOMAIN_HEIGHT_COMPARE", 10, 15, h10, h15);
+}
 
-    let st_delta_pct = percent_change(h10.strouhal, h15.strouhal);
-    let cd_delta_pct = percent_change(h10.mean_cd, h15.mean_cd);
-    let lift_delta_pct = percent_change(h10.lift_amplitude, h15.lift_amplitude);
-    let rho_delta_pct = percent_change(h10.max_density_error, h15.max_density_error);
-    let speed_delta_pct = percent_change(h10.max_speed, h15.max_speed);
+#[test]
+#[ignore = "slow H15-to-H20 domain-height evidence; run explicitly"]
+fn cylinder_re60_far_field_h15_h20_sensitivity() {
+    let h15 = run_case(H15D);
+    let h20 = run_case(H20D);
 
-    println!(
-        "AEROFORGE_CYLINDER_DOMAIN_HEIGHT_COMPARE=PASS H_over_D=10->15 St_delta_pct={st_delta_pct:.3} Cd_delta_pct={cd_delta_pct:.3} lift_amp_delta_pct={lift_delta_pct:.3} rho_error_delta_pct={rho_delta_pct:.3} max_speed_delta_pct={speed_delta_pct:.3}"
-    );
+    assert_sanity(H15D, h15);
+    assert_sanity(H20D, h20);
+
+    print_metrics("AEROFORGE_CYLINDER_FAR_FIELD_H15D", H15D, h15);
+    print_metrics("AEROFORGE_CYLINDER_FAR_FIELD_H20D", H20D, h20);
+    print_comparison("AEROFORGE_CYLINDER_DOMAIN_HEIGHT_H15_H20", 15, 20, h15, h20);
 }
 
 fn run_case(case: CylinderCase) -> Metrics {
@@ -228,6 +244,18 @@ fn print_metrics(prefix: &str, case: CylinderCase, metrics: Metrics) {
         metrics.lift_amplitude,
         metrics.max_density_error,
         metrics.max_speed
+    );
+}
+
+fn print_comparison(prefix: &str, h0: usize, h1: usize, a: Metrics, b: Metrics) {
+    let st_delta_pct = percent_change(a.strouhal, b.strouhal);
+    let cd_delta_pct = percent_change(a.mean_cd, b.mean_cd);
+    let lift_delta_pct = percent_change(a.lift_amplitude, b.lift_amplitude);
+    let rho_delta_pct = percent_change(a.max_density_error, b.max_density_error);
+    let speed_delta_pct = percent_change(a.max_speed, b.max_speed);
+
+    println!(
+        "{prefix}=PASS H_over_D={h0}->{h1} St_delta_pct={st_delta_pct:.3} Cd_delta_pct={cd_delta_pct:.3} lift_amp_delta_pct={lift_delta_pct:.3} rho_error_delta_pct={rho_delta_pct:.3} max_speed_delta_pct={speed_delta_pct:.3}"
     );
 }
 
