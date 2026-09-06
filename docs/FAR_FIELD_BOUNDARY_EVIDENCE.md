@@ -78,13 +78,30 @@ For this D8/Re60/H20 case, **inlet proximity dominates the x-domain error**. Ext
 
 This means outlet/wake interaction at 9D is not the leading contaminant in this specific case. It does **not** establish 6D/9D as a universal rule for arbitrary external-flow geometry or Reynolds number.
 
-The upstream-only 6D/9D case is therefore the cheapest currently best-supported D8 placement for the next grid-resolution study.
+## Best-supported boundary placement under refinement
+
+Runs #225 and #231 then hold the evidence-derived placement fixed at H/D=20, `6D upstream / 9D downstream` while refining D8→D10→D12.
+
+| D | Grid | St | Cd* | Max rho error | Max speed |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 8 | `120×160×2` | 0.133638 | 1.6209 | 0.007688 | 0.081518 |
+| 10 | `150×200×2` | 0.132244 | 1.5454 | 0.007380 | 0.078828 |
+| 12 | `180×240×2` | 0.133161 | 1.5276 | 0.007459 | 0.078731 |
+
+D8→D10 changes St/Cd* by `-1.043% / -4.658%`; D10→D12 changes `+0.693% / -1.152%`.
+
+Two implications matter for the boundary claim:
+
+1. Once the inlet is moved to 6D and H/D is 20, the remaining resolution changes occur without the large 12–15% shift seen when the inlet was only 3D away. This supports the chosen domain as a substantially cleaner basis for refinement studies.
+2. The St sequence is still non-monotonic and the prescribed NEQ far-field remains a simple boundary primitive. The refinement study therefore does **not** prove the boundary is non-reflecting or establish formal domain/grid convergence.
+
+The D12 max-density deviation `0.007459` remains lower than the original D8/H20/3D-inlet value `0.009113`, while max speed has dropped from `0.089316` to `0.078731` across the combined domain-placement/refinement improvements.
 
 ## Reference consequence
 
-Williamson–Brown gives `St_ref=0.137202` at Re=60. The baseline 3D/9D case is `+10.79%` high, while 6D/9D is `-2.60%` low and 6D/18D is `-2.87%` low. Most of the earlier frequency bias is therefore associated with inlet placement.
+Williamson–Brown gives `St_ref=0.137202` at Re=60. The original D8 3D/9D case is `+10.79%` high. The best-domain D8/D10/D12 values are approximately `-2.60%`, `-3.61%`, and `-2.95%` low respectively.
 
-The force diagnostic remains high: 6D/9D `Cd*=1.6209` is still about `+10.3%` vs a Tritton-oriented `1.47` and `+14.5%` vs a Henderson-oriented `1.416`. Detailed provenance and caveats are in `docs/CYLINDER_REFERENCE_COMPARISON.md`.
+The D12 force diagnostic `Cd*=1.5276` is about `+3.92%` vs a Tritton-oriented `1.47` and `+7.88%` vs a Henderson-oriented `1.416`. Detailed provenance and caveats are in `docs/CYLINDER_REFERENCE_COMPARISON.md`.
 
 ## Current evidence level
 
@@ -95,7 +112,8 @@ Supported:
 - repeatable periodic→free-stream effects across D8/D10/D12;
 - rapidly shrinking transverse-distance sensitivity from H/D=10→15→20;
 - strong evidence that the tested 3D inlet clearance contaminates Re60 D8 cylinder results;
-- evidence that 9D outlet clearance is close to 18D for this controlled case once inlet clearance is 6D.
+- evidence that 9D outlet clearance is close to 18D for this controlled case once inlet clearance is 6D;
+- a D8/D10/D12 refinement sequence on the best-supported 6D/9D, H20 domain in which Cd* decreases with a strongly shrinking second increment.
 
 Not supported:
 
@@ -106,7 +124,7 @@ Not supported:
 
 ## Next evidence
 
-1. Compare D8 and D10 at H/D=20 with `6D upstream / 9D downstream`.
-2. Decide on a D12 point only after the D10 trend is known.
-3. Quantify effective voxel/hydrodynamic diameter and force normalization.
-4. Keep all expensive evidence tests ignored in routine CI; one-shot workflow steps are removed after evidence collection.
+1. Stop extending this native-cylinder domain/resolution ladder for now; D12 is sufficient to show the current trend without just buying more brute-force compute.
+2. Add per-object force provenance and effective-wall/force-normalization diagnostics.
+3. Cross-validate the accurate backend against the pinned official SU2 8.5.0 incompressible cylinder regression.
+4. Keep all expensive native evidence tests ignored in routine CI; one-shot workflow steps are removed after evidence collection.
