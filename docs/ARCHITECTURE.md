@@ -29,6 +29,7 @@ Current preview limitations stay visible in the UI:
 - realistic high-Reynolds-number air flows can require BGK relaxation time extremely close to 0.5, where a coarse preview grid is not a credible quantitative solver;
 - the current CPU preview preserves relative physical source speeds but does not claim validated physical time/Reynolds scaling;
 - turbulence intensity is stored but is not yet converted into a fabricated random forcing model;
+- analytic scene primitives are currently rasterized into preview solids, but imported surface objects are not yet consumed by the preview solid-mask path;
 - preview results are not engineering CFD unless benchmark evidence establishes that claim for the relevant regime.
 
 `flow_core::scaling` provides physical-scaling diagnostics so the program can state when cubic-grid or BGK relaxation constraints make a quantitative mapping implausible instead of silently changing viscosity.
@@ -79,17 +80,33 @@ Backend capability is explicit. A source being representable in the editor does 
 
 ## Geometry model
 
-Phase 1 supports primitives and transform editing inside the program. Next steps:
+The current modeling foundation separates analytic primitives from imported triangle surfaces while keeping one stable `SceneObject.id` namespace for solver provenance.
 
-1. viewport picking and transform gizmos;
-2. STL/OBJ/glTF import;
-3. CSG boolean union/subtract/intersect;
-4. profile extrusion and airfoil generator;
-5. mesh repair/manifold validation;
-6. SDF/voxelization cache for preview solver;
-7. surface preparation and high-quality volume meshing for accurate cases.
+Implemented geometry capabilities:
 
-The modeling representation and solver representation are separate. Editing remains mesh/CSG based; preview computation consumes a voxel/SDF cache; accurate computation consumes a solver-specific surface/volume mesh with provenance.
+1. analytic Box / Sphere / Cylinder creation, viewport picking, and transform gizmos;
+2. `geometry_core` parsers for STL, OBJ, and static glTF/GLB surface geometry;
+3. desktop OBJ/STL path import into object-local `SurfaceMesh` storage with position/rotation/scale editing and bounded sampled wireframe visualization;
+4. topology reporting plus a deterministic bounded repair/audit contract for imported surfaces entering accurate preparation;
+5. mixed primitive/imported accurate ownership rasterization with one compact owner field and deterministic lowest-stable-ID overlap ownership;
+6. stable imported `SceneObject.id` provenance through the current generated staircase tetrahedral SU2 mesh and marker bindings.
+
+The desktop import window currently exposes OBJ and STL. The static glTF/GLB importer exists in `geometry_core` but has not yet been wired to that desktop file-import surface, especially for external buffer URI resolution.
+
+For accurate preparation, an imported mesh is transformed from object-local to world coordinates and then passed through bounded repair/audit. Promotion requires a single connected, watertight two-manifold, consistent orientation, and positive finite enclosed volume. This gate does **not** prove absence of triangle self-intersections or readiness for a high-quality exterior-fluid body-fitted mesher.
+
+The promoted surface is currently reduced to cell-center solid occupancy and merged with analytic primitive occupancy. The lowest stable scene-object ID owns overlaps across geometry kinds; duplicate IDs across the two geometry stores fail closed. The resulting fluid mesh is still Cartesian staircase tetrahedra. Imported geometry support therefore does not imply body-fitted or engineering-quality meshing.
+
+The modeling representation and solver representation remain separate. Editing remains primitive/mesh based; the native preview currently consumes primitive solid rasterization only; the current accurate path consumes deterministic mixed voxel ownership; a future higher-fidelity accurate path must consume audited surfaces directly and retain the same explicit provenance contract.
+
+Next geometry work includes:
+
+- imported-surface picking/gizmo integration in the common scene editor rather than the dedicated import panel;
+- glTF/GLB desktop import including explicit external-buffer handling;
+- imported-surface preview solid-mask/SDF integration;
+- CSG boolean union/subtract/intersect, profile extrusion and airfoil generation;
+- self-intersection/geometry-quality diagnostics where required by the selected mesher;
+- body-fitted or otherwise explicitly higher-fidelity exterior-fluid volume meshing for accurate cases.
 
 ## GPU optimization plan
 
