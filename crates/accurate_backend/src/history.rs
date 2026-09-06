@@ -213,7 +213,7 @@ pub fn evaluate_su2_history_quality(
 }
 
 /// Extracts only the aggregate world-axis coefficient fields from the final usable history row.
-/// SU2 8.5.0 per-surface columns such as `CFx_body_42` intentionally do not match these exact
+/// SU2 8.5.0 per-surface columns such as `CFx(body_42)` intentionally do not match these exact
 /// normalized names, so the aggregate contract cannot silently consume a surface field.
 pub fn extract_su2_world_axis_diagnostics(
     summary: &Su2HistorySummary,
@@ -249,8 +249,8 @@ pub fn extract_su2_world_axis_diagnostics(
 }
 
 /// Extracts SU2 8.5.0 `AERO_COEFF_SURF` world-axis fields for an explicit list of
-/// MARKER_MONITORING tags. The expected history headers are exactly `CFx_<marker>`,
-/// `CFy_<marker>`, `CFz_<marker>`, `CMx_<marker>`, `CMy_<marker>`, and `CMz_<marker>`.
+/// MARKER_MONITORING tags. The expected history headers are exactly `CFx(<marker>)`,
+/// `CFy(<marker>)`, `CFz(<marker>)`, `CMx(<marker>)`, `CMy(<marker>)`, and `CMz(<marker>)`.
 ///
 /// Every marker must have one finite value for all six fields. Missing, duplicate, or
 /// non-finite evidence fails closed. The returned order matches `monitoring_markers`.
@@ -273,7 +273,7 @@ pub fn extract_su2_surface_world_axis_diagnostics(
 
         let mut values = [0.0_f64; 6];
         for (slot, prefix) in prefixes.iter().enumerate() {
-            let field = format!("{prefix}_{marker}");
+            let field = format!("{prefix}({marker})");
             let matches = summary
                 .last_numeric_values
                 .iter()
@@ -464,7 +464,7 @@ mod tests {
     #[test]
     fn su2_850_per_surface_columns_do_not_satisfy_aggregate_diagnostics() {
         let summary = summarize_su2_history_csv(
-            "\"Inner_Iter\",\"CFx_body_42\",\"CFy_body_42\",\"CFz_body_42\",\"CMx_body_42\",\"CMy_body_42\",\"CMz_body_42\"\n0,1,2,3,4,5,6\n",
+            "\"Inner_Iter\",\"CFx(body_42)\",\"CFy(body_42)\",\"CFz(body_42)\",\"CMx(body_42)\",\"CMy(body_42)\",\"CMz(body_42)\"\n0,1,2,3,4,5,6\n",
         )
         .unwrap();
         assert_eq!(
@@ -483,7 +483,7 @@ mod tests {
     #[test]
     fn su2_850_per_surface_world_axis_diagnostics_are_extracted_by_marker() {
         let summary = summarize_su2_history_csv(
-            "\"Inner_Iter\",\"CFx_body_3\",\"CFy_body_3\",\"CFz_body_3\",\"CMx_body_3\",\"CMy_body_3\",\"CMz_body_3\",\"CFx_body_9\",\"CFy_body_9\",\"CFz_body_9\",\"CMx_body_9\",\"CMy_body_9\",\"CMz_body_9\"\n0,1,2,3,4,5,6,10,20,30,40,50,60\n",
+            "\"Inner_Iter\",\"CFx(body_3)\",\"CFy(body_3)\",\"CFz(body_3)\",\"CMx(body_3)\",\"CMy(body_3)\",\"CMz(body_3)\",\"CFx(body_9)\",\"CFy(body_9)\",\"CFz(body_9)\",\"CMx(body_9)\",\"CMy(body_9)\",\"CMz(body_9)\"\n0,1,2,3,4,5,6,10,20,30,40,50,60\n",
         )
         .unwrap();
         let diagnostics = extract_su2_surface_world_axis_diagnostics(
@@ -503,13 +503,13 @@ mod tests {
     #[test]
     fn missing_per_surface_field_fails_closed() {
         let summary = summarize_su2_history_csv(
-            "\"Inner_Iter\",\"CFx_body_42\",\"CFy_body_42\",\"CFz_body_42\",\"CMx_body_42\",\"CMy_body_42\"\n0,1,2,3,4,5\n",
+            "\"Inner_Iter\",\"CFx(body_42)\",\"CFy(body_42)\",\"CFz(body_42)\",\"CMx(body_42)\",\"CMy(body_42)\"\n0,1,2,3,4,5\n",
         )
         .unwrap();
         assert_eq!(
             extract_su2_surface_world_axis_diagnostics(&summary, &["body_42".into()]),
             Err(Su2DiagnosticError::MissingSurfaceFields(vec![
-                "CMz_body_42".into()
+                "CMz(body_42)".into()
             ]))
         );
     }
@@ -517,19 +517,19 @@ mod tests {
     #[test]
     fn nonfinite_per_surface_field_fails_closed() {
         let summary = summarize_su2_history_csv(
-            "\"Inner_Iter\",\"CFx_body_42\",\"CFy_body_42\",\"CFz_body_42\",\"CMx_body_42\",\"CMy_body_42\",\"CMz_body_42\"\n0,1,2,NaN,4,5,6\n",
+            "\"Inner_Iter\",\"CFx(body_42)\",\"CFy(body_42)\",\"CFz(body_42)\",\"CMx(body_42)\",\"CMy(body_42)\",\"CMz(body_42)\"\n0,1,2,NaN,4,5,6\n",
         )
         .unwrap();
         assert_eq!(
             extract_su2_surface_world_axis_diagnostics(&summary, &["body_42".into()]),
-            Err(Su2DiagnosticError::NonFiniteField("CFz_body_42".into()))
+            Err(Su2DiagnosticError::NonFiniteField("CFz(body_42)".into()))
         );
     }
 
     #[test]
     fn duplicate_monitoring_marker_request_fails_closed() {
         let summary = summarize_su2_history_csv(
-            "\"Inner_Iter\",\"CFx_body_42\",\"CFy_body_42\",\"CFz_body_42\",\"CMx_body_42\",\"CMy_body_42\",\"CMz_body_42\"\n0,1,2,3,4,5,6\n",
+            "\"Inner_Iter\",\"CFx(body_42)\",\"CFy(body_42)\",\"CFz(body_42)\",\"CMx(body_42)\",\"CMy(body_42)\",\"CMz(body_42)\"\n0,1,2,3,4,5,6\n",
         )
         .unwrap();
         assert_eq!(
