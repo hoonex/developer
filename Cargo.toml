@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/flow_core",
+    "crates/geometry_core",
     "crates/accurate_backend",
     "crates/app",
     "crates/gpu_smoke",
