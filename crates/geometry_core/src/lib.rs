@@ -1,3 +1,5 @@
+pub mod gltf_import;
+
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
