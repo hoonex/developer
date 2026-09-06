@@ -366,7 +366,7 @@ fn prepare_from_state(
         active_body_markers: active_scene_ids.len(),
         points: generated.volume_mesh.points.len(),
         tetrahedra: generated.volume_mesh.cells.len(),
-        boundary_triangles: generated.volume_mesh.boundary_triangles.len(),
+        boundary_triangles: generated.volume_mesh.boundary.len(),
         marker_count: generated.bundle.marker_bindings.len(),
         mesh_bytes: generated.bundle.mesh_text.len(),
         config_bytes: generated.bundle.config_text.len(),
