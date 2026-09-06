@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
@@ -42,6 +43,13 @@ pub struct Su2WorldAxisDiagnostics {
     pub moment_coefficient_xyz: [f64; 3],
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct Su2SurfaceWorldAxisDiagnostics {
+    /// Exact MARKER_MONITORING tag whose SU2 per-surface fields were extracted.
+    pub marker: String,
+    pub diagnostics: Su2WorldAxisDiagnostics,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Su2DiagnosticError {
     MissingFields(Vec<String>),
@@ -54,7 +62,7 @@ impl Display for Su2DiagnosticError {
         match self {
             Self::MissingFields(fields) => write!(
                 f,
-                "SU2 history is missing aggregate world-axis diagnostic fields: {}",
+                "SU2 history is missing world-axis diagnostic fields: {}",
                 fields.join(", ")
             ),
             Self::NonFiniteField(field) => {
@@ -62,7 +70,7 @@ impl Display for Su2DiagnosticError {
             }
             Self::AmbiguousField(field) => write!(
                 f,
-                "SU2 history contains multiple aggregate diagnostic fields matching {field}"
+                "SU2 history contains ambiguous world-axis diagnostic field {field}"
             ),
         }
     }
@@ -199,8 +207,8 @@ pub fn evaluate_su2_history_quality(
 }
 
 /// Extracts only the aggregate world-axis coefficient fields from the final usable history row.
-/// Per-surface columns such as `CFx(body_42)` intentionally do not match these exact normalized
-/// names, so multi-body attribution remains fail-closed until its history semantics are proven.
+/// SU2 8.5.0 per-surface columns such as `CFx_body_42` intentionally do not match these exact
+/// normalized names, so the aggregate contract cannot silently consume a surface field.
 pub fn extract_su2_world_axis_diagnostics(
     summary: &Su2HistorySummary,
 ) -> Result<Su2WorldAxisDiagnostics, Su2DiagnosticError> {
@@ -232,6 +240,63 @@ pub fn extract_su2_world_axis_diagnostics(
         force_coefficient_xyz: [values[0], values[1], values[2]],
         moment_coefficient_xyz: [values[3], values[4], values[5]],
     })
+}
+
+/// Extracts SU2 8.5.0 `AERO_COEFF_SURF` world-axis fields for an explicit list of
+/// MARKER_MONITORING tags. The expected history headers are exactly `CFx_<marker>`,
+/// `CFy_<marker>`, `CFz_<marker>`, `CMx_<marker>`, `CMy_<marker>`, and `CMz_<marker>`.
+///
+/// Every marker must have one finite value for all six fields. Missing, duplicate, or
+/// non-finite evidence fails closed. The returned order matches `monitoring_markers`.
+pub fn extract_su2_surface_world_axis_diagnostics(
+    summary: &Su2HistorySummary,
+    monitoring_markers: &[String],
+) -> Result<Vec<Su2SurfaceWorldAxisDiagnostics>, Su2DiagnosticError> {
+    let prefixes = ["CFx", "CFy", "CFz", "CMx", "CMy", "CMz"];
+    let mut seen_markers = HashSet::new();
+    let mut output = Vec::with_capacity(monitoring_markers.len());
+    let mut missing = Vec::new();
+
+    for marker in monitoring_markers {
+        let marker_key = marker.to_ascii_lowercase();
+        if !seen_markers.insert(marker_key) {
+            return Err(Su2DiagnosticError::AmbiguousField(format!(
+                "monitoring marker {marker}"
+            )));
+        }
+
+        let mut values = [0.0_f64; 6];
+        for (slot, prefix) in prefixes.iter().enumerate() {
+            let field = format!("{prefix}_{marker}");
+            let matches = summary
+                .last_numeric_values
+                .iter()
+                .filter(|value| value.name.trim().eq_ignore_ascii_case(&field))
+                .collect::<Vec<_>>();
+            match matches.as_slice() {
+                [] => missing.push(field),
+                [value] if !value.value.is_finite() => {
+                    return Err(Su2DiagnosticError::NonFiniteField(field));
+                }
+                [value] => values[slot] = value.value,
+                _ => return Err(Su2DiagnosticError::AmbiguousField(field)),
+            }
+        }
+
+        output.push(Su2SurfaceWorldAxisDiagnostics {
+            marker: marker.clone(),
+            diagnostics: Su2WorldAxisDiagnostics {
+                force_coefficient_xyz: [values[0], values[1], values[2]],
+                moment_coefficient_xyz: [values[3], values[4], values[5]],
+            },
+        });
+    }
+
+    if !missing.is_empty() {
+        return Err(Su2DiagnosticError::MissingFields(missing));
+    }
+
+    Ok(output)
 }
 
 fn find_iteration_column(headers: &[String]) -> Option<usize> {
@@ -391,9 +456,9 @@ mod tests {
     }
 
     #[test]
-    fn per_surface_columns_do_not_satisfy_aggregate_diagnostics() {
+    fn su2_850_per_surface_columns_do_not_satisfy_aggregate_diagnostics() {
         let summary = summarize_su2_history_csv(
-            "\"Inner_Iter\",\"CFx(body_42)\",\"CFy(body_42)\",\"CFz(body_42)\",\"CMx(body_42)\",\"CMy(body_42)\",\"CMz(body_42)\"\n0,1,2,3,4,5,6\n",
+            "\"Inner_Iter\",\"CFx_body_42\",\"CFy_body_42\",\"CFz_body_42\",\"CMx_body_42\",\"CMy_body_42\",\"CMz_body_42\"\n0,1,2,3,4,5,6\n",
         )
         .unwrap();
         assert_eq!(
@@ -406,6 +471,67 @@ mod tests {
                 "CMY".into(),
                 "CMZ".into(),
             ]))
+        );
+    }
+
+    #[test]
+    fn su2_850_per_surface_world_axis_diagnostics_are_extracted_by_marker() {
+        let summary = summarize_su2_history_csv(
+            "\"Inner_Iter\",\"CFx_body_3\",\"CFy_body_3\",\"CFz_body_3\",\"CMx_body_3\",\"CMy_body_3\",\"CMz_body_3\",\"CFx_body_9\",\"CFy_body_9\",\"CFz_body_9\",\"CMx_body_9\",\"CMy_body_9\",\"CMz_body_9\"\n0,1,2,3,4,5,6,10,20,30,40,50,60\n",
+        )
+        .unwrap();
+        let diagnostics = extract_su2_surface_world_axis_diagnostics(
+            &summary,
+            &["body_3".into(), "body_9".into()],
+        )
+        .unwrap();
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics[0].marker, "body_3");
+        assert_eq!(diagnostics[0].diagnostics.force_coefficient_xyz, [1.0, 2.0, 3.0]);
+        assert_eq!(diagnostics[0].diagnostics.moment_coefficient_xyz, [4.0, 5.0, 6.0]);
+        assert_eq!(diagnostics[1].marker, "body_9");
+        assert_eq!(diagnostics[1].diagnostics.force_coefficient_xyz, [10.0, 20.0, 30.0]);
+        assert_eq!(diagnostics[1].diagnostics.moment_coefficient_xyz, [40.0, 50.0, 60.0]);
+    }
+
+    #[test]
+    fn missing_per_surface_field_fails_closed() {
+        let summary = summarize_su2_history_csv(
+            "\"Inner_Iter\",\"CFx_body_42\",\"CFy_body_42\",\"CFz_body_42\",\"CMx_body_42\",\"CMy_body_42\"\n0,1,2,3,4,5\n",
+        )
+        .unwrap();
+        assert_eq!(
+            extract_su2_surface_world_axis_diagnostics(&summary, &["body_42".into()]),
+            Err(Su2DiagnosticError::MissingFields(vec!["CMz_body_42".into()]))
+        );
+    }
+
+    #[test]
+    fn nonfinite_per_surface_field_fails_closed() {
+        let summary = summarize_su2_history_csv(
+            "\"Inner_Iter\",\"CFx_body_42\",\"CFy_body_42\",\"CFz_body_42\",\"CMx_body_42\",\"CMy_body_42\",\"CMz_body_42\"\n0,1,2,NaN,4,5,6\n",
+        )
+        .unwrap();
+        assert_eq!(
+            extract_su2_surface_world_axis_diagnostics(&summary, &["body_42".into()]),
+            Err(Su2DiagnosticError::NonFiniteField("CFz_body_42".into()))
+        );
+    }
+
+    #[test]
+    fn duplicate_monitoring_marker_request_fails_closed() {
+        let summary = summarize_su2_history_csv(
+            "\"Inner_Iter\",\"CFx_body_42\",\"CFy_body_42\",\"CFz_body_42\",\"CMx_body_42\",\"CMy_body_42\",\"CMz_body_42\"\n0,1,2,3,4,5,6\n",
+        )
+        .unwrap();
+        assert_eq!(
+            extract_su2_surface_world_axis_diagnostics(
+                &summary,
+                &["body_42".into(), "BODY_42".into()],
+            ),
+            Err(Su2DiagnosticError::AmbiguousField(
+                "monitoring marker BODY_42".into()
+            ))
         );
     }
 
