@@ -20,6 +20,14 @@ pub struct InletBoundary {
     pub turbulent_to_laminar_viscosity_ratio: f64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Su2CoefficientReference {
+    /// Reference area used by SU2 to non-dimensionalize integrated force coefficients.
+    pub area_m2: f64,
+    /// Reference length used by SU2 to non-dimensionalize integrated moment coefficients.
+    pub length_m: f64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Su2Case {
     pub mesh_filename: String,
@@ -49,6 +57,8 @@ pub enum Su2CaseError {
     InvalidTemperature(String),
     InvalidDirection(String),
     InvalidTurbulence(String),
+    InvalidReferenceArea,
+    InvalidReferenceLength,
     ZeroIterations,
 }
 
@@ -82,12 +92,30 @@ impl fmt::Display for Su2CaseError {
             Self::InvalidTurbulence(marker) => {
                 write!(f, "inlet {marker} has invalid turbulence settings")
             }
+            Self::InvalidReferenceArea => {
+                write!(f, "coefficient reference area must be positive and finite")
+            }
+            Self::InvalidReferenceLength => {
+                write!(f, "coefficient reference length must be positive and finite")
+            }
             Self::ZeroIterations => write!(f, "max_iterations must be > 0"),
         }
     }
 }
 
 impl std::error::Error for Su2CaseError {}
+
+impl Su2CoefficientReference {
+    pub fn validate(&self) -> Result<(), Su2CaseError> {
+        if self.area_m2 <= 0.0 || !self.area_m2.is_finite() {
+            return Err(Su2CaseError::InvalidReferenceArea);
+        }
+        if self.length_m <= 0.0 || !self.length_m.is_finite() {
+            return Err(Su2CaseError::InvalidReferenceLength);
+        }
+        Ok(())
+    }
+}
 
 impl Su2Case {
     pub fn validate(&self) -> Result<(), Su2CaseError> {
@@ -152,12 +180,26 @@ impl Su2Case {
         &self,
         monitoring_markers: &[String],
     ) -> Result<String, Su2CaseError> {
+        self.render_config_with_monitoring_and_reference(monitoring_markers, None)
+    }
+
+    /// Extends the monitoring contract with explicit SI reference dimensions for SU2 force/moment
+    /// coefficient normalization. The values are kept separate from body-marker selection because
+    /// a valid normalization denominator does not by itself establish per-body coefficient meaning.
+    pub fn render_config_with_monitoring_and_reference(
+        &self,
+        monitoring_markers: &[String],
+        coefficient_reference: Option<&Su2CoefficientReference>,
+    ) -> Result<String, Su2CaseError> {
         self.validate()?;
         for marker in monitoring_markers {
             validate_marker(marker)?;
             if !self.wall_markers.iter().any(|wall| wall == marker) {
                 return Err(Su2CaseError::MonitoringMarkerNotWall(marker.clone()));
             }
+        }
+        if let Some(reference) = coefficient_reference {
+            reference.validate()?;
         }
 
         let solver = match self.flow_model {
@@ -168,6 +210,7 @@ impl Su2Case {
         let mut cfg = String::new();
 
         push_kv(&mut cfg, "SOLVER", solver);
+        push_kv(&mut cfg, "SYSTEM_MEASUREMENTS", "SI");
         push_kv(&mut cfg, "INC_NONDIM", "DIMENSIONAL");
         push_kv(&mut cfg, "INC_DENSITY_MODEL", "CONSTANT");
         push_kv(&mut cfg, "FLUID_MODEL", "CONSTANT_DENSITY");
@@ -178,6 +221,10 @@ impl Su2Case {
         );
         push_kv(&mut cfg, "VISCOSITY_MODEL", "CONSTANT_VISCOSITY");
         push_kv(&mut cfg, "MU_CONSTANT", &fmt_float(dynamic_viscosity));
+        if let Some(reference) = coefficient_reference {
+            push_kv(&mut cfg, "REF_AREA", &fmt_float(reference.area_m2));
+            push_kv(&mut cfg, "REF_LENGTH", &fmt_float(reference.length_m));
+        }
         if self.flow_model == FlowModel::RansSst {
             push_kv(&mut cfg, "KIND_TURB_MODEL", "SST");
             push_kv(&mut cfg, "SST_OPTIONS", "V2003m");
@@ -449,6 +496,7 @@ mod tests {
             .render_config_with_monitoring(&monitoring)
             .unwrap();
         assert!(cfg.contains("SOLVER= INC_RANS"));
+        assert!(cfg.contains("SYSTEM_MEASUREMENTS= SI"));
         assert!(cfg.contains("INC_NONDIM= DIMENSIONAL"));
         assert!(cfg.contains("KIND_TURB_MODEL= SST"));
         assert!(cfg.contains("SST_OPTIONS= V2003m"));
@@ -479,12 +527,54 @@ mod tests {
     }
 
     #[test]
-    fn default_render_omits_marker_monitoring() {
+    fn default_render_omits_marker_monitoring_and_coefficient_reference() {
         let cfg = sample_case().render_config().unwrap();
         assert!(!cfg
             .lines()
             .any(|line| line.starts_with("MARKER_MONITORING=")));
+        assert!(!cfg.lines().any(|line| line.starts_with("REF_AREA=")));
+        assert!(!cfg.lines().any(|line| line.starts_with("REF_LENGTH=")));
         assert!(cfg.contains("MARKER_HEATFLUX= ( tunnel_wall, 0.0, body, 0.0 )"));
+    }
+
+    #[test]
+    fn explicit_coefficient_reference_is_rendered_in_si() {
+        let monitoring = vec!["body".to_owned()];
+        let reference = Su2CoefficientReference {
+            area_m2: 2.5,
+            length_m: 1.25,
+        };
+        let cfg = sample_case()
+            .render_config_with_monitoring_and_reference(&monitoring, Some(&reference))
+            .unwrap();
+        assert!(cfg.contains("SYSTEM_MEASUREMENTS= SI"));
+        assert!(cfg.contains("REF_AREA= 2.500000000000e0"));
+        assert!(cfg.contains("REF_LENGTH= 1.250000000000e0"));
+    }
+
+    #[test]
+    fn invalid_coefficient_reference_fails_closed() {
+        let monitoring = vec!["body".to_owned()];
+        let mut reference = Su2CoefficientReference {
+            area_m2: 0.0,
+            length_m: 1.0,
+        };
+        assert_eq!(
+            sample_case().render_config_with_monitoring_and_reference(
+                &monitoring,
+                Some(&reference)
+            ),
+            Err(Su2CaseError::InvalidReferenceArea)
+        );
+        reference.area_m2 = 1.0;
+        reference.length_m = f64::NAN;
+        assert_eq!(
+            sample_case().render_config_with_monitoring_and_reference(
+                &monitoring,
+                Some(&reference)
+            ),
+            Err(Su2CaseError::InvalidReferenceLength)
+        );
     }
 
     #[test]
