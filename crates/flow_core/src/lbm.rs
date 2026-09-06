@@ -325,6 +325,7 @@ pub struct CpuLbm {
     solid: Vec<bool>,
     density: Vec<f32>,
     velocity: Vec<[f32; 3]>,
+    last_solid_force: [f32; 3],
     steps: u64,
 }
 
@@ -343,6 +344,7 @@ impl CpuLbm {
             solid: vec![false; cells],
             density: vec![1.0; cells],
             velocity: vec![[0.0; 3]; cells],
+            last_solid_force: [0.0; 3],
             steps: 0,
         }
     }
@@ -357,6 +359,14 @@ impl CpuLbm {
 
     pub fn boundary_policy(&self) -> BoundaryPolicy {
         self.boundary
+    }
+
+    /// Aggregate lattice force exerted by the fluid on stationary voxel solids during the most
+    /// recent solver step. This is the momentum-exchange sum over fluid→solid bounce-back links:
+    /// `Σ 2 f_i* c_i`. Domain-wall reactions are intentionally excluded. If several geometry
+    /// objects share the solid mask, this value is their combined force.
+    pub fn solid_force_lattice(&self) -> [f32; 3] {
+        self.last_solid_force
     }
 
     /// Update the outer-domain boundary policy without resetting solver populations.
@@ -382,6 +392,7 @@ impl CpuLbm {
     pub fn set_solid(&mut self, xyz: [usize; 3], solid: bool) {
         let i = self.index(xyz);
         self.solid[i] = solid;
+        self.last_solid_force = [0.0; 3];
         if solid {
             self.f[i] = equilibrium(1.0, [0.0; 3]);
             self.next[i] = [0.0; Q];
@@ -398,6 +409,7 @@ impl CpuLbm {
         self.next.fill([0.0; Q]);
         self.density.fill(1.0);
         self.velocity.fill([0.0; 3]);
+        self.last_solid_force = [0.0; 3];
         self.steps = 0;
     }
 
@@ -423,6 +435,7 @@ impl CpuLbm {
                 self.density[i] = 1.0;
             }
         }
+        self.last_solid_force = [0.0; 3];
     }
 
     /// Advance one D3Q19 BGK step using the configured outer boundary policy.
@@ -456,6 +469,7 @@ impl CpuLbm {
             "Guo acceleration and target-velocity forcing are intentionally separate APIs"
         );
         self.next.fill([0.0; Q]);
+        self.last_solid_force = [0.0; 3];
         let [nx, ny, nz] = self.dims;
 
         for z in 0..nz {
@@ -510,6 +524,12 @@ impl CpuLbm {
                             StreamDestination::Cell(dst_p) => {
                                 let dst = self.index(dst_p);
                                 if self.solid[dst] {
+                                    // Half-way bounce-back changes fluid momentum by -2 f_i* c_i;
+                                    // the equal and opposite reaction below is the force on the solid.
+                                    for axis in 0..3 {
+                                        self.last_solid_force[axis] +=
+                                            2.0 * post[q] * C[q][axis] as f32;
+                                    }
                                     self.next[i][OPPOSITE[q]] += post[q];
                                 } else {
                                     self.next[dst][q] += post[q];
@@ -877,6 +897,27 @@ mod tests {
             solver.step_with_field(&field);
         }
         assert_eq!(solver.velocity_at([3, 3, 2]), [0.0; 3]);
+    }
+
+    #[test]
+    fn momentum_exchange_is_zero_at_rest() {
+        let mut solver = CpuLbm::new([8, 6, 4], 0.8);
+        solver.set_solid([4, 3, 2], true);
+        solver.step(&[]);
+        let force = solver.solid_force_lattice();
+        assert!(force.iter().all(|value| value.abs() < 1.0e-7), "rest force: {force:?}");
+    }
+
+    #[test]
+    fn momentum_exchange_points_with_uniform_flow() {
+        let mut solver = CpuLbm::new([10, 8, 4], 0.8);
+        solver.set_solid([5, 4, 2], true);
+        solver.set_uniform_velocity([0.03, 0.0, 0.0]);
+        solver.step(&[]);
+        let force = solver.solid_force_lattice();
+        assert!(force[0] > 0.0, "expected positive drag direction, got {force:?}");
+        assert!(force[1].abs() < 1.0e-6, "unexpected y force: {force:?}");
+        assert!(force[2].abs() < 1.0e-6, "unexpected z force: {force:?}");
     }
 
     #[test]
