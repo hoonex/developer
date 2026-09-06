@@ -140,4 +140,4 @@ Not supported:
 - universal domain-clearance rules;
 - treating the native BGK/voxel preview as a replacement for the accurate SU2 path.
 
-The next useful work is **not** D14/D16 brute-force refinement. Priority moves to per-object force provenance/effective-wall diagnostics and the pinned upstream SU2 8.5.0 accurate-backend cross-validation.
+The pinned upstream SU2 8.5.0 known-case cross-validation is now GREEN through AeroForge's adapter/process path. The next useful work is **not** D14/D16 brute-force refinement: priority moves to per-object force provenance/effective-wall diagnostics, followed by geometry/volume-mesh/marker provenance required for an AeroForge-generated-mesh SU2 case.
