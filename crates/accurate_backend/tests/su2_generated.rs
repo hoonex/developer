@@ -193,6 +193,14 @@ fn generated_closed_tunnel_runs_through_su2_850() {
     assert_eq!(generated.volume_mesh.cells.len(), 4 * 3 * 3 * 6);
     assert_volume_close(audit.total_volume, 36.0);
     assert_eq!(generated.bundle.marker_bindings.len(), 6);
+    assert!(
+        generated
+            .bundle
+            .config_text
+            .lines()
+            .all(|line| !line.starts_with("MARKER_MONITORING=")),
+        "closed tunnel without a scene body must not monitor tunnel walls as aerodynamic bodies"
+    );
 
     let root = temp_root();
     let prepared = prepare_generated_su2_case_directory(
@@ -286,6 +294,15 @@ fn generated_primitive_body_marker_runs_through_su2_850() {
     );
     assert!(generated.bundle.mesh_text.contains("MARKER_TAG= body_42"));
     assert!(generated.bundle.config_text.contains("body_42, 0.0"));
+    assert_eq!(
+        generated
+            .bundle
+            .config_text
+            .lines()
+            .find(|line| line.starts_with("MARKER_MONITORING=")),
+        Some("MARKER_MONITORING= ( body_42 )"),
+        "only the scene-object body marker should be selected for integrated load monitoring"
+    );
 
     let root = temp_root();
     let prepared = prepare_generated_su2_case_directory(
