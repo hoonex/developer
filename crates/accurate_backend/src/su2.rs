@@ -319,11 +319,12 @@ impl Su2Case {
             );
         }
 
-        // Keep the persisted history contract explicit. SU2 only writes groups requested through
-        // HISTORY_OUTPUT; request AERO_COEFF when a monitored body also has an explicit coefficient
-        // reference so the aggregate CFx/CFy/CFz and CMx/CMy/CMz diagnostics are actually present.
+        // Keep the persisted history contract explicit. SU2 8.5.0 only writes groups requested
+        // through HISTORY_OUTPUT. A monitored body with an explicit coefficient reference requests
+        // both aggregate AERO_COEFF and per-marker AERO_COEFF_SURF fields; callers still decide
+        // independently whether the per-surface semantics have enough external evidence to expose.
         let history_output = if coefficient_reference.is_some() && !monitoring_markers.is_empty() {
-            "ITER, RMS_RES, AERO_COEFF"
+            "ITER, RMS_RES, AERO_COEFF, AERO_COEFF_SURF"
         } else {
             "ITER, RMS_RES"
         };
@@ -585,7 +586,9 @@ mod tests {
         assert!(cfg.contains("REF_ORIGIN_MOMENT_X= 0.000000000000e0"));
         assert!(cfg.contains("REF_ORIGIN_MOMENT_Y= 0.000000000000e0"));
         assert!(cfg.contains("REF_ORIGIN_MOMENT_Z= 0.000000000000e0"));
-        assert!(cfg.contains("HISTORY_OUTPUT= ITER, RMS_RES, AERO_COEFF"));
+        assert!(cfg.contains(
+            "HISTORY_OUTPUT= ITER, RMS_RES, AERO_COEFF, AERO_COEFF_SURF"
+        ));
     }
 
     #[test]
