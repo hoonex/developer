@@ -366,9 +366,12 @@ pub struct CpuLbm {
     f: Vec<[f32; Q]>,
     next: Vec<[f32; Q]>,
     solid: Vec<bool>,
+    /// Compact caller-owned provenance labels. Label 0 means no object attribution.
+    solid_owner: Vec<u32>,
     density: Vec<f32>,
     velocity: Vec<[f32; 3]>,
     last_solid_force: [f32; 3],
+    last_solid_force_by_owner: Vec<[f32; 3]>,
     steps: u64,
 }
 
@@ -385,9 +388,11 @@ impl CpuLbm {
             f: vec![rest; cells],
             next: vec![[0.0; Q]; cells],
             solid: vec![false; cells],
+            solid_owner: vec![0; cells],
             density: vec![1.0; cells],
             velocity: vec![[0.0; 3]; cells],
             last_solid_force: [0.0; 3],
+            last_solid_force_by_owner: vec![[0.0; 3]],
             steps: 0,
         }
     }
@@ -410,6 +415,24 @@ impl CpuLbm {
     /// objects share the solid mask, this value is their combined force.
     pub fn solid_force_lattice(&self) -> [f32; 3] {
         self.last_solid_force
+    }
+
+    /// Lattice force attributed to one compact solid-owner label during the most recent step.
+    /// Label 0 intentionally carries no provenance and always reports zero. Labels are expected
+    /// to be compact indices mapped externally to stable scene-object IDs.
+    pub fn solid_force_lattice_for_owner(&self, owner: u32) -> [f32; 3] {
+        if owner == 0 {
+            return [0.0; 3];
+        }
+        self.last_solid_force_by_owner
+            .get(owner as usize)
+            .copied()
+            .unwrap_or([0.0; 3])
+    }
+
+    /// Compact provenance label currently assigned to a lattice cell. Zero means no object label.
+    pub fn solid_owner_label(&self, xyz: [usize; 3]) -> u32 {
+        self.solid_owner[self.index(xyz)]
     }
 
     /// Update the outer-domain boundary policy without resetting solver populations.
@@ -435,7 +458,9 @@ impl CpuLbm {
     pub fn set_solid(&mut self, xyz: [usize; 3], solid: bool) {
         let i = self.index(xyz);
         self.solid[i] = solid;
+        self.solid_owner[i] = 0;
         self.last_solid_force = [0.0; 3];
+        self.last_solid_force_by_owner.fill([0.0; 3]);
         if solid {
             self.f[i] = equilibrium(1.0, [0.0; 3]);
             self.next[i] = [0.0; Q];
@@ -444,16 +469,47 @@ impl CpuLbm {
         }
     }
 
+    /// Assign one solid cell to a compact owner label. Labels must be non-zero; the caller owns
+    /// the external label→scene-object mapping.
+    pub fn set_solid_with_owner(&mut self, xyz: [usize; 3], owner: u32) {
+        assert!(owner != 0, "solid owner label 0 is reserved for no attribution");
+        let i = self.index(xyz);
+        self.solid[i] = true;
+        self.solid_owner[i] = owner;
+        let required = owner as usize + 1;
+        if self.last_solid_force_by_owner.len() < required {
+            self.last_solid_force_by_owner.resize(required, [0.0; 3]);
+        } else {
+            self.last_solid_force_by_owner.fill([0.0; 3]);
+        }
+        self.last_solid_force = [0.0; 3];
+        self.f[i] = equilibrium(1.0, [0.0; 3]);
+        self.next[i] = [0.0; Q];
+        self.velocity[i] = [0.0; 3];
+        self.density[i] = 1.0;
+    }
+
     pub fn set_solid_mask(&mut self, solid: &[bool]) {
         assert_eq!(solid.len(), self.solid.len(), "solid-mask cell count mismatch");
         self.solid = solid.to_vec();
-        let rest = equilibrium(1.0, [0.0; 3]);
-        self.f.fill(rest);
-        self.next.fill([0.0; Q]);
-        self.density.fill(1.0);
-        self.velocity.fill([0.0; 3]);
-        self.last_solid_force = [0.0; 3];
-        self.steps = 0;
+        self.solid_owner.fill(0);
+        self.last_solid_force_by_owner.clear();
+        self.last_solid_force_by_owner.push([0.0; 3]);
+        self.reset_after_solid_rebuild();
+    }
+
+    /// Replace the object-owned solid mask. Label 0 is fluid/no object; every non-zero label is a
+    /// solid cell owned by that compact label. Any geometry-overlap policy must be resolved by the
+    /// caller before this authoritative mask is supplied.
+    pub fn set_solid_owner_mask(&mut self, owners: &[u32]) {
+        assert_eq!(owners.len(), self.solid.len(), "solid-owner cell count mismatch");
+        self.solid_owner = owners.to_vec();
+        for (solid, owner) in self.solid.iter_mut().zip(owners.iter().copied()) {
+            *solid = owner != 0;
+        }
+        let max_owner = owners.iter().copied().max().unwrap_or(0) as usize;
+        self.last_solid_force_by_owner = vec![[0.0; 3]; max_owner + 1];
+        self.reset_after_solid_rebuild();
     }
 
     pub fn is_solid(&self, xyz: [usize; 3]) -> bool {
@@ -479,6 +535,7 @@ impl CpuLbm {
             }
         }
         self.last_solid_force = [0.0; 3];
+        self.last_solid_force_by_owner.fill([0.0; 3]);
     }
 
     /// Advance one D3Q19 BGK step using the configured outer boundary policy.
@@ -501,6 +558,17 @@ impl CpuLbm {
         self.step_impl(None, &[], Some(acceleration));
     }
 
+    fn reset_after_solid_rebuild(&mut self) {
+        let rest = equilibrium(1.0, [0.0; 3]);
+        self.f.fill(rest);
+        self.next.fill([0.0; Q]);
+        self.density.fill(1.0);
+        self.velocity.fill([0.0; 3]);
+        self.last_solid_force = [0.0; 3];
+        self.last_solid_force_by_owner.fill([0.0; 3]);
+        self.steps = 0;
+    }
+
     fn step_impl(
         &mut self,
         field: Option<&VelocityField>,
@@ -513,6 +581,7 @@ impl CpuLbm {
         );
         self.next.fill([0.0; Q]);
         self.last_solid_force = [0.0; 3];
+        self.last_solid_force_by_owner.fill([0.0; 3]);
         let [nx, ny, nz] = self.dims;
 
         for z in 0..nz {
@@ -569,9 +638,14 @@ impl CpuLbm {
                                 if self.solid[dst] {
                                     // Half-way bounce-back changes fluid momentum by -2 f_i* c_i;
                                     // the equal and opposite reaction below is the force on the solid.
+                                    let owner = self.solid_owner[dst] as usize;
                                     for axis in 0..3 {
-                                        self.last_solid_force[axis] +=
-                                            2.0 * post[q] * C[q][axis] as f32;
+                                        let reaction = 2.0 * post[q] * C[q][axis] as f32;
+                                        self.last_solid_force[axis] += reaction;
+                                        if owner != 0 {
+                                            debug_assert!(owner < self.last_solid_force_by_owner.len());
+                                            self.last_solid_force_by_owner[owner][axis] += reaction;
+                                        }
                                     }
                                     self.next[i][OPPOSITE[q]] += post[q];
                                 } else {
@@ -949,10 +1023,15 @@ mod tests {
     #[test]
     fn momentum_exchange_is_zero_at_rest() {
         let mut solver = CpuLbm::new([8, 6, 4], 0.8);
-        solver.set_solid([4, 3, 2], true);
+        solver.set_solid_with_owner([4, 3, 2], 1);
         solver.step(&[]);
         let force = solver.solid_force_lattice();
+        let owner_force = solver.solid_force_lattice_for_owner(1);
         assert!(force.iter().all(|value| value.abs() < 1.0e-7), "rest force: {force:?}");
+        assert!(
+            owner_force.iter().all(|value| value.abs() < 1.0e-7),
+            "rest owner force: {owner_force:?}"
+        );
     }
 
     #[test]
@@ -965,6 +1044,63 @@ mod tests {
         assert!(force[0] > 0.0, "expected positive drag direction, got {force:?}");
         assert!(force[1].abs() < 1.0e-6, "unexpected y force: {force:?}");
         assert!(force[2].abs() < 1.0e-6, "unexpected z force: {force:?}");
+    }
+
+    #[test]
+    fn per_object_momentum_exchange_sums_to_aggregate() {
+        let dims = [12, 8, 4];
+        let mut owners = vec![0_u32; dims[0] * dims[1] * dims[2]];
+        owners[field_index(dims, [4, 3, 2])] = 1;
+        owners[field_index(dims, [7, 4, 2])] = 2;
+
+        let mut solver = CpuLbm::new(dims, 0.8);
+        solver.set_solid_owner_mask(&owners);
+        solver.set_uniform_velocity([0.03, 0.0, 0.0]);
+        solver.step(&[]);
+
+        let aggregate = solver.solid_force_lattice();
+        let first = solver.solid_force_lattice_for_owner(1);
+        let second = solver.solid_force_lattice_for_owner(2);
+        assert!(first[0] > 0.0, "first solid should receive drag: {first:?}");
+        assert!(second[0] > 0.0, "second solid should receive drag: {second:?}");
+        for axis in 0..3 {
+            let sum = first[axis] + second[axis];
+            assert!(
+                (aggregate[axis] - sum).abs() < 1.0e-6,
+                "aggregate/per-object mismatch axis {axis}: aggregate={aggregate:?} first={first:?} second={second:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn solid_owner_rebuild_invalidates_deleted_provenance() {
+        let dims = [10, 8, 4];
+        let cells = dims[0] * dims[1] * dims[2];
+        let solid_cell = [5, 4, 2];
+        let solid_i = field_index(dims, solid_cell);
+        let mut owners = vec![0_u32; cells];
+        owners[solid_i] = 1;
+
+        let mut solver = CpuLbm::new(dims, 0.8);
+        solver.set_solid_owner_mask(&owners);
+        solver.set_uniform_velocity([0.03, 0.0, 0.0]);
+        solver.step(&[]);
+        assert!(solver.solid_force_lattice_for_owner(1)[0] > 0.0);
+
+        solver.set_solid_owner_mask(&vec![0_u32; cells]);
+        assert!(!solver.is_solid(solid_cell));
+        assert_eq!(solver.solid_owner_label(solid_cell), 0);
+        assert_eq!(solver.solid_force_lattice(), [0.0; 3]);
+        assert_eq!(solver.solid_force_lattice_for_owner(1), [0.0; 3]);
+
+        owners[solid_i] = 2;
+        solver.set_solid_owner_mask(&owners);
+        assert_eq!(solver.solid_owner_label(solid_cell), 2);
+        assert_eq!(solver.solid_force_lattice_for_owner(1), [0.0; 3]);
+        solver.set_uniform_velocity([0.03, 0.0, 0.0]);
+        solver.step(&[]);
+        assert!(solver.solid_force_lattice_for_owner(2)[0] > 0.0);
+        assert_eq!(solver.solid_force_lattice_for_owner(1), [0.0; 3]);
     }
 
     #[test]
