@@ -37,6 +37,7 @@ The native LBM backend remains an interactive preview solver. GREEN numerical re
 | Pinned upstream SU2 8.5.0 known-case | SU2 adapter | GREEN |
 | AeroForge-generated empty-tunnel SU2 execution | SU2 adapter | GREEN execution smoke |
 | AeroForge-generated primitive-body/marker SU2 execution | SU2 adapter | GREEN execution smoke |
+| Generated body-only `MARKER_MONITORING` under pinned SU2 8.5.0 | SU2 adapter | GREEN execution/config smoke |
 | Explicit desktop SU2 execution orchestration | App + SU2 adapter | GREEN implementation regression |
 | Structured SU2 history quality gate + manifest v2 | App + SU2 adapter | GREEN implementation regression |
 
@@ -201,7 +202,9 @@ A second external-runtime checkpoint covers **AeroForge-generated** cases. PR wo
 
 The empty `4×3×3` case contains `216` tetrahedra and audited fluid volume `36`. The body-containing `5×5×5` case removes one solid voxel, contains `744` fluid tetrahedra, exposes 12 body-wall triangles, and preserves the body marker as boundary marker 7. Volume assertions use a scale-aware `1e-12` relative-style tolerance to avoid treating harmless floating-point accumulation error as a topology failure.
 
-The temporary generated-SU2 one-shot job was removed from routine CI after evidence capture. These generated-case tests establish **mesh/config/marker/provenance persistence and SU2 parser/solver execution compatibility**. They do **not** establish body-fitted meshing, aerodynamic coefficient accuracy, convergence, turbulence-model validity, or engineering validation. The current generated volume mesh is deliberately staircase/voxel-derived.
+Body-vs-domain load-monitoring semantics are now explicit and externally smoke-proven. PR workflow run #409 reused the pinned outer SU2 8.5.0 archive and SHA256 contract, reported `SU2 v8.5.0 "Harrier", The Open-Source CFD Code`, and completed both ignored generated-case tests GREEN (`2 passed; 0 failed`). The empty tunnel asserted that no `MARKER_MONITORING` line was emitted. The primitive-body case asserted exactly `MARKER_MONITORING= ( body_42 )`; both generated configs were then accepted and advanced by the real solver. The temporary one-shot job was removed immediately after evidence capture.
+
+These generated-case tests establish **mesh/config/marker/provenance persistence, body-vs-domain monitoring configuration, and SU2 parser/solver execution compatibility**. They do **not** establish body-fitted meshing, aerodynamic coefficient normalization/accuracy, convergence, turbulence-model validity, multi-body coefficient attribution, or engineering validation. The current generated volume mesh is deliberately staircase/voxel-derived.
 
 The desktop accurate-mode integration supports an explicit scene-and-settings-gated execution path. A user prepares the current scene and accurate solver settings, then explicitly chooses `Persist + run with SU2 8.5.0`. AeroForge refuses stale prepared bundles if either the scene revision or tracked solver settings changed, discovers and probes `SU2_CFD`, rejects non-8.5.0 banners, persists a new non-overwriting case directory, launches SU2 on a worker thread, and ingests process status plus history/stdout/stderr evidence after completion. There is still **no automatic solver launch**.
 
@@ -209,7 +212,7 @@ Structured history parsing now reads quoted SU2 CSV, recognizes standard iterati
 
 `aeroforge_run_manifest.tsv` format version 2 persists the scene revision, SU2 banner, process status, requested iteration budget, residual target, history-gate state, final iteration, worst final RMS residual when available, residual count/finite status, and any history parse/read error.
 
-PR workflow run #393 is **GREEN** across routine core tests, Windows app compile/unit tests, and GPU smoke after adding solver-settings freshness, structured history parsing, conservative quality evaluation, UI integration, and manifest-v2 persistence. This validates the implementation/reporting contract, not the aerodynamic accuracy of a user case. The operational contract and non-claims are detailed in `docs/ACCURATE_EXECUTION.md`.
+PR workflow run #393 is **GREEN** across routine core tests, Windows app compile/unit tests, and GPU smoke after adding solver-settings freshness, structured history parsing, conservative quality evaluation, UI integration, and manifest-v2 persistence. Post-evidence routine PR workflow run #411 is also **GREEN** across core tests, Windows app compile/unit tests, and all three GPU parity smokes after the temporary generated-SU2 one-shot was removed. These validate implementation/reporting and cleanup-state contracts, not the aerodynamic accuracy of a user case. The operational contract and non-claims are detailed in `docs/ACCURATE_EXECUTION.md`.
 
 ## Claims policy
 
@@ -223,7 +226,7 @@ PR workflow run #393 is **GREEN** across routine core tests, Windows app compile
 - Momentum-exchange Cd/lift and per-object force remain diagnostics until grid/domain/reference/force evidence improves.
 - BGK physical-scaling warnings remain authoritative even when regressions are GREEN.
 - The GREEN upstream SU2 known-case establishes pinned adapter/process compatibility.
-- The GREEN generated SU2 smoke establishes generated mesh/config/marker/provenance execution compatibility only; it is not an engineering CFD validation result.
+- The GREEN generated SU2 smoke establishes generated mesh/config/marker/provenance execution compatibility only; body-only monitoring additionally establishes the monitored-boundary selection contract, not coefficient normalization or engineering accuracy.
 - The GREEN desktop execution/history-quality path establishes explicit launch/persistence/quality-reporting behavior only; neither a successful process exit nor `residual_target_met` is an aerodynamic accuracy claim.
 - Staircase voxel boundaries must not be described as body-fitted surfaces.
 - Accurate SU2 results must retain solver version, mesh/config provenance, convergence history, geometry revision and source-translation decisions.
@@ -231,7 +234,7 @@ PR workflow run #393 is **GREEN** across routine core tests, Windows app compile
 ## Next validation milestones
 
 1. Add live iteration progress, cancellation and explicit external-process lifecycle/recovery handling while retaining immutable prepared-case provenance.
-2. Separate body-only monitoring from tunnel-wall boundary configuration and define force-axis/reference-area semantics before exposing structured aerodynamic coefficients.
+2. Define explicit coefficient reference semantics (`REF_AREA`, `REF_LENGTH`, force/moment axes/origins as applicable) and structured **diagnostic** coefficient extraction; keep multi-body attribution fail-closed until its SU2 history semantics are proven.
 3. Connect imported audited surfaces to a deterministic repair/body-fitted or otherwise declared higher-fidelity volume-meshing path; keep staircase voxel meshing explicitly labeled as such.
 4. Validate a body-containing generated case against trusted dimensional reference data with grid/domain/model sensitivity before making engineering claims.
 5. Do not extend the native D8/D10/D12 cylinder ladder by brute force unless a later force/boundary change requires revalidation.
