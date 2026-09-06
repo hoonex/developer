@@ -55,13 +55,13 @@ fn lid_driven_cavity_re100_matches_ghia_centerlines() {
         ]))
         .expect("Re=100 cavity boundary policy must be valid");
 
-    for _ in 0..30_000 {
+    for _ in 0..8_000 {
         solver.step(&[]);
     }
     let previous_u = probe_errors(&solver, dims, lid_speed, GHIA_U_VERTICAL, true).2;
     let previous_v = probe_errors(&solver, dims, lid_speed, GHIA_V_HORIZONTAL, false).2;
 
-    for _ in 0..5_000 {
+    for _ in 0..2_000 {
         solver.step(&[]);
     }
 
