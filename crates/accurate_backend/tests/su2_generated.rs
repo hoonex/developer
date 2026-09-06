@@ -1,10 +1,11 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aeroforge_accurate_backend::{
     build_voxel_generated_su2_case_with_reference, discover_su2,
-    prepare_generated_su2_case_directory, probe_su2_banner, run_prepared_generated_su2_case,
+    extract_su2_world_axis_diagnostics, prepare_generated_su2_case_directory,
+    probe_su2_banner, run_prepared_generated_su2_case, summarize_su2_history_csv,
     voxelize_scene_primitives, BoundaryRole, BoundarySource, DomainAxis, DomainSide, FlowModel,
     InletBoundary, Su2Case, Su2CoefficientReference, Su2MarkerBinding, VoxelFluidDomainSpec,
     VoxelPrimitiveKind, VoxelSolidPrimitive,
@@ -174,7 +175,7 @@ fn assert_explicit_reference(config: &str) {
     assert!(config.contains("REF_ORIGIN_MOMENT_Z= 0.000000000000e0"));
 }
 
-fn assert_volume_output(prepared_dir: &std::path::Path, output_basename: &str) {
+fn assert_volume_output(prepared_dir: &Path, output_basename: &str) {
     assert!(
         prepared_dir
             .join(format!("{output_basename}_volume.vtu"))
@@ -183,6 +184,51 @@ fn assert_volume_output(prepared_dir: &std::path::Path, output_basename: &str) {
                 .join(format!("{output_basename}_volume.vtk"))
                 .exists(),
         "successful SU2 execution should emit the configured volume output"
+    );
+}
+
+fn find_history_path(prepared_dir: &Path) -> PathBuf {
+    let direct = prepared_dir.join("history.csv");
+    if direct.is_file() {
+        return direct;
+    }
+
+    let mut candidates = fs::read_dir(prepared_dir)
+        .expect("generated SU2 case directory must remain readable")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension().and_then(|value| value.to_str()) == Some("csv")
+                && path
+                    .file_stem()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|stem| stem.starts_with("history"))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates
+        .into_iter()
+        .next()
+        .expect("successful monitored-body SU2 execution must emit a history CSV")
+}
+
+fn assert_world_axis_history_diagnostics(prepared_dir: &Path) {
+    let history_path = find_history_path(prepared_dir);
+    let history_text = fs::read_to_string(&history_path)
+        .expect("generated SU2 history CSV must remain readable for diagnostic evidence");
+    let summary = summarize_su2_history_csv(&history_text)
+        .expect("production SU2 history parser must accept the generated body run");
+    let diagnostics = extract_su2_world_axis_diagnostics(&summary)
+        .expect("generated body run must expose complete finite aggregate world-axis diagnostics");
+
+    println!(
+        "AEROFORGE_WORLD_AXIS_DIAGNOSTICS CFx={:.12e} CFy={:.12e} CFz={:.12e} CMx={:.12e} CMy={:.12e} CMz={:.12e}",
+        diagnostics.force_coefficient_xyz[0],
+        diagnostics.force_coefficient_xyz[1],
+        diagnostics.force_coefficient_xyz[2],
+        diagnostics.moment_coefficient_xyz[0],
+        diagnostics.moment_coefficient_xyz[1],
+        diagnostics.moment_coefficient_xyz[2],
     );
 }
 
@@ -359,6 +405,7 @@ fn generated_primitive_body_marker_runs_through_su2_850() {
         &prepared.working_directory,
         "aeroforge_generated_body",
     );
+    assert_world_axis_history_diagnostics(&prepared.working_directory);
 
     fs::remove_dir_all(root).expect("generated body SU2 temp directory must clean up");
 }
