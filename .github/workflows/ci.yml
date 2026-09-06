@@ -65,5 +65,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gpu-smoke-cargo-
             ${{ runner.os }}-cargo-
-      - name: Validate WGSL and compare GPU against CPU reference
-        run: cargo run -p aeroforge-gpu-smoke
+      - name: Validate moving-wall GPU parity
+        run: cargo run -p aeroforge-gpu-smoke --bin aeroforge-gpu-smoke
+      - name: Validate NEQ open-boundary GPU parity
+        run: cargo run -p aeroforge-gpu-smoke --bin open_boundary
