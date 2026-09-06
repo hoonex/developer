@@ -41,8 +41,9 @@ The native LBM backend remains an interactive preview solver. GREEN numerical re
 | Explicit SI `REF_AREA` / `REF_LENGTH` under pinned SU2 8.5.0 | SU2 adapter | GREEN execution/config smoke |
 | Explicit zero-angle world-axis / zero-origin coefficient frame | App + SU2 adapter | GREEN external smoke |
 | Exact aggregate `CFx/CFy/CFz/CMx/CMy/CMz` history extraction | App + SU2 adapter | GREEN external smoke |
+| Exact per-body `AERO_COEFF_SURF` six-axis SceneObject attribution | App + SU2 adapter | GREEN external smoke |
 | Explicit desktop SU2 execution orchestration | App + SU2 adapter | GREEN implementation regression |
-| Structured SU2 history quality gate + manifest v4 diagnostic provenance | App + SU2 adapter | GREEN implementation regression |
+| Structured SU2 history quality gate + manifest v5 diagnostic provenance | App + SU2 adapter | GREEN implementation regression |
 
 ## Boundary-policy contract
 
@@ -192,7 +193,7 @@ These geometry-denominator differences are too small to explain the observed D8�
 
 ## Accurate SU2 backend status
 
-`aeroforge-accurate-backend` provides dimensional incompressible laminar/RANS-SST config generation, marker/filename validation, inlet-direction normalization, explicit SU2 8.5-compatible flow numerical-method settings, explicit positive finite SI coefficient-reference validation/rendering, fixed zero-angle/zero-sideslip world-axis and zero-origin moment semantics for the current generated +X-flow path, `SU2_RUN`/PATH discovery, banner probing, generated-case persistence, prepared-case process execution, structured final-history quality evaluation, and exact aggregate six-axis diagnostic extraction.
+`aeroforge-accurate-backend` provides dimensional incompressible laminar/RANS-SST config generation, marker/filename validation, inlet-direction normalization, explicit SU2 8.5-compatible flow numerical-method settings, explicit positive finite SI coefficient-reference validation/rendering, fixed zero-angle/zero-sideslip world-axis and zero-origin moment semantics for the current generated +X-flow path, `SU2_RUN`/PATH discovery, banner probing, generated-case persistence, prepared-case process execution, structured final-history quality evaluation, exact aggregate six-axis extraction, and exact SU2 8.5.0 per-surface six-axis extraction for explicitly monitored marker tags.
 
 The pinned ignored upstream integration test mirrors the official SU2 8.5.0 incompressible laminar-cylinder regression contract: it runs through AeroForge's `discover_su2 → probe_su2_banner → run_su2_case` path, parses solver iteration 10, and compares the four upstream reference values with `1e-5` tolerance.
 
@@ -213,21 +214,33 @@ PR workflow run #431 completed GREEN across routine core tests, Windows app comp
 
 The axis/origin contract was then made explicit and revalidated through the pinned runtime in run #449, followed by GREEN post-cleanup routine CI in run #451. AeroForge scene coordinates remain Y-up; at the pinned SU2 zero-angle frame, `CL` aligns with +Z rather than AeroForge vertical +Y, so the UI uses raw world-axis `CF*`/`CM*` diagnostics instead of silently relabeling `CL` as vertical lift.
 
-Structured diagnostic extraction is exact and fail-closed. The production parser promotes only aggregate `CFx`, `CFy`, `CFz`, `CMx`, `CMy`, and `CMz` from the final history row, requires all six to be finite, and rejects per-surface variants from the aggregate contract. The app suppresses aerodynamic diagnostics when no SceneObject body is in `MARKER_MONITORING`; with multiple bodies the current result remains aggregate-only.
+Structured diagnostic extraction is exact and fail-closed. The aggregate production parser promotes only `CFx`, `CFy`, `CFz`, `CMx`, `CMy`, and `CMz` from the final history row, requires all six to be finite, and rejects per-surface variants from the aggregate contract. Monitored generated cases request `HISTORY_OUTPUT= ITER, RMS_RES, AERO_COEFF, AERO_COEFF_SURF`. SU2 8.5.0 per-surface history fields are exact parenthesized names such as `CFx(body_3)` and `CMz(body_9)`.
 
-The first real diagnostic one-shot, run #463, failed closed because SU2 history contained none of the six fields. That failure identified a generated-config omission: SU2 8.5.0 does not guarantee aerodynamic fields in history unless the relevant output group is requested. AeroForge therefore now requests `HISTORY_OUTPUT= ITER, RMS_RES, AERO_COEFF` for monitored, reference-aware generated cases instead of weakening the extractor.
+Per-body promotion is independently fail-closed: every monitored SceneObject marker must have all six finite surface fields before a complete result is exposed. Missing/ambiguous/non-finite evidence leaves per-body diagnostics unavailable instead of promoting a partial body list. SceneObject attribution comes from the authoritative generated marker binding `BoundarySource::SceneObject { scene_object_id }`; AeroForge does not infer IDs by parsing strings such as `body_42`.
 
-Run #465 then completed the pinned external proof GREEN. The same outer archive SHA256 passed, the runtime banner was `SU2 v8.5.0 "Harrier", The Open-Source CFD Code`, and both generated tests passed (`2 passed; 0 failed`). The body-case real SU2 history produced finite aggregate diagnostics `CFx=1.057443042`, `CFy=-0.07758861071`, `CFz=-0.07758861071`, `CMx≈0`, `CMy=2.83920088`, `CMz=-2.83920088`. These are smoke-fixture diagnostic values, **not trusted aerodynamic reference values**. The temporary job was removed immediately afterward, and post-cleanup run #467 completed GREEN across core tests, Windows app compile/unit tests, and all three GPU parity smokes.
+The first real aggregate diagnostic one-shot, run #463, failed closed because SU2 history contained none of the six fields. That failure identified a generated-config omission rather than a parser-tolerance issue. AeroForge therefore explicitly requested `AERO_COEFF`; run #465 then completed GREEN and produced finite aggregate diagnostics `CFx=1.057443042`, `CFy=-0.07758861071`, `CFz=-0.07758861071`, `CMx≈0`, `CMy=2.83920088`, `CMz=-2.83920088`. These are smoke-fixture diagnostic values, not trusted aerodynamic reference values. The temporary job was removed immediately afterward, and post-cleanup run #467 completed GREEN across routine core/app/GPU CI.
 
-`aeroforge_run_manifest.tsv` format version 4 now persists the exact reference area/length, coefficient-frame identifier, zero angle of attack, zero sideslip, zero moment origin, monitored SceneObject-body count, process result, iteration/residual quality state, aggregate `diagnostic_cfx/cfy/cfz/cmx/cmy/cmz` when available, and explicit history/diagnostic errors otherwise.
+The multi-body evidence then exercised two generated one-voxel bodies with stable SceneObject IDs `3` and `9` while the input object vector was intentionally ordered `[9, 3]`. Run #487's bounded failure instrumentation captured the actual SU2 8.5.0 history names and showed that the fields are parenthesized rather than the initially assumed underscore form. After the exact naming fix, run #489 completed GREEN with banner `SU2 v8.5.0 "Harrier", The Open-Source CFD Code`.
 
-These generated-case tests establish **mesh/config/marker/provenance persistence, body-vs-domain monitoring selection, explicit positive finite SI reference-denominator rendering/persistence, explicit world-axis/origin semantics, exact aggregate history-field ingestion, and pinned SU2 parser/solver execution compatibility**. They do **not** establish that a chosen `REF_AREA`/`REF_LENGTH` is physically appropriate for a scene, body-fitted meshing, aerodynamic coefficient accuracy, convergence, turbulence-model validity, per-body multi-body coefficient attribution, or engineering validation. The current generated volume mesh is deliberately staircase/voxel-derived.
+Run #489 produced:
+
+- `body_3`: `CF=(0.6672644375, -0.02848445078, -0.02848445078)`, `CM=(3.400089777e-16, 1.755802498, -1.755802498)`;
+- `body_9`: `CF=(0.530493586, -0.01590075699, -0.01590075699)`, `CM=(2.42960813e-17, 1.382416704, -1.382416704)`;
+- aggregate: `CF=(1.197758023, -0.04438520778, -0.04438520778)`, `CM=(3.64305059e-16, 3.138219202, -3.138219202)`;
+- `max_surface_sum_error=5.000e-10` across the six aggregate-vs-surface-sum comparisons;
+- external test result: `1 passed; 0 failed`.
+
+The temporary multi-body evidence job was removed immediately after capture. Post-cleanup run #491 completed `core-tests`, `app-check`, and `gpu-smoke` GREEN with no one-shot job remaining. Run #493 then completed the same routine jobs GREEN after app/result integration added authoritative SceneObject mapping, separate aggregate/per-body UI presentation, all-or-unavailable per-body promotion, and manifest-v5 persistence.
+
+`aeroforge_run_manifest.tsv` format version 5 preserves the previous reference/frame/history/aggregate fields and adds per-body diagnostic count, indexed stable SceneObject ID + exact marker provenance, per-body `cfx/cfy/cfz/cmx/cmy/cmz`, and an explicit per-body diagnostic error when complete evidence cannot be promoted.
+
+These generated-case tests establish **mesh/config/marker/provenance persistence, body-vs-domain monitoring selection, explicit positive finite SI reference-denominator rendering/persistence, explicit world-axis/origin semantics, exact aggregate history-field ingestion, exact pinned-SU2 per-surface history ingestion, and SceneObject attribution/additive consistency for the evidenced two-body fixture**. They do **not** establish that a chosen `REF_AREA`/`REF_LENGTH` is physically appropriate for a scene, body-specific normalization, body-fitted meshing, aerodynamic coefficient accuracy, convergence, turbulence-model validity, or engineering validation. The current generated volume mesh is deliberately staircase/voxel-derived.
 
 The desktop accurate-mode integration supports an explicit scene-and-settings-gated execution path. A user prepares the current scene and accurate solver settings, then explicitly chooses `Persist + run with SU2 8.5.0`. AeroForge refuses stale prepared bundles if either the scene revision or tracked solver settings—including coefficient reference area/length—changed, discovers and probes `SU2_CFD`, rejects non-8.5.0 banners, persists a new non-overwriting case directory, launches SU2 on a worker thread, and ingests process status plus history/stdout/stderr evidence after completion. There is still **no automatic solver launch**.
 
-Structured history parsing reads quoted SU2 CSV, recognizes standard iteration columns and RMS fields, and reports a conservative final quality state: residual target met, iteration budget reached without target, incomplete evidence, no usable history rows, or unavailable parse/read evidence. Non-finite or missing RMS evidence cannot pass merely because the iteration budget was exhausted. Process success, residual quality, and coefficient diagnostics remain separate signals.
+Structured history parsing reads quoted SU2 CSV, recognizes standard iteration columns and RMS fields, and reports a conservative final quality state: residual target met, iteration budget reached without target, incomplete evidence, no usable history rows, or unavailable parse/read evidence. Non-finite or missing RMS evidence cannot pass merely because the iteration budget was exhausted. Process success, residual quality, aggregate diagnostics, and per-body diagnostics remain separate signals.
 
-Earlier run #393 remains GREEN evidence for solver-settings freshness, structured history parsing, conservative quality evaluation, UI integration, and manifest-v2 persistence. The current reference/frame/diagnostic implementation is superseded by the #449/#451 and #465/#467 evidence chains above. The operational contract and non-claims are detailed in `docs/ACCURATE_EXECUTION.md`.
+Earlier run #393 remains GREEN evidence for solver-settings freshness, structured history parsing, conservative quality evaluation, UI integration, and manifest-v2 persistence. The current reference/frame/result implementation is superseded by the #449/#451, #465/#467, and #489/#491/#493 evidence chains above. The operational contract and non-claims are detailed in `docs/ACCURATE_EXECUTION.md`.
 
 ## Claims policy
 
@@ -245,7 +258,7 @@ Earlier run #393 remains GREEN evidence for solver-settings freshness, structure
 - Explicit `REF_AREA` / `REF_LENGTH` establishes reference-denominator validation, rendering, persistence and pinned-runtime compatibility only. It does not prove that the selected values are physically appropriate.
 - The explicit `AOA=0`, sideslip `0`, origin `(0,0,0)` and world-axis mapping establish reproducible coordinate semantics for the current generated +X-flow path, not general aerodynamic validity for arbitrary frames.
 - GREEN aggregate `CFx/CFy/CFz/CMx/CMy/CMz` extraction establishes that AeroForge can request, parse, persist and display those exact finite SU2 fields under the evidenced runtime. It does not validate their physical accuracy.
-- Multi-body results remain aggregate-only; per-body attribution is not inferred from unproven per-surface history semantics.
+- GREEN per-body `AERO_COEFF_SURF` evidence establishes exact pinned-SU2 surface-field ingestion, authoritative SceneObject provenance mapping, and same-global-reference additive consistency for the tested two-body fixture. It does not establish body-specific normalization, engineering `Cd/Cl`, or physical accuracy.
 - The GREEN desktop execution/history-quality path establishes explicit launch/persistence/quality-reporting behavior only; neither a successful process exit nor `residual_target_met` is an aerodynamic accuracy claim.
 - Staircase voxel boundaries must not be described as body-fitted surfaces.
 - Accurate SU2 results must retain solver version, mesh/config provenance, convergence history, geometry revision, coefficient-reference values, coefficient-frame/origin provenance and source-translation decisions.
@@ -253,7 +266,7 @@ Earlier run #393 remains GREEN evidence for solver-settings freshness, structure
 ## Next validation milestones
 
 1. Add live iteration progress, cancellation and explicit external-process lifecycle/recovery handling while retaining immutable prepared-case provenance.
-2. Prove SU2 per-surface history semantics and implement per-body coefficient attribution without weakening the current aggregate fail-closed contract.
-3. Connect imported audited surfaces to a deterministic repair/body-fitted or otherwise declared higher-fidelity volume-meshing path; keep staircase voxel meshing explicitly labeled as such.
+2. Connect imported audited surfaces to a deterministic repair/body-fitted or otherwise declared higher-fidelity volume-meshing path; keep staircase voxel meshing explicitly labeled as such.
+3. Preserve deterministic marker/source provenance through that imported-surface volume-mesh path and exercise an AeroForge-generated imported-mesh SU2 E2E case.
 4. Validate a body-containing generated case against trusted dimensional reference data with grid/domain/model sensitivity before making engineering claims.
 5. Do not extend the native D8/D10/D12 cylinder ladder by brute force unless a later force/boundary change requires revalidation.
