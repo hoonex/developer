@@ -319,6 +319,16 @@ impl Su2Case {
             );
         }
 
+        // Keep the persisted history contract explicit. SU2 only writes groups requested through
+        // HISTORY_OUTPUT; request AERO_COEFF when a monitored body also has an explicit coefficient
+        // reference so the aggregate CFx/CFy/CFz and CMx/CMy/CMz diagnostics are actually present.
+        let history_output = if coefficient_reference.is_some() && !monitoring_markers.is_empty() {
+            "ITER, RMS_RES, AERO_COEFF"
+        } else {
+            "ITER, RMS_RES"
+        };
+        push_kv(&mut cfg, "HISTORY_OUTPUT", history_output);
+
         // SU2 8.5.0 does not provide a usable default for the flow convective scheme.
         // Keep these numerical choices explicit so generated configs do not depend on version
         // defaults and can be exercised by the pinned external-runtime evidence test.
@@ -515,6 +525,8 @@ mod tests {
         assert!(cfg.contains("MARKER_HEATFLUX= ( tunnel_wall, 0.0, body, 0.0 )"));
         assert!(cfg.contains("MARKER_MONITORING= ( body )"));
         assert!(cfg.contains("MARKER_PLOTTING= ( tunnel_wall, body )"));
+        assert!(cfg.contains("HISTORY_OUTPUT= ITER, RMS_RES"));
+        assert!(!cfg.contains("AERO_COEFF"));
         assert!(cfg.contains("CONV_NUM_METHOD_FLOW= FDS"));
         assert!(cfg.contains("MUSCL_FLOW= YES"));
         assert!(cfg.contains("SLOPE_LIMITER_FLOW= NONE"));
@@ -550,6 +562,8 @@ mod tests {
         assert!(!cfg
             .lines()
             .any(|line| line.starts_with("REF_ORIGIN_MOMENT_")));
+        assert!(cfg.contains("HISTORY_OUTPUT= ITER, RMS_RES"));
+        assert!(!cfg.contains("AERO_COEFF"));
         assert!(cfg.contains("MARKER_HEATFLUX= ( tunnel_wall, 0.0, body, 0.0 )"));
     }
 
@@ -571,6 +585,7 @@ mod tests {
         assert!(cfg.contains("REF_ORIGIN_MOMENT_X= 0.000000000000e0"));
         assert!(cfg.contains("REF_ORIGIN_MOMENT_Y= 0.000000000000e0"));
         assert!(cfg.contains("REF_ORIGIN_MOMENT_Z= 0.000000000000e0"));
+        assert!(cfg.contains("HISTORY_OUTPUT= ITER, RMS_RES, AERO_COEFF"));
     }
 
     #[test]
