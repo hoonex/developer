@@ -51,9 +51,14 @@ jobs:
           echo "aadc800cd9df34deff99d4725f5897f620c9f2979f62ab235313311bf501f09b  $ROOT/su2.zip" | sha256sum -c -
           unzip -q "$ROOT/su2.zip" -d "$PKG"
 
-          SU2_CFD="$(find "$PKG" -type f -name SU2_CFD -print -quit)"
-          test -n "$SU2_CFD"
+          SU2_CFD="$(find "$PKG" -name SU2_CFD -print -quit)"
+          if [[ -z "$SU2_CFD" ]]; then
+            echo "SU2_CFD not found after extraction; package entries:" >&2
+            find "$PKG" -maxdepth 3 -printf '%y %p -> %l\n' | head -200 >&2
+            exit 1
+          fi
           chmod +x "$SU2_CFD"
+          echo "AEROFORGE_SU2_BINARY_ENTRY=$(stat -c '%F %N' "$SU2_CFD")"
 
           curl -LfsS \
             https://raw.githubusercontent.com/su2code/SU2/12eb826f049ef7f67df974dfcb44cf36ee07c0f8/TestCases/incomp_navierstokes/cylinder/incomp_cylinder.cfg \
@@ -68,7 +73,6 @@ jobs:
           echo "SU2_RUN=$(dirname "$SU2_CFD")" >> "$GITHUB_ENV"
           echo "AEROFORGE_SU2_UPSTREAM_CASE_DIR=$CASE" >> "$GITHUB_ENV"
           echo "OMP_NUM_THREADS=1" >> "$GITHUB_ENV"
-          echo "AEROFORGE_SU2_BINARY=$SU2_CFD"
           echo "AEROFORGE_SU2_CONFIG_COMMIT=12eb826f049ef7f67df974dfcb44cf36ee07c0f8"
           echo "AEROFORGE_SU2_TESTCASES_COMMIT=790c80ec5b543487b5f8ecf8bb0f0e4d2cc67f3f"
       - name: Run AeroForge pinned SU2 upstream regression
