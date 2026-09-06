@@ -13,8 +13,8 @@ struct CylinderCase {
     sample_steps: usize,
 }
 
-// 10% transverse periodic-image blockage. Streamwise placement is geometrically similar between
-// the baseline and refinement cases: cylinder center at 3D, wake probe at 7D, outlet at 12D.
+// 10% transverse periodic-image blockage. Streamwise placement is geometrically similar across
+// refinement cases: cylinder center at 3D, wake probe at 7D, outlet at 12D.
 const BASELINE: CylinderCase = CylinderCase {
     label: "D8",
     dims: [96, 80, 2],
@@ -26,7 +26,7 @@ const BASELINE: CylinderCase = CylinderCase {
     sample_steps: 6_000,
 };
 
-const FINER_GRID: CylinderCase = CylinderCase {
+const FINER_GRID_D10: CylinderCase = CylinderCase {
     label: "D10",
     dims: [120, 100, 2],
     diameter: 10.0,
@@ -36,6 +36,17 @@ const FINER_GRID: CylinderCase = CylinderCase {
     // Preserve approximately the same nondimensional settle/sample durations as D8.
     settle_steps: 6_250,
     sample_steps: 7_500,
+};
+
+const FINER_GRID_D12: CylinderCase = CylinderCase {
+    label: "D12",
+    dims: [144, 120, 2],
+    diameter: 12.0,
+    center: [36.0, 60.0],
+    inlet_speed: 0.06,
+    reynolds: 60.0,
+    settle_steps: 7_500,
+    sample_steps: 9_000,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -61,10 +72,38 @@ fn cylinder_re60_low_blockage_develops_periodic_vortex_shedding() {
 
 #[test]
 #[ignore = "slow grid-sensitivity evidence; run explicitly instead of on every PR"]
-fn cylinder_re60_finer_grid_sensitivity() {
-    let metrics = run_case(FINER_GRID);
-    assert_cylinder_sanity(FINER_GRID, metrics);
-    print_metrics("AEROFORGE_CYLINDER_RE60_FINE", FINER_GRID, metrics);
+fn cylinder_re60_finer_grid_d10_sensitivity() {
+    let metrics = run_case(FINER_GRID_D10);
+    assert_cylinder_sanity(FINER_GRID_D10, metrics);
+    print_metrics("AEROFORGE_CYLINDER_RE60_D10", FINER_GRID_D10, metrics);
+}
+
+#[test]
+#[ignore = "slow third-grid evidence; run explicitly instead of on every PR"]
+fn cylinder_re60_finer_grid_d12_sensitivity() {
+    let metrics = run_case(FINER_GRID_D12);
+    assert_cylinder_sanity(FINER_GRID_D12, metrics);
+    print_metrics("AEROFORGE_CYLINDER_RE60_D12", FINER_GRID_D12, metrics);
+}
+
+#[test]
+fn quadratic_spectral_peak_recovers_sub_bin_frequency() {
+    let target_st = 0.143_37_f32;
+    let samples = 4_096_usize;
+    let mut signal = Vec::with_capacity(samples);
+    let frequency = target_st * BASELINE.inlet_speed / BASELINE.diameter;
+    for sample in 0..samples {
+        let phase = TAU * frequency * sample as f32;
+        signal.push(0.7 * phase.sin() + 0.05 * (2.3 * phase).sin());
+    }
+    let peak = dominant_strouhal(&signal, BASELINE, 0.08, 0.20, 120);
+    assert!(
+        (peak.strouhal - target_st).abs() < 3.0e-4,
+        "sub-bin spectral interpolation missed synthetic target: expected={target_st} actual={} prominence={}",
+        peak.strouhal,
+        peak.prominence
+    );
+    assert!(peak.prominence > 4.0);
 }
 
 fn run_case(case: CylinderCase) -> CylinderMetrics {
@@ -222,7 +261,7 @@ fn assert_cylinder_sanity(case: CylinderCase, metrics: CylinderMetrics) {
 
 fn print_metrics(prefix: &str, case: CylinderCase, metrics: CylinderMetrics) {
     println!(
-        "{prefix}=PASS case={} grid={}x{}x{} D={} U={} blockage={:.3} tau={:.6} St={:.5} period={:.2} spectral_prominence={:.2} wake_v_rms={:.6} mean_Cd={:.4} lift_amp={:.6} max_rho_error={:.6}",
+        "{prefix}=PASS case={} grid={}x{}x{} D={} U={} blockage={:.3} tau={:.6} St={:.6} period={:.2} spectral_prominence={:.2} wake_v_rms={:.6} mean_Cd={:.4} lift_amp={:.6} max_rho_error={:.6}",
         case.label,
         case.dims[0],
         case.dims[1],
@@ -265,40 +304,52 @@ fn dominant_strouhal(
     max_st: f32,
     bins: usize,
 ) -> SpectralPeak {
-    assert!(signal.len() > 2 && bins > 1 && min_st > 0.0 && max_st > min_st);
+    assert!(signal.len() > 2 && bins > 2 && min_st > 0.0 && max_st > min_st);
     let mean = signal.iter().copied().sum::<f32>() / signal.len() as f32;
-    let mut peak_st = min_st;
-    let mut peak_power = 0.0_f32;
-    let mut power_sum = 0.0_f32;
+    let step_st = (max_st - min_st) / bins as f32;
+    let mut powers = Vec::with_capacity(bins + 1);
 
     for bin in 0..=bins {
-        let t = bin as f32 / bins as f32;
-        let st = min_st + (max_st - min_st) * t;
+        let st = min_st + step_st * bin as f32;
         let frequency = st * case.inlet_speed / case.diameter;
         let mut real = 0.0_f32;
         let mut imag = 0.0_f32;
         for (sample, &value) in signal.iter().enumerate() {
             let phase = TAU * frequency * sample as f32;
-            let window = if signal.len() > 1 {
-                0.5 - 0.5 * (TAU * sample as f32 / (signal.len() - 1) as f32).cos()
-            } else {
-                1.0
-            };
+            let window = 0.5 - 0.5 * (TAU * sample as f32 / (signal.len() - 1) as f32).cos();
             let centered = (value - mean) * window;
             real += centered * phase.cos();
             imag -= centered * phase.sin();
         }
-        let power = real * real + imag * imag;
-        power_sum += power;
-        if power > peak_power {
-            peak_power = power;
-            peak_st = st;
-        }
+        powers.push(real * real + imag * imag);
     }
 
-    let mean_power = power_sum / (bins + 1) as f32;
+    let (peak_index, &peak_power) = powers
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| a.total_cmp(b))
+        .expect("spectral scan has at least one bin");
+    let mean_power = powers.iter().sum::<f32>() / powers.len() as f32;
+
+    // A discrete scan with ΔSt=0.0005 was already comparable to the D8→D10 grid shift. Refine
+    // the spectral maximum with a three-point parabola in log-power so subsequent grid evidence
+    // is not quantized to the scan bins. Edge peaks are intentionally left uninterpolated.
+    let sub_bin = if peak_index > 0 && peak_index < bins {
+        let left = powers[peak_index - 1].max(f32::MIN_POSITIVE).ln();
+        let center = peak_power.max(f32::MIN_POSITIVE).ln();
+        let right = powers[peak_index + 1].max(f32::MIN_POSITIVE).ln();
+        let denominator = left - 2.0 * center + right;
+        if denominator.abs() > 1.0e-12 {
+            (0.5 * (left - right) / denominator).clamp(-0.5, 0.5)
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
+
     SpectralPeak {
-        strouhal: peak_st,
+        strouhal: min_st + step_st * (peak_index as f32 + sub_bin),
         prominence: peak_power / mean_power.max(f32::EPSILON),
     }
 }
