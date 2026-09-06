@@ -1,10 +1,10 @@
 use std::collections::BTreeSet;
 
 use aeroforge_accurate_backend::{
-    build_voxel_generated_su2_case, scene_object_wall_tag, voxelize_scene_primitives,
-    BoundaryRole, BoundarySource, DomainAxis, DomainSide, FlowModel, GeneratedSu2CaseBundle,
-    InletBoundary, Su2Case, Su2MarkerBinding, VoxelFluidDomainSpec, VoxelPrimitiveKind,
-    VoxelSolidPrimitive,
+    build_voxel_generated_su2_case_with_reference, scene_object_wall_tag,
+    voxelize_scene_primitives, BoundaryRole, BoundarySource, DomainAxis, DomainSide, FlowModel,
+    GeneratedSu2CaseBundle, InletBoundary, Su2Case, Su2CoefficientReference, Su2MarkerBinding,
+    VoxelFluidDomainSpec, VoxelPrimitiveKind, VoxelSolidPrimitive,
 };
 use aeroforge_volume_core::{BlockBoundaryMarkers, BoundaryMarkerId};
 use bevy::prelude::*;
@@ -23,6 +23,10 @@ pub struct AccurateSettings {
     pub turbulent_to_laminar_viscosity_ratio: f64,
     pub max_iterations: u32,
     pub convergence_log10: f64,
+    /// Explicit SU2 force-coefficient normalization area. Never inferred from staircase geometry.
+    pub reference_area_m2: f64,
+    /// Explicit SU2 moment-coefficient normalization length. Never inferred from staircase geometry.
+    pub reference_length_m: f64,
 }
 
 impl Default for AccurateSettings {
@@ -35,6 +39,8 @@ impl Default for AccurateSettings {
             turbulent_to_laminar_viscosity_ratio: 10.0,
             max_iterations: 1_000,
             convergence_log10: -6.0,
+            reference_area_m2: 1.0,
+            reference_length_m: 1.0,
         }
     }
 }
@@ -187,6 +193,28 @@ pub fn draw_accurate_prepare_ui(
                         .speed(0.1),
                 );
             });
+
+            ui.separator();
+            ui.label("Coefficient normalization reference (explicit SI)");
+            ui.horizontal(|ui| {
+                ui.label("Reference area (m²)");
+                ui.add(
+                    egui::DragValue::new(&mut runtime.settings.reference_area_m2)
+                        .range(1.0e-9..=1.0e9)
+                        .speed(0.01),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label("Reference length (m)");
+                ui.add(
+                    egui::DragValue::new(&mut runtime.settings.reference_length_m)
+                        .range(1.0e-9..=1.0e9)
+                        .speed(0.01),
+                );
+            });
+            ui.small(
+                "These values explicitly set SU2 REF_AREA / REF_LENGTH. AeroForge does not infer them from the voxel mesh, and they do not make CD/CL engineering-valid.",
+            );
 
             ui.separator();
             let cells = state.simulation.cell_count();
@@ -373,13 +401,18 @@ fn prepare_from_state(
         convergence_log10: settings.convergence_log10,
         output_basename: "aeroforge_generated".into(),
     };
+    let coefficient_reference = Su2CoefficientReference {
+        area_m2: settings.reference_area_m2,
+        length_m: settings.reference_length_m,
+    };
 
-    let generated = build_voxel_generated_su2_case(
+    let generated = build_voxel_generated_su2_case_with_reference(
         &case,
         domain,
         &voxelized.solid_owner,
         &voxelized.owner_object_ids,
         closed_wind_tunnel_bindings(),
+        Some(&coefficient_reference),
     )
     .map_err(|error| error.to_string())?;
 
@@ -454,7 +487,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn small_scene_prepares_closed_tunnel_with_object_provenance() {
+    fn small_scene_prepares_closed_tunnel_with_object_provenance_and_reference() {
         let mut state = ProjectState::default();
         state.simulation.mode = SolverMode::Accurate;
         state.simulation.grid = [8, 6, 8];
@@ -464,6 +497,9 @@ mod tests {
         assert_eq!(summary.active_body_markers, 1);
         assert!(bundle.config_text.contains("MARKER_INLET= ( inlet"));
         assert!(bundle.config_text.contains("MARKER_OUTLET= ( outlet, 0.0 )"));
+        assert!(bundle.config_text.contains("MARKER_MONITORING= ( body_1 )"));
+        assert!(bundle.config_text.contains("REF_AREA= 1.000000000000e0"));
+        assert!(bundle.config_text.contains("REF_LENGTH= 1.000000000000e0"));
         assert!(bundle.config_text.contains("body_1, 0.0"));
         assert!(bundle.mesh_text.contains("MARKER_TAG= body_1"));
         assert!(bundle.mesh_text.contains("MARKER_TAG= y_min"));
@@ -488,6 +524,8 @@ mod tests {
         assert_eq!(summary.active_body_markers, 0);
         assert!(!bundle.config_text.contains("body_1"));
         assert!(!bundle.mesh_text.contains("MARKER_TAG= body_1"));
+        assert!(bundle.config_text.contains("REF_AREA= 1.000000000000e0"));
+        assert!(bundle.config_text.contains("REF_LENGTH= 1.000000000000e0"));
     }
 
     #[test]
@@ -497,6 +535,16 @@ mod tests {
         let error = prepare_from_state(&state, &AccurateSettings::default()).unwrap_err();
         assert!(error.contains("preparation limit"));
         assert_eq!(state.simulation.grid, [100, 100, 100]);
+    }
+
+    #[test]
+    fn invalid_reference_fails_preparation_closed() {
+        let mut state = ProjectState::default();
+        state.simulation.grid = [8, 6, 8];
+        let mut settings = AccurateSettings::default();
+        settings.reference_area_m2 = 0.0;
+        let error = prepare_from_state(&state, &settings).unwrap_err();
+        assert!(error.contains("reference area"));
     }
 
     #[test]
@@ -516,7 +564,7 @@ mod tests {
         };
 
         assert!(runtime.is_fresh_for(state.revision));
-        runtime.settings.inlet_speed_mps += 1.0;
+        runtime.settings.reference_area_m2 += 0.5;
         assert!(!runtime.is_fresh_for(state.revision));
     }
 }
