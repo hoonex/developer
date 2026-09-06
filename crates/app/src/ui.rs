@@ -252,6 +252,9 @@ pub fn draw_ui(
                     PreviewBoundaryPreset::ChannelYNoSlip => {
                         "Channel: Y no-slip / XZ periodic"
                     }
+                    PreviewBoundaryPreset::WindTunnelX => {
+                        "Wind tunnel: X inlet → X pressure outlet"
+                    }
                 })
                 .show_ui(ui, |ui| {
                     dirty |= ui
@@ -268,10 +271,32 @@ pub fn draw_ui(
                             "Channel: Y no-slip / XZ periodic",
                         )
                         .changed();
+                    dirty |= ui
+                        .selectable_value(
+                            &mut state.simulation.preview_boundary,
+                            PreviewBoundaryPreset::WindTunnelX,
+                            "Wind tunnel: X inlet → X pressure outlet",
+                        )
+                        .changed();
                 });
-            ui.small(
-                "Validated preview preset only. Channel mode adds stationary Y walls; X/Z still wrap periodically and this is not a physical inlet/outlet wind-tunnel boundary.",
-            );
+            if state.simulation.preview_boundary == PreviewBoundaryPreset::WindTunnelX {
+                dirty |= ui
+                    .add(
+                        egui::Slider::new(
+                            &mut state.simulation.preview_inlet_speed_mps,
+                            0.0..=120.0,
+                        )
+                        .text("Tunnel inlet m/s"),
+                    )
+                    .changed();
+                ui.small(
+                    "Validated NEQ pair: x-min prescribes +X velocity, x-max prescribes lattice density ρ=1.0. Y/Z remain periodic. Local 3D wind sources may still add jets/forcing inside the domain.",
+                );
+            } else {
+                ui.small(
+                    "Periodic and channel presets are canonical preview boundaries. Channel mode adds stationary Y walls while X/Z remain periodic.",
+                );
+            }
 
             let cells = state.simulation.cell_count();
             let gib = state.simulation.lbm_distribution_memory_bytes() as f64 / 1024.0_f64.powi(3);
@@ -387,10 +412,16 @@ pub fn draw_ui(
                 PreviewBackend::GpuCompute => {
                     ui.monospace(format!("GPU sample stride: {}", gpu_request.sample_stride));
                     ui.monospace(format!("GPU sample vectors: {}", gpu_request.sample_count));
-                    ui.monospace(format!("GPU boundary mask: {}", gpu_request.boundary_mask));
+                    ui.monospace(format!("GPU stationary mask: {}", gpu_request.boundary_mask));
+                    ui.monospace(format!("GPU moving mask: {}", gpu_request.moving_boundary_mask));
+                    ui.monospace(format!("GPU velocity-inlet mask: {}", gpu_request.velocity_inlet_mask));
+                    ui.monospace(format!("GPU pressure-outlet mask: {}", gpu_request.pressure_outlet_mask));
                     ui.monospace(format!("GPU readback frames: {}", gpu_snapshot.frames_received));
                     ui.small(
                         "D3Q19 distributions stay in VRAM and ping-pong there. Only the sampled velocity vectors needed for viewport arrows are read back.",
+                    );
+                    ui.small(
+                        "Open faces use the validated two-stage step → NEQ face reconstruction path. No open-face dispatch is issued when both open masks are zero.",
                     );
                     ui.small(
                         "The active graphics device storage-buffer limit is checked again when the GPU buffers are created; exceeding it does not silently reduce the grid.",
@@ -405,7 +436,7 @@ pub fn draw_ui(
                 ));
             }
             ui.small(
-                "Preview preserves relative source speeds and visual flow structure. It does not claim physical Reynolds similarity when the scaling diagnostic rejects it.",
+                "Preview preserves relative source and tunnel speeds under one shared mapping. It does not claim physical Reynolds similarity when the scaling diagnostic rejects it.",
             );
 
             match runtime.status {
