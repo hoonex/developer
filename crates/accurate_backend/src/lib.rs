@@ -2,6 +2,7 @@ mod generated_case;
 mod history;
 mod imported_surface;
 mod imported_surface_voxel;
+mod mixed_scene_voxel;
 mod prepared_case;
 mod primitive_voxel;
 mod scene_provenance;
@@ -27,6 +28,9 @@ pub use imported_surface::{
 pub use imported_surface_voxel::{
     voxelize_audited_imported_surfaces, ImportedSurfaceVoxelizationError,
     VoxelizedImportedSurfaceScene,
+};
+pub use mixed_scene_voxel::{
+    voxelize_mixed_scene_bodies, MixedSceneVoxelizationError, VoxelizedMixedScene,
 };
 pub use prepared_case::{
     prepare_generated_su2_case_directory, run_prepared_generated_su2_case,
