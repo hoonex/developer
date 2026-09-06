@@ -183,9 +183,13 @@ impl Su2Case {
         self.render_config_with_monitoring_and_reference(monitoring_markers, None)
     }
 
-    /// Extends the monitoring contract with explicit SI reference dimensions for SU2 force/moment
-    /// coefficient normalization. The values are kept separate from body-marker selection because
-    /// a valid normalization denominator does not by itself establish per-body coefficient meaning.
+    /// Extends the monitoring contract with explicit SI reference dimensions and a fixed Cartesian
+    /// coefficient frame for the current generated +X-flow path. When a reference is supplied,
+    /// AeroForge pins SU2 to AOA=0 deg, sideslip=0 deg and moment origin [0, 0, 0] m.
+    ///
+    /// SU2 8.5.0 projects 3D coefficients at that frame as CD=CFx, CL=CFz and CSF=CFy. AeroForge's
+    /// scene convention is Y-up, so callers must not relabel raw SU2 CL as vertical lift. The fixed
+    /// frame makes the raw history semantics reproducible without silently remapping world axes.
     pub fn render_config_with_monitoring_and_reference(
         &self,
         monitoring_markers: &[String],
@@ -224,6 +228,11 @@ impl Su2Case {
         if let Some(reference) = coefficient_reference {
             push_kv(&mut cfg, "REF_AREA", &fmt_float(reference.area_m2));
             push_kv(&mut cfg, "REF_LENGTH", &fmt_float(reference.length_m));
+            push_kv(&mut cfg, "AOA", &fmt_float(0.0));
+            push_kv(&mut cfg, "SIDESLIP_ANGLE", &fmt_float(0.0));
+            push_kv(&mut cfg, "REF_ORIGIN_MOMENT_X", &fmt_float(0.0));
+            push_kv(&mut cfg, "REF_ORIGIN_MOMENT_Y", &fmt_float(0.0));
+            push_kv(&mut cfg, "REF_ORIGIN_MOMENT_Z", &fmt_float(0.0));
         }
         if self.flow_model == FlowModel::RansSst {
             push_kv(&mut cfg, "KIND_TURB_MODEL", "SST");
@@ -534,11 +543,18 @@ mod tests {
             .any(|line| line.starts_with("MARKER_MONITORING=")));
         assert!(!cfg.lines().any(|line| line.starts_with("REF_AREA=")));
         assert!(!cfg.lines().any(|line| line.starts_with("REF_LENGTH=")));
+        assert!(!cfg.lines().any(|line| line.starts_with("AOA=")));
+        assert!(!cfg
+            .lines()
+            .any(|line| line.starts_with("SIDESLIP_ANGLE=")));
+        assert!(!cfg
+            .lines()
+            .any(|line| line.starts_with("REF_ORIGIN_MOMENT_")));
         assert!(cfg.contains("MARKER_HEATFLUX= ( tunnel_wall, 0.0, body, 0.0 )"));
     }
 
     #[test]
-    fn explicit_coefficient_reference_is_rendered_in_si() {
+    fn explicit_coefficient_reference_is_rendered_in_fixed_zero_angle_frame() {
         let monitoring = vec!["body".to_owned()];
         let reference = Su2CoefficientReference {
             area_m2: 2.5,
@@ -550,6 +566,11 @@ mod tests {
         assert!(cfg.contains("SYSTEM_MEASUREMENTS= SI"));
         assert!(cfg.contains("REF_AREA= 2.500000000000e0"));
         assert!(cfg.contains("REF_LENGTH= 1.250000000000e0"));
+        assert!(cfg.contains("AOA= 0.000000000000e0"));
+        assert!(cfg.contains("SIDESLIP_ANGLE= 0.000000000000e0"));
+        assert!(cfg.contains("REF_ORIGIN_MOMENT_X= 0.000000000000e0"));
+        assert!(cfg.contains("REF_ORIGIN_MOMENT_Y= 0.000000000000e0"));
+        assert!(cfg.contains("REF_ORIGIN_MOMENT_Z= 0.000000000000e0"));
     }
 
     #[test]
