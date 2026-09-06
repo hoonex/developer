@@ -31,6 +31,9 @@ pub enum FaceBoundary {
     MovingWall,
     VelocityInlet,
     PressureOutlet,
+    /// Prescribed free-stream density and velocity reconstructed through NEQ extrapolation.
+    /// This is a free-stream boundary primitive, not a generic non-reflecting/CBC condition.
+    FarField,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -122,8 +125,35 @@ impl BoundaryPolicy {
         policy
     }
 
+    /// Quasi-2D external-flow policy: validated x velocity/pressure pair plus prescribed
+    /// free-stream NEQ reconstruction on y-min/y-max. z remains periodic.
+    pub fn velocity_pressure_x_with_y_far_field(
+        inlet_velocity: [f32; 3],
+        outlet_density: f32,
+        far_field_velocity: [f32; 3],
+        far_field_density: f32,
+    ) -> Self {
+        let mut policy = Self {
+            x_min: FaceBoundary::VelocityInlet,
+            x_max: FaceBoundary::PressureOutlet,
+            y_min: FaceBoundary::FarField,
+            y_max: FaceBoundary::FarField,
+            z_min: FaceBoundary::Periodic,
+            z_max: FaceBoundary::Periodic,
+            face_velocities: [[0.0; 3]; 6],
+            face_densities: [0.0; 6],
+        };
+        policy.face_velocities[0] = inlet_velocity;
+        policy.face_densities[1] = outlet_density;
+        policy.face_velocities[2] = far_field_velocity;
+        policy.face_velocities[3] = far_field_velocity;
+        policy.face_densities[2] = far_field_density;
+        policy.face_densities[3] = far_field_density;
+        policy
+    }
+
     pub fn validate(self) -> Result<(), BoundaryPolicyError> {
-        let mut open_axes = 0_usize;
+        let mut velocity_pressure_axes = 0_usize;
         for axis in 0..3 {
             let [min, max] = self.axis_faces(axis);
             if (min == FaceBoundary::Periodic) != (max == FaceBoundary::Periodic) {
@@ -133,15 +163,19 @@ impl BoundaryPolicy {
             let min_open = is_open_boundary(min);
             let max_open = is_open_boundary(max);
             if min_open || max_open {
-                let valid_pair = matches!(
+                let velocity_pressure_pair = matches!(
                     (min, max),
                     (FaceBoundary::VelocityInlet, FaceBoundary::PressureOutlet)
                         | (FaceBoundary::PressureOutlet, FaceBoundary::VelocityInlet)
                 );
-                if !valid_pair {
+                let far_field_pair =
+                    matches!((min, max), (FaceBoundary::FarField, FaceBoundary::FarField));
+                if !velocity_pressure_pair && !far_field_pair {
                     return Err(BoundaryPolicyError::UnsupportedOpenBoundaryPair(axis));
                 }
-                open_axes += 1;
+                if velocity_pressure_pair {
+                    velocity_pressure_axes += 1;
+                }
             }
 
             for lower in [true, false] {
@@ -179,6 +213,14 @@ impl BoundaryPolicy {
                             return Err(BoundaryPolicyError::InvalidPressureDensity(face_index));
                         }
                     }
+                    FaceBoundary::FarField => {
+                        if vector_magnitude(velocity) > MAX_PRESCRIBED_LATTICE_SPEED {
+                            return Err(BoundaryPolicyError::PrescribedVelocityTooLarge(face_index));
+                        }
+                        if !density.is_finite() || density <= 0.0 {
+                            return Err(BoundaryPolicyError::InvalidFarFieldDensity(face_index));
+                        }
+                    }
                     FaceBoundary::Periodic | FaceBoundary::NoSlipWall => {
                         if velocity.iter().any(|value| value.abs() > f32::EPSILON) {
                             return Err(BoundaryPolicyError::VelocityOnUnprescribedFace(face_index));
@@ -191,7 +233,7 @@ impl BoundaryPolicy {
             }
         }
 
-        if open_axes > 1 {
+        if velocity_pressure_axes > 1 {
             return Err(BoundaryPolicyError::MultipleOpenBoundaryAxes);
         }
         Ok(())
@@ -241,6 +283,7 @@ pub enum BoundaryPolicyError {
     PrescribedVelocityTooLarge(usize),
     VelocityOnUnprescribedFace(usize),
     InvalidPressureDensity(usize),
+    InvalidFarFieldDensity(usize),
     DensityOnNonPressureFace(usize),
 }
 
@@ -684,6 +727,7 @@ impl CpuLbm {
         let (boundary_density, boundary_velocity) = match kind {
             FaceBoundary::VelocityInlet => (fluid_density, prescribed_velocity),
             FaceBoundary::PressureOutlet => (prescribed_density, fluid_velocity),
+            FaceBoundary::FarField => (prescribed_density, prescribed_velocity),
             _ => unreachable!("only open boundary types are reconstructed"),
         };
         let boundary_equilibrium = equilibrium(boundary_density, boundary_velocity);
@@ -707,9 +751,9 @@ impl CpuLbm {
                     FaceBoundary::Periodic => destination[axis] = self.dims[axis] - 1,
                     FaceBoundary::NoSlipWall => hit_stationary_wall = true,
                     FaceBoundary::MovingWall => moving_wall_velocity = Some(velocity),
-                    FaceBoundary::VelocityInlet | FaceBoundary::PressureOutlet => {
-                        hit_open_boundary = true;
-                    }
+                    FaceBoundary::VelocityInlet
+                    | FaceBoundary::PressureOutlet
+                    | FaceBoundary::FarField => hit_open_boundary = true,
                 }
             } else if raw >= self.dims[axis] as isize {
                 let (kind, velocity, _) = self.boundary.face_condition(axis, false);
@@ -717,9 +761,9 @@ impl CpuLbm {
                     FaceBoundary::Periodic => destination[axis] = 0,
                     FaceBoundary::NoSlipWall => hit_stationary_wall = true,
                     FaceBoundary::MovingWall => moving_wall_velocity = Some(velocity),
-                    FaceBoundary::VelocityInlet | FaceBoundary::PressureOutlet => {
-                        hit_open_boundary = true;
-                    }
+                    FaceBoundary::VelocityInlet
+                    | FaceBoundary::PressureOutlet
+                    | FaceBoundary::FarField => hit_open_boundary = true,
                 }
             } else {
                 destination[axis] = raw as usize;
@@ -750,7 +794,10 @@ enum StreamDestination {
 }
 
 fn is_open_boundary(kind: FaceBoundary) -> bool {
-    matches!(kind, FaceBoundary::VelocityInlet | FaceBoundary::PressureOutlet)
+    matches!(
+        kind,
+        FaceBoundary::VelocityInlet | FaceBoundary::PressureOutlet | FaceBoundary::FarField
+    )
 }
 
 fn vector_magnitude(vector: [f32; 3]) -> f32 {
@@ -1007,6 +1054,35 @@ mod tests {
         assert_eq!(
             bad_density.validate(),
             Err(BoundaryPolicyError::InvalidPressureDensity(1))
+        );
+    }
+
+    #[test]
+    fn far_field_pair_can_coexist_with_x_velocity_pressure_pair() {
+        let velocity = [0.03, 0.0, 0.0];
+        let policy = BoundaryPolicy::velocity_pressure_x_with_y_far_field(
+            velocity,
+            1.0,
+            velocity,
+            1.0,
+        );
+        assert_eq!(policy.validate(), Ok(()));
+        assert_eq!(policy.x_min, FaceBoundary::VelocityInlet);
+        assert_eq!(policy.x_max, FaceBoundary::PressureOutlet);
+        assert_eq!(policy.y_min, FaceBoundary::FarField);
+        assert_eq!(policy.y_max, FaceBoundary::FarField);
+        assert_eq!(policy.z_min, FaceBoundary::Periodic);
+        assert_eq!(policy.z_max, FaceBoundary::Periodic);
+
+        let invalid_density = BoundaryPolicy::velocity_pressure_x_with_y_far_field(
+            velocity,
+            1.0,
+            velocity,
+            0.0,
+        );
+        assert_eq!(
+            invalid_density.validate(),
+            Err(BoundaryPolicyError::InvalidFarFieldDensity(2))
         );
     }
 }
