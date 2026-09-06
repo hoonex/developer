@@ -167,6 +167,11 @@ fn assert_explicit_reference(config: &str) {
     assert!(config.contains("SYSTEM_MEASUREMENTS= SI"));
     assert!(config.contains("REF_AREA= 1.000000000000e0"));
     assert!(config.contains("REF_LENGTH= 1.000000000000e0"));
+    assert!(config.contains("AOA= 0.000000000000e0"));
+    assert!(config.contains("SIDESLIP_ANGLE= 0.000000000000e0"));
+    assert!(config.contains("REF_ORIGIN_MOMENT_X= 0.000000000000e0"));
+    assert!(config.contains("REF_ORIGIN_MOMENT_Y= 0.000000000000e0"));
+    assert!(config.contains("REF_ORIGIN_MOMENT_Z= 0.000000000000e0"));
 }
 
 fn assert_volume_output(prepared_dir: &std::path::Path, output_basename: &str) {
