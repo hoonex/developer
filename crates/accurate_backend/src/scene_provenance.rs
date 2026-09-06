@@ -10,7 +10,7 @@ use crate::su2_mesh::{BoundaryRole, BoundarySource, Su2MarkerBinding, Su2MarkerM
 pub struct SceneOwnerMarkerProvenance {
     /// Compact owner label N -> allocated boundary marker.
     pub owner_markers: BTreeMap<u32, BoundaryMarkerId>,
-    /// Domain bindings followed by deterministic object-wall bindings.
+    /// Domain bindings followed by deterministic active object-wall bindings.
     pub marker_map: Su2MarkerMap,
 }
 
@@ -20,6 +20,7 @@ pub enum SceneOwnerProvenanceError {
     DuplicateDomainMarker(u32),
     DuplicateTag(String),
     OwnerIdsNotStrictlyIncreasing,
+    OwnerLabelOutOfRange { owner: u32, owner_count: usize },
     TooManyOwners,
     MarkerIdOverflow,
 }
@@ -36,6 +37,10 @@ impl Display for SceneOwnerProvenanceError {
                 f,
                 "scene owner ids must be strictly increasing to match compact raster ownership labels"
             ),
+            Self::OwnerLabelOutOfRange { owner, owner_count } => write!(
+                f,
+                "compact owner label {owner} has no SceneObject mapping among {owner_count} owners"
+            ),
             Self::TooManyOwners => write!(f, "scene has too many owners for compact u32 labels"),
             Self::MarkerIdOverflow => write!(f, "boundary marker id allocation overflowed u32"),
         }
@@ -44,25 +49,42 @@ impl Display for SceneOwnerProvenanceError {
 
 impl Error for SceneOwnerProvenanceError {}
 
-/// Extends already-defined domain boundary bindings with deterministic wall bindings for the
-/// compact solid-owner labels used by the preview rasterizer. `owner_object_ids[N - 1]` is the
-/// stable `SceneObject.id` represented by compact owner label N.
-///
-/// Object marker ids are allocated consecutively above the largest domain marker id and tags are
-/// `body_<scene_object_id>`. Requiring strictly increasing scene ids mirrors the rasterizer's
-/// stable-id sort and makes the provenance mapping independent of scene-vector ordering.
+pub fn scene_object_wall_tag(scene_object_id: u64) -> String {
+    format!("body_{scene_object_id}")
+}
+
+/// Allocates bindings for every compact owner label represented by `owner_object_ids`.
 pub fn build_scene_owner_marker_provenance(
     owner_object_ids: &[u64],
+    domain_bindings: Vec<Su2MarkerBinding>,
+) -> Result<SceneOwnerMarkerProvenance, SceneOwnerProvenanceError> {
+    let active = (1..=owner_object_ids.len())
+        .map(|index| u32::try_from(index).map_err(|_| SceneOwnerProvenanceError::TooManyOwners))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    build_active_scene_owner_marker_provenance(owner_object_ids, &active, domain_bindings)
+}
+
+/// Extends domain bindings only for owner labels that actually occur in the rasterized solid
+/// field. `owner_object_ids[N - 1]` remains the stable `SceneObject.id` for compact label N, but
+/// objects outside the domain (or too small to own a voxel) do not produce unused SU2 markers.
+pub fn build_active_scene_owner_marker_provenance(
+    owner_object_ids: &[u64],
+    active_owner_labels: &BTreeSet<u32>,
     domain_bindings: Vec<Su2MarkerBinding>,
 ) -> Result<SceneOwnerMarkerProvenance, SceneOwnerProvenanceError> {
     if owner_object_ids.len() >= u32::MAX as usize {
         return Err(SceneOwnerProvenanceError::TooManyOwners);
     }
-    if owner_object_ids
-        .windows(2)
-        .any(|pair| pair[0] >= pair[1])
-    {
+    if owner_object_ids.windows(2).any(|pair| pair[0] >= pair[1]) {
         return Err(SceneOwnerProvenanceError::OwnerIdsNotStrictlyIncreasing);
+    }
+    for &owner in active_owner_labels {
+        if owner == 0 || owner as usize > owner_object_ids.len() {
+            return Err(SceneOwnerProvenanceError::OwnerLabelOutOfRange {
+                owner,
+                owner_count: owner_object_ids.len(),
+            });
+        }
     }
 
     let mut used_markers = BTreeSet::<u32>::new();
@@ -83,14 +105,13 @@ pub fn build_scene_owner_marker_provenance(
 
     let mut bindings = domain_bindings;
     let mut owner_markers = BTreeMap::<u32, BoundaryMarkerId>::new();
-    for (owner_index, &scene_object_id) in owner_object_ids.iter().enumerate() {
-        let owner = u32::try_from(owner_index + 1)
-            .map_err(|_| SceneOwnerProvenanceError::TooManyOwners)?;
+    for &owner in active_owner_labels {
+        let scene_object_id = owner_object_ids[owner as usize - 1];
         largest_marker = largest_marker
             .checked_add(1)
             .ok_or(SceneOwnerProvenanceError::MarkerIdOverflow)?;
         let marker = BoundaryMarkerId(largest_marker);
-        let tag = format!("body_{scene_object_id}");
+        let tag = scene_object_wall_tag(scene_object_id);
         if !used_tags.insert(tag.clone()) {
             return Err(SceneOwnerProvenanceError::DuplicateTag(tag));
         }
@@ -153,6 +174,33 @@ mod tests {
             BoundarySource::SceneObject {
                 scene_object_id: 0x1_0000_0001,
             }
+        );
+    }
+
+    #[test]
+    fn inactive_scene_objects_do_not_create_unused_markers() {
+        let active = BTreeSet::from([2_u32]);
+        let result = build_active_scene_owner_marker_provenance(
+            &[7, 9, 12],
+            &active,
+            domain_bindings(),
+        )
+        .unwrap();
+        assert_eq!(result.owner_markers.len(), 1);
+        assert_eq!(result.owner_markers[&2], BoundaryMarkerId(10));
+        assert_eq!(result.marker_map.bindings.len(), 3);
+        assert_eq!(result.marker_map.bindings[2].tag, "body_9");
+    }
+
+    #[test]
+    fn active_owner_label_must_resolve_to_scene_object() {
+        let active = BTreeSet::from([3_u32]);
+        assert_eq!(
+            build_active_scene_owner_marker_provenance(&[7, 9], &active, domain_bindings()),
+            Err(SceneOwnerProvenanceError::OwnerLabelOutOfRange {
+                owner: 3,
+                owner_count: 2,
+            })
         );
     }
 
