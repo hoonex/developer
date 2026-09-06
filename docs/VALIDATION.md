@@ -27,7 +27,8 @@ The native LBM backend remains an interactive preview solver. GREEN numerical re
 | Re=60 cylinder shedding | Native preview | GREEN |
 | Periodic-y D8/D10/D12 sensitivity | Native preview | GREEN evidence |
 | Free-stream-y D8/D10/D12 sensitivity | Native preview | GREEN evidence |
-| Fixed-D8 H/D=10/15/20 domain sensitivity | Native preview | GREEN evidence |
+| Fixed-D8 H/D=10/15/20 transverse sensitivity | Native preview | GREEN evidence |
+| Fixed-D8 X/D=12/24 streamwise sensitivity | Native preview | GREEN evidence |
 | Formal grid convergence | Native preview | **NOT ESTABLISHED** |
 | Formal domain convergence | Native preview | **NOT ESTABLISHED** |
 | Trusted external-cylinder reference agreement | Native preview | PARTIAL / NOT VALIDATED |
@@ -103,13 +104,32 @@ Observed changes:
 | H/D 10→15 | -1.852% | -1.306% | -6.913% | -1.835% | -0.674% |
 | H/D 15→20 | -0.235% | -0.195% | -1.831% | -0.275% | -0.074% |
 
-The St and Cd* changes shrink by about `7.9×` and `6.7×` respectively between the two intervals. This is strong evidence that transverse-boundary-distance sensitivity is **decreasing rapidly** over H/D=10→15→20 for this D8 setup.
+The St and Cd* changes shrink by about `7.9×` and `6.7×` respectively between the two intervals. This is strong evidence that transverse-boundary-distance sensitivity is decreasing rapidly over H/D=10→15→20 for this D8 setup, but it is not formal domain convergence.
 
-AeroForge may therefore say the tested sequence is *trending toward domain independence*. It must **not** call this formal domain convergence or quote a domain-extrapolated value: there are only three heights, the spacing is not a conventional discretization refinement sequence, and the boundary itself is prescribed free-stream NEQ rather than a proven non-reflecting formulation.
+## Fixed-grid streamwise domain sensitivity
 
-For practical preview work, H/D≈20 is a materially better-supported external-flow domain than H/D=10. Whether that cost is acceptable for interactive use is a separate performance decision.
+Run #202 changes the streamwise placement while keeping D8, H/D=20, Re, U, tau, voxel geometry, startup perturbation, settle/sample duration and diagnostics fixed.
 
-Detailed evidence is in `docs/FAR_FIELD_BOUNDARY_EVIDENCE.md`.
+| Case | Grid | Inlet distance | Outlet distance | St | Mean Cd* | Lift amp | Max rho error | Max speed |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| X12D | `96×160×2` | `3D` | `9D` | 0.152006 | 1.9148 | 0.006833 | 0.009113 | 0.089316 |
+| X24D | `192×160×2` | `6D` | `18D` | 0.133263 | 1.6216 | 0.004809 | 0.007719 | 0.081242 |
+
+Observed change X/D=12→24:
+
+- `St`: `-12.330%`;
+- `Cd*`: `-15.315%`;
+- lift amplitude: `-29.623%`;
+- max density error: `-15.294%`;
+- max speed: `-9.040%`.
+
+This effect is far larger than the residual H/D=15→20 transverse-domain effect. Streamwise boundary placement is therefore a major contamination source in the previous D8 external-cylinder setup.
+
+Against the Williamson–Brown two-term Re=60 relation `St_ref=0.137202`, the X12D result is `+10.79%` high while the X24D result is `-2.87%` low. The streamwise expansion therefore removes most of the previous Strouhal bias.
+
+For drag, `Cd*=1.6216` is still about `+10.3%` above a Tritton-oriented `Cd≈1.47` value and `+14.5%` above a Henderson-oriented `Cd≈1.416` value. Because both inlet and outlet distances changed together, run #202 does not identify which x boundary dominates the correction. The remaining drag gap also leaves voxel geometry, BGK relaxation and force normalization as active error sources.
+
+Detailed reference provenance is in `docs/CYLINDER_REFERENCE_COMPARISON.md`.
 
 ## Accurate SU2 backend status
 
@@ -121,14 +141,15 @@ Detailed evidence is in `docs/FAR_FIELD_BOUNDARY_EVIDENCE.md`.
 - Canonical Poiseuille/Couette/Ghia passes validate only those declared cases.
 - `FarField` must be described as prescribed free-stream NEQ, not generic non-reflecting.
 - Neither cylinder grid sequence is formal grid convergence.
-- H/D=10/15/20 shows a rapidly shrinking domain-distance effect, not formal domain convergence.
-- Momentum-exchange Cd/lift remain diagnostics until grid/domain/reference evidence improves.
+- H/D=10/15/20 shows a rapidly shrinking transverse-distance effect, not formal domain convergence.
+- X/D=12→24 shows a large streamwise-placement effect; it does not isolate inlet vs outlet influence.
+- Momentum-exchange Cd/lift remain diagnostics until grid/domain/reference/force evidence improves.
 - BGK physical-scaling warnings remain authoritative even when regressions are GREEN.
 - Accurate SU2 results must retain solver version, mesh/config provenance, convergence history, geometry revision and source-translation decisions.
 
 ## Next validation milestones
 
-1. Compare the best-supported Re≈60 cylinder setup against trusted reference data for St and force diagnostics.
-2. Quantify streamwise inlet/outlet-distance sensitivity or reflection only if reference comparison indicates it is material.
-3. Extend momentum exchange to per-object force provenance.
+1. Split the X24D correction into inlet-distance and outlet-distance sensitivity at fixed D8/H20.
+2. Re-run the best-supported streamwise placement at finer voxel resolution before tightening any cylinder acceptance band.
+3. Extend momentum exchange to per-object force provenance and examine effective hydrodynamic diameter / force normalization.
 4. Run an upstream SU2 known-case cross-validation, followed by an AeroForge-generated-mesh case.
