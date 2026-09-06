@@ -6,8 +6,8 @@ use aeroforge_volume_core::VolumeMesh;
 
 use crate::su2::{Su2Case, Su2CaseError};
 use crate::su2_mesh::{
-    render_su2_volume_mesh, validate_case_marker_provenance, BoundaryRole, Su2MarkerBinding,
-    Su2MarkerMap, Su2MeshError,
+    render_su2_volume_mesh, validate_case_marker_provenance, BoundaryRole, BoundarySource,
+    Su2MarkerBinding, Su2MarkerMap, Su2MeshError,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -62,6 +62,10 @@ impl From<Su2MeshError> for GeneratedSu2CaseError {
 /// by the current `Su2Case` model; unsupported semantic roles fail closed instead of being written
 /// to the mesh and silently omitted from the config.
 ///
+/// Scene-object wall provenance is also the authoritative source for `MARKER_MONITORING`: physical
+/// tunnel walls remain wall/plotting boundaries but are not included in integrated body-load
+/// monitoring. No duplicate body-vs-wall state is stored on `Su2Case`.
+///
 /// No filesystem writes or SU2 process execution are performed here; orchestration can persist
 /// these exact strings atomically later.
 pub fn build_generated_su2_case_bundle(
@@ -75,8 +79,18 @@ pub fn build_generated_su2_case_bundle(
     validate_case_marker_provenance(case, marker_map)?;
     validate_complete_boundary_consumption(case, marker_map)?;
 
+    let monitoring_markers = marker_map
+        .bindings
+        .iter()
+        .filter(|binding| {
+            binding.role == BoundaryRole::Wall
+                && matches!(binding.source, BoundarySource::SceneObject { .. })
+        })
+        .map(|binding| binding.tag.clone())
+        .collect::<Vec<_>>();
+
     let mesh_export = render_su2_volume_mesh(mesh, marker_map)?;
-    let config_text = case.render_config()?;
+    let config_text = case.render_config_with_monitoring(&monitoring_markers)?;
 
     Ok(GeneratedSu2CaseBundle {
         mesh_filename: case.mesh_filename.clone(),
@@ -144,9 +158,7 @@ mod tests {
     };
 
     use crate::su2::{FlowModel, InletBoundary};
-    use crate::su2_mesh::{
-        BoundarySource, DomainAxis, DomainSide, Su2MarkerBinding,
-    };
+    use crate::su2_mesh::{DomainAxis, DomainSide};
 
     fn fixture() -> (VolumeMesh, Su2MarkerMap, Su2Case) {
         let markers = BlockBoundaryMarkers {
@@ -172,12 +184,48 @@ mod tests {
         };
         let marker_map = Su2MarkerMap {
             bindings: vec![
-                binding(1, "inlet", BoundaryRole::Inlet, DomainAxis::X, DomainSide::Min),
-                binding(2, "outlet", BoundaryRole::Outlet, DomainAxis::X, DomainSide::Max),
-                binding(3, "y_min", BoundaryRole::Wall, DomainAxis::Y, DomainSide::Min),
-                binding(4, "y_max", BoundaryRole::Wall, DomainAxis::Y, DomainSide::Max),
-                binding(5, "z_min", BoundaryRole::Wall, DomainAxis::Z, DomainSide::Min),
-                binding(6, "z_max", BoundaryRole::Wall, DomainAxis::Z, DomainSide::Max),
+                binding(
+                    1,
+                    "inlet",
+                    BoundaryRole::Inlet,
+                    DomainAxis::X,
+                    DomainSide::Min,
+                ),
+                binding(
+                    2,
+                    "outlet",
+                    BoundaryRole::Outlet,
+                    DomainAxis::X,
+                    DomainSide::Max,
+                ),
+                binding(
+                    3,
+                    "y_min",
+                    BoundaryRole::Wall,
+                    DomainAxis::Y,
+                    DomainSide::Min,
+                ),
+                binding(
+                    4,
+                    "y_max",
+                    BoundaryRole::Wall,
+                    DomainAxis::Y,
+                    DomainSide::Max,
+                ),
+                binding(
+                    5,
+                    "z_min",
+                    BoundaryRole::Wall,
+                    DomainAxis::Z,
+                    DomainSide::Min,
+                ),
+                binding(
+                    6,
+                    "z_max",
+                    BoundaryRole::Wall,
+                    DomainAxis::Z,
+                    DomainSide::Max,
+                ),
             ],
         };
         let case = Su2Case {
@@ -214,9 +262,34 @@ mod tests {
         assert_eq!(bundle.mesh_filename, "generated.su2");
         assert!(bundle.config_text.contains("MESH_FILENAME= generated.su2"));
         assert!(bundle.config_text.contains("MARKER_INLET= ( inlet"));
+        assert!(!bundle
+            .config_text
+            .lines()
+            .any(|line| line.starts_with("MARKER_MONITORING=")));
         assert!(bundle.mesh_text.contains("MARKER_TAG= inlet"));
         assert!(bundle.mesh_text.contains("MARKER_TAG= outlet"));
         assert_eq!(bundle.marker_bindings, marker_map.bindings);
+    }
+
+    #[test]
+    fn scene_object_wall_is_monitored_without_monitoring_domain_walls() {
+        let (mesh, mut marker_map, case) = fixture();
+        marker_map.bindings[2].source = BoundarySource::SceneObject {
+            scene_object_id: 42,
+        };
+        let bundle = build_generated_su2_case_bundle(&case, &mesh, &marker_map).unwrap();
+        let monitoring = bundle
+            .config_text
+            .lines()
+            .find(|line| line.starts_with("MARKER_MONITORING="))
+            .unwrap();
+        assert_eq!(monitoring, "MARKER_MONITORING= ( y_min )");
+        assert!(!monitoring.contains("y_max"));
+        assert!(!monitoring.contains("z_min"));
+        assert!(!monitoring.contains("z_max"));
+        assert!(bundle
+            .config_text
+            .contains("MARKER_PLOTTING= ( y_min, y_max, z_min, z_max )"));
     }
 
     #[test]
