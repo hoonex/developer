@@ -27,8 +27,8 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
-      - name: Test numerical and accurate-backend cores
-        run: cargo test -p aeroforge-flow-core -p aeroforge-accurate-backend -- --nocapture
+      - name: Test numerical, geometry and accurate-backend cores
+        run: cargo test -p aeroforge-flow-core -p aeroforge-geometry-core -p aeroforge-accurate-backend -- --nocapture
 
   app-check:
     runs-on: windows-latest
