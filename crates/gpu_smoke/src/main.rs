@@ -1,4 +1,4 @@
-use aeroforge_flow_core::{CpuLbm, VelocityField};
+use aeroforge_flow_core::{BoundaryPolicy, CpuLbm, VelocityField};
 use bytemuck::{Pod, Zeroable};
 use std::borrow::Cow;
 use wgpu::util::DeviceExt;
@@ -10,6 +10,8 @@ const TAU: f32 = 0.8;
 const FORCED_VELOCITY: [f32; 3] = [0.04, 0.01, 0.0];
 const MAX_ALLOWED_ERROR: f32 = 2.0e-4;
 const REQUIRED_STORAGE_BUFFERS_PER_STAGE: u32 = 5;
+// WGSL face bits: x-/x+/y-/y+/z-/z+. Exercise y-min + y-max no-slip walls.
+const BOUNDARY_MASK: u32 = 4 | 8;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -131,7 +133,7 @@ fn main() {
 
     let params = Params {
         dims_stride: [DIMS[0] as u32, DIMS[1] as u32, DIMS[2] as u32, 1],
-        control: [cells as u32, 0, 0, 0],
+        control: [cells as u32, BOUNDARY_MASK, 0, 0],
         physics: [1.0 / TAU, 0.12, 0.0, 0.0],
     };
     let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -251,7 +253,7 @@ fn main() {
         "AEROFORGE_GPU_PARITY=FAIL max_error={max_error:.8} limit={MAX_ALLOWED_ERROR:.8}"
     );
     println!(
-        "AEROFORGE_GPU_PARITY=PASS steps={STEPS} cells={cells} max_error={max_error:.8}"
+        "AEROFORGE_GPU_BOUNDARY_PARITY=PASS mask={BOUNDARY_MASK} steps={STEPS} cells={cells} max_error={max_error:.8}"
     );
 }
 
@@ -284,6 +286,9 @@ fn request_adapter(instance: &wgpu::Instance) -> wgpu::Adapter {
 
 fn cpu_reference() -> Vec<[f32; 3]> {
     let mut solver = CpuLbm::new(DIMS, TAU);
+    solver
+        .set_boundary_policy(BoundaryPolicy::channel_y_no_slip())
+        .expect("GPU parity boundary policy must be valid");
     let cells = DIMS.iter().product::<usize>();
     let mut solid = vec![false; cells];
     solid[index([2, 2, 2])] = true;
