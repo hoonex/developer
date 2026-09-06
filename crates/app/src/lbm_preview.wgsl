@@ -8,6 +8,7 @@ const BOUNDARY_Z_MIN: u32 = 16u;
 const BOUNDARY_Z_MAX: u32 = 32u;
 const BOUNDARY_FACE_MASK: u32 = 63u;
 const PRESSURE_MASK_SHIFT: u32 = 6u;
+const FAR_FIELD_MASK_SHIFT: u32 = 12u;
 
 const C: array<vec3<i32>, 19> = array<vec3<i32>, 19>(
     vec3<i32>(0, 0, 0),
@@ -44,10 +45,12 @@ struct Params {
     dims_stride: vec4<u32>,
     // control.x = sample_count; control.y = stationary no-slip face bitmask;
     // control.z = moving-wall face bitmask;
-    // control.w low 6 bits = velocity-inlet mask, next 6 bits = pressure-outlet mask.
+    // control.w low 6 bits = velocity-inlet mask, next 6 bits = pressure-outlet mask,
+    // next 6 bits = prescribed free-stream far-field mask.
     control: vec4<u32>,
     physics: vec4<f32>,
-    // xyz carries moving-wall or velocity-inlet velocity; w carries pressure-outlet density.
+    // xyz carries moving-wall, velocity-inlet or far-field velocity;
+    // w carries pressure-outlet or far-field density.
     wall_x_min: vec4<f32>,
     wall_x_max: vec4<f32>,
     wall_y_min: vec4<f32>,
@@ -95,6 +98,10 @@ fn pressure_outlet_mask() -> u32 {
     return (params.control.w >> PRESSURE_MASK_SHIFT) & BOUNDARY_FACE_MASK;
 }
 
+fn far_field_mask() -> u32 {
+    return (params.control.w >> FAR_FIELD_MASK_SHIFT) & BOUNDARY_FACE_MASK;
+}
+
 fn face_data(bit: u32) -> vec4<f32> {
     if (bit == BOUNDARY_X_MIN) { return params.wall_x_min; }
     if (bit == BOUNDARY_X_MAX) { return params.wall_x_max; }
@@ -131,7 +138,7 @@ fn register_boundary_hit(
 fn boundary_hit(position: vec3<u32>, q: u32) -> BoundaryHit {
     let stationary_mask = params.control.y;
     let moving_mask = params.control.z;
-    let open_mask = velocity_inlet_mask() | pressure_outlet_mask();
+    let open_mask = velocity_inlet_mask() | pressure_outlet_mask() | far_field_mask();
     let next = vec3<i32>(position) + C[q];
     var hit_stationary = false;
     var hit_moving = false;
@@ -273,6 +280,25 @@ fn reconstruct_open_cell(
     }
 }
 
+fn reconstruct_far_field_cell(boundary_cell: u32, fluid_cell: u32, bit: u32) {
+    if (solid[boundary_cell] != 0u || solid[fluid_cell] != 0u) {
+        return;
+    }
+
+    let fluid_macro = macroscopic_out(fluid_cell);
+    let data = face_data(bit);
+    let boundary_rho = data.w;
+    let boundary_u = data.xyz;
+    let boundary_base = boundary_cell * Q;
+    let fluid_base = fluid_cell * Q;
+    for (var q = 0u; q < Q; q = q + 1u) {
+        let fluid_value = state_out[fluid_base + q];
+        let fluid_eq = equilibrium(fluid_macro.rho, fluid_macro.u, q);
+        let boundary_eq = equilibrium(boundary_rho, boundary_u, q);
+        state_out[boundary_base + q] = boundary_eq + (fluid_value - fluid_eq);
+    }
+}
+
 @compute @workgroup_size(64, 1, 1)
 fn init(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cell = gid.x;
@@ -346,8 +372,10 @@ fn step(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-// Second stage for the CPU-validated non-equilibrium extrapolation boundary pair.
-// gid.x indexes only a face slot, not the full volume. The current contract permits one open axis.
+// Second stage for the CPU-validated non-equilibrium extrapolation velocity/pressure pair.
+// gid.x indexes only a face slot, not the full volume. The current contract permits one
+// velocity/pressure axis. A separate far-field stage follows this one so corner precedence
+// matches the CPU x-then-y reconstruction order.
 @compute @workgroup_size(64, 1, 1)
 fn reconstruct_open(@builtin(global_invocation_id) gid: vec3<u32>) {
     let inlet_mask = velocity_inlet_mask();
@@ -452,6 +480,73 @@ fn reconstruct_open(@builtin(global_invocation_id) gid: vec3<u32>) {
         reconstruct_open_cell(
             linear_index(x, y, nz - 1u), linear_index(x, y, nz - 2u),
             BOUNDARY_Z_MAX, false
+        );
+    }
+}
+
+// Third stage for prescribed free-stream NEQ far-field faces. The app currently uses this for
+// the transverse pair after x velocity/pressure reconstruction; a complete pair on one axis is
+// expected. Running after reconstruct_open intentionally lets far-field data own mixed corners.
+@compute @workgroup_size(64, 1, 1)
+fn reconstruct_far_field(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let mask = far_field_mask();
+    if (mask == 0u) {
+        return;
+    }
+
+    let nx = params.dims_stride.x;
+    let ny = params.dims_stride.y;
+    let nz = params.dims_stride.z;
+    let slot = gid.x;
+
+    if ((mask & (BOUNDARY_X_MIN | BOUNDARY_X_MAX)) != 0u) {
+        let face_cells = ny * nz;
+        if (slot >= face_cells) { return; }
+        let y = slot % ny;
+        let z = slot / ny;
+        if ((mask & BOUNDARY_X_MIN) != 0u) {
+            reconstruct_far_field_cell(
+                linear_index(0u, y, z), linear_index(1u, y, z), BOUNDARY_X_MIN
+            );
+        }
+        if ((mask & BOUNDARY_X_MAX) != 0u) {
+            reconstruct_far_field_cell(
+                linear_index(nx - 1u, y, z), linear_index(nx - 2u, y, z), BOUNDARY_X_MAX
+            );
+        }
+        return;
+    }
+
+    if ((mask & (BOUNDARY_Y_MIN | BOUNDARY_Y_MAX)) != 0u) {
+        let face_cells = nx * nz;
+        if (slot >= face_cells) { return; }
+        let x = slot % nx;
+        let z = slot / nx;
+        if ((mask & BOUNDARY_Y_MIN) != 0u) {
+            reconstruct_far_field_cell(
+                linear_index(x, 0u, z), linear_index(x, 1u, z), BOUNDARY_Y_MIN
+            );
+        }
+        if ((mask & BOUNDARY_Y_MAX) != 0u) {
+            reconstruct_far_field_cell(
+                linear_index(x, ny - 1u, z), linear_index(x, ny - 2u, z), BOUNDARY_Y_MAX
+            );
+        }
+        return;
+    }
+
+    let face_cells = nx * ny;
+    if (slot >= face_cells) { return; }
+    let x = slot % nx;
+    let y = slot / nx;
+    if ((mask & BOUNDARY_Z_MIN) != 0u) {
+        reconstruct_far_field_cell(
+            linear_index(x, y, 0u), linear_index(x, y, 1u), BOUNDARY_Z_MIN
+        );
+    }
+    if ((mask & BOUNDARY_Z_MAX) != 0u) {
+        reconstruct_far_field_cell(
+            linear_index(x, y, nz - 1u), linear_index(x, y, nz - 2u), BOUNDARY_Z_MAX
         );
     }
 }
