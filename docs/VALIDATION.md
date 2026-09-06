@@ -21,7 +21,7 @@ The interactive LBM preview is not engineering-validated merely because its CPU 
 | Solid cell under forcing | CPU reference | voxel solid remains stationary | GREEN |
 | BGK lattice viscosity relation | CPU reference | `nu = (tau - 0.5) / 3` | GREEN |
 | Planar Poiseuille analytical profile | CPU reference | Guo body-force, RMSE/max-error/symmetry/transverse-velocity thresholds | GREEN |
-| CPU ↔ GPU tiny-grid parity | CPU + GPU | 4×4×4, solid + forcing, 3 steps, all sampled velocity/speed values | IN PROGRESS |
+| CPU ↔ GPU tiny-grid parity | CPU + GPU | 4×4×4, solid + forcing, 3 steps, all sampled velocity/speed values | GREEN |
 | Lid-driven cavity | Native preview | reference centerline velocities / vortical structure | PLANNED |
 | Cylinder flow | Native preview | shedding regime, Strouhal/drag where regime and grid permit | PLANNED |
 | Grid convergence | Native preview | monitored observables vs resolution | PLANNED |
@@ -66,7 +66,7 @@ The dedicated `aeroforge-gpu-smoke` executable:
 - compares x/y/z velocity and speed against the CPU snapshot;
 - fails when the maximum absolute error exceeds the declared tolerance.
 
-This is an implementation-parity regression, not aerodynamic validation.
+GitHub Actions run #27 executed this path on the DX12 `Microsoft Basic Render Driver` software adapter and reported `AEROFORGE_WGSL=PASS` and `AEROFORGE_GPU_PARITY=PASS steps=3 cells=64 max_error=0.00000000`. This proves controlled implementation parity across the CPU reference and actual wgpu compute path; it does not measure hardware-GPU performance or establish aerodynamic validation.
 
 ## Claims policy
 
