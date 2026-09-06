@@ -11,12 +11,14 @@ mod gpu_preview;
 mod model;
 mod scene;
 mod simulation;
+mod surface_import;
 mod ui;
 
 use accurate_execute::AccurateExecutionRuntime;
 use accurate_prepare::AccurateRuntime;
 use model::ProjectState;
 use simulation::SimulationRuntime;
+use surface_import::SurfaceImportRuntime;
 
 fn main() {
     App::new()
@@ -25,6 +27,7 @@ fn main() {
         .init_resource::<SimulationRuntime>()
         .init_resource::<AccurateRuntime>()
         .init_resource::<AccurateExecutionRuntime>()
+        .init_resource::<SurfaceImportRuntime>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "AeroForge — 3D Aerodynamics Workbench".into(),
@@ -49,6 +52,7 @@ fn main() {
                 scene::gizmo_shortcuts,
                 simulation::advance_preview,
                 scene::draw_editor_gizmos,
+                surface_import::draw_imported_surface_wireframes,
                 scene::draw_flow_gizmos,
             ),
         )
@@ -60,6 +64,7 @@ fn main() {
             EguiPrimaryContextPass,
             (
                 ui::draw_ui,
+                surface_import::draw_surface_import_ui,
                 editor_toolbar::draw_transform_toolbar,
                 accurate_prepare::draw_accurate_prepare_ui,
                 accurate_execute::draw_accurate_execute_ui,
