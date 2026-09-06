@@ -1,4 +1,10 @@
-use bevy::prelude::*;
+use aeroforge_geometry_core::SurfaceMesh;
+use bevy::{
+    asset::RenderAssetUsages,
+    mesh::Indices,
+    prelude::*,
+    render::render_resource::PrimitiveTopology,
+};
 use bevy_egui::input::EguiWantsInput;
 use bevy_panorbit_camera::PanOrbitCamera;
 
@@ -82,6 +88,37 @@ pub fn sync_visuals(
         }
     }
 
+    for object in &state.imported_surfaces {
+        if !object.position.is_finite()
+            || !object.rotation_deg.is_finite()
+            || !object.scale.is_finite()
+        {
+            continue;
+        }
+        let Some(mesh) = imported_surface_editor_mesh(&object.mesh) else {
+            continue;
+        };
+        let material = materials.add(StandardMaterial {
+            base_color: Color::srgba(0.82, 0.62, 0.28, 0.72),
+            alpha_mode: AlphaMode::Blend,
+            perceptual_roughness: 0.55,
+            ..default()
+        });
+        let mut entity = commands.spawn((
+            EditorVisual,
+            EditorTarget::Object(object.id),
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(material),
+            Transform::from_translation(object.position)
+                .with_rotation(rotation_from_degrees(object.rotation_deg))
+                .with_scale(object.scale),
+        ));
+        entity.observe(select_editor_target);
+        if state.selection == SelectedItem::Object(object.id) {
+            entity.insert(TransformGizmoFocus);
+        }
+    }
+
     for source in &state.wind_sources {
         if !source.enabled {
             continue;
@@ -110,6 +147,41 @@ pub fn sync_visuals(
             entity.insert(TransformGizmoFocus);
         }
     }
+}
+
+fn imported_surface_editor_mesh(surface: &SurfaceMesh) -> Option<Mesh> {
+    if surface.positions.is_empty() || surface.triangles.is_empty() {
+        return None;
+    }
+
+    let positions = surface
+        .positions
+        .iter()
+        .map(|position| {
+            let converted = [position[0] as f32, position[1] as f32, position[2] as f32];
+            Vec3::from_array(converted).is_finite().then_some(converted)
+        })
+        .collect::<Option<Vec<_>>>()?;
+
+    let mut indices = Vec::with_capacity(surface.triangles.len().checked_mul(3)?);
+    for triangle in &surface.triangles {
+        if triangle
+            .iter()
+            .any(|&index| index as usize >= positions.len())
+        {
+            return None;
+        }
+        indices.extend_from_slice(triangle);
+    }
+
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_indices(Indices::U32(indices));
+    let _ = mesh.try_compute_normals();
+    Some(mesh)
 }
 
 fn select_editor_target(
@@ -197,20 +269,28 @@ pub fn sync_gizmo_to_model(
             if let Ok((target, transform)) = visuals.get(entity) {
                 let (rx, ry, rz) = transform.rotation.to_euler(EulerRot::XYZ);
                 let rotation_deg = Vec3::new(rx.to_degrees(), ry.to_degrees(), rz.to_degrees());
-                let scale = transform.scale.abs().max(Vec3::splat(0.001));
+                let primitive_scale = transform.scale.abs().max(Vec3::splat(0.001));
                 match *target {
                     EditorTarget::Object(id) => {
                         if let Some(object) = state.objects.iter_mut().find(|object| object.id == id) {
                             object.position = transform.translation;
                             object.rotation_deg = rotation_deg;
-                            object.scale = scale;
+                            object.scale = primitive_scale;
+                        } else if let Some(object) = state
+                            .imported_surfaces
+                            .iter_mut()
+                            .find(|object| object.id == id)
+                        {
+                            object.position = transform.translation;
+                            object.rotation_deg = rotation_deg;
+                            object.scale = transform.scale;
                         }
                     }
                     EditorTarget::Wind(id) => {
                         if let Some(source) = state.wind_sources.iter_mut().find(|source| source.id == id) {
                             source.position = transform.translation;
                             source.rotation_deg = rotation_deg;
-                            source.size = scale;
+                            source.size = primitive_scale;
                         }
                     }
                 }
@@ -435,5 +515,40 @@ fn draw_box(gizmos: &mut Gizmos, min: Vec3, max: Vec3, color: Color) {
         (0, 4), (1, 5), (2, 6), (3, 7),
     ] {
         gizmos.line(p[a], p[b], color);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tetra_surface() -> SurfaceMesh {
+        SurfaceMesh {
+            positions: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            triangles: vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
+        }
+    }
+
+    #[test]
+    fn imported_surface_builds_indexed_editor_mesh() {
+        let mesh = imported_surface_editor_mesh(&tetra_surface()).unwrap();
+        assert_eq!(mesh.count_vertices(), 4);
+        assert_eq!(mesh.indices().unwrap().len(), 12);
+    }
+
+    #[test]
+    fn imported_editor_mesh_rejects_bad_indices_and_non_finite_f32_conversion() {
+        let mut invalid_index = tetra_surface();
+        invalid_index.triangles[0] = [0, 1, 99];
+        assert!(imported_surface_editor_mesh(&invalid_index).is_none());
+
+        let mut out_of_range = tetra_surface();
+        out_of_range.positions[0][0] = f64::MAX;
+        assert!(imported_surface_editor_mesh(&out_of_range).is_none());
     }
 }
