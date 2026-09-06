@@ -94,6 +94,14 @@ For the exact cell-center masks used here, the 2D solid cross-sections and area-
 
 Those simple nominal-area differences are much smaller than the D8→D10 Cd* change (`-4.66%`), so the refinement trend cannot be explained by coefficient denominator correction alone. Effective hydrodynamic wall location, stair-step voxel shape, BGK relaxation and link-level force dynamics remain relevant.
 
+## Pinned SU2 adapter cross-validation
+
+The accurate-backend process path now has a GREEN external known-case checkpoint independent of the native LBM cylinder diagnostics. PR workflow run #253 used the pinned official SU2 8.5.0 Linux OMP release, verified outer archive SHA256 `aadc800cd9df34deff99d4725f5897f620c9f2979f62ab235313311bf501f09b`, and reported the exact banner `SU2 v8.5.0 "Harrier", The Open-Source CFD Code`.
+
+Through AeroForge's `discover_su2 → probe_su2_banner → run_su2_case` adapter path, the official incompressible laminar-cylinder case reproduced iteration 10 exactly as `[-4.168180, -3.611108, 0.007850, 4.539924]` with maximum absolute error `0.000e0`. Config provenance is SU2 commit `12eb826f049ef7f67df974dfcb44cf36ee07c0f8`; mesh/TestCases provenance is commit `790c80ec5b543487b5f8ecf8bb0f0e4d2cc67f3f`.
+
+This validates the pinned upstream SU2 executable/case adapter path. It does **not** validate AeroForge-generated geometry, volume meshing, marker translation, or an end-to-end AeroForge accurate cylinder case.
+
 ## Source provenance
 
 1. C. H. K. Williamson & G. L. Brown (1998), “A series in 1/sqrt(Re) to represent the Strouhal–Reynolds number relationship of the cylinder wake”, *Journal of Fluids and Structures* 12(8), 1073–1085, DOI `10.1006/jfls.1998.0184`.
@@ -115,5 +123,5 @@ The evidence now separates the leading effects more clearly:
 ## Next evidence
 
 - add per-object momentum-exchange provenance so force diagnostics can be attributed to individual scene objects;
-- cross-validate AeroForge's accurate-backend process path against the pinned upstream SU2 8.5.0 incompressible laminar cylinder regression;
-- do not spend more native-preview compute on D14/D16 until those force-provenance and accurate-backend checks clarify the remaining error budget.
+- use the now-GREEN pinned SU2 known-case to harden output/provenance handling before attempting an AeroForge-generated geometry/mesh case;
+- do not spend more native-preview compute on D14/D16 until those force-provenance and accurate-backend steps clarify the remaining error budget.
