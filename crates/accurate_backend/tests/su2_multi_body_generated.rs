@@ -263,7 +263,7 @@ fn generated_two_body_surface_coefficients_sum_to_aggregate_under_su2_850() {
         .iter()
         .filter(|binding| {
             binding.role == BoundaryRole::Wall
-                && matches!(binding.source, BoundarySource::SceneObject { .. })
+                && matches!(&binding.source, BoundarySource::SceneObject { .. })
         })
         .collect::<Vec<_>>();
     assert_eq!(body_bindings.len(), 2);
