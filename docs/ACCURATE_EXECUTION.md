@@ -4,13 +4,21 @@ AeroForge accurate mode separates **case preparation** from **solver execution**
 
 ## 1. Prepare the current scene + solver settings
 
-The accurate prepare window converts supported scene primitives into the generated-case path:
+The accurate prepare window converts supported analytic primitives and audited imported surface objects into one generated-case ownership path:
 
-`SceneObject.id → deterministic primitive voxelization → compact owner field → staircase tetrahedral fluid mesh → SU2 marker bindings/provenance → generated mesh/config bundle`.
+`stable SceneObject.id → primitive/imported geometry preparation → deterministic mixed compact owner field → staircase tetrahedral fluid mesh → SU2 marker bindings/provenance → generated mesh/config bundle`.
 
-Preparation records both the current `ProjectState.revision` and a snapshot of the accurate solver settings used to build the config. The prepared bundle is stale if either the scene revision or any tracked accurate setting changes afterward. This includes flow model, inlet speed/temperature, turbulence settings, maximum iterations, residual target, explicit coefficient reference area, and explicit coefficient reference length. The execute button remains disabled until the new state/settings are prepared again.
+Analytic primitives are rasterized directly. Imported surfaces are stored in object-local coordinates, transformed into world coordinates at preparation time, and passed through the explicit imported-surface repair/audit gate before rasterization. The default gate uses an explicit zero weld tolerance, drops degenerate/duplicate triangles, attempts consistent manifold orientation, requires a single connected watertight two-manifold, and requires positive finite enclosed volume.
 
-The current generated mesh is voxel-derived staircase geometry. It is not body-fitted and must not be presented as engineering-quality surface/volume meshing.
+This audit is intentionally narrower than body-fitted meshing readiness. It does not prove that the triangle surface is free of self-intersections, does not resolve arbitrary CAD defects, and does not prove that a valid high-quality exterior-fluid volume mesh can be generated around the body.
+
+Primitive and imported ownership fields are reconciled into one stable SceneObject table sorted by ID. The lowest stable `SceneObject.id` owns a cell when geometry kinds overlap. A duplicated SceneObject ID across primitive/imported stores fails closed. Only compact owner labels that actually occur inside the fluid domain become body markers.
+
+The current imported-surface path is still a **cell-center occupancy → staircase tetrahedral fluid mesh** path. It is not body-fitted and must not be presented as engineering-quality surface/volume meshing. Desktop OBJ/STL parsing, topology reporting, and wireframe display are also not equivalent to promotion through the accurate repair/audit gate; the gate is applied again during accurate preparation.
+
+The desktop geometry import window currently accepts OBJ and STL paths. `geometry_core` also has a static glTF/GLB importer, but that importer is not yet wired to the desktop path-import UI, particularly for external buffer URI resolution. Imported surfaces are currently consumed by accurate preparation, while the interactive preview solid rasterizer remains primitive-only.
+
+Preparation records both the current `ProjectState.revision` and a snapshot of the accurate solver settings used to build the config. The prepared bundle is stale if either the scene revision or any tracked accurate setting changes afterward. This includes flow model, inlet speed/temperature, turbulence settings, maximum iterations, residual target, explicit coefficient reference area, and explicit coefficient reference length. Import, transform, rename/delete operations that touch project revision therefore invalidate stale prepared bundles. The execute button remains disabled until the new state/settings are prepared again.
 
 ## 2. Explicit coefficient-reference and axis contract
 
@@ -93,7 +101,7 @@ Manifest format version 5 preserves the previous v4 reference/frame/history/aggr
 - for each complete promoted body, indexed `scene_object_id`, exact marker tag, and `cfx/cfy/cfz/cmx/cmy/cmz` fields;
 - an explicit `per_body_diagnostic_error` when complete per-body evidence cannot be promoted.
 
-Marker provenance separately preserves domain-face and scene-object source translation. For generated primitive bodies, a stable `SceneObject.id` survives through compact owner labeling into markers such as `body_42` and provenance such as `scene_object:42`. Per-body result mapping uses that authoritative marker binding and `BoundarySource::SceneObject { scene_object_id }`; AeroForge does not recover object IDs by parsing the marker text.
+Marker provenance separately preserves domain-face and scene-object source translation. A stable `SceneObject.id` from either an analytic primitive or an imported surface survives mixed compact owner labeling into markers such as `body_42` and provenance such as `scene_object:42`. Per-body result mapping uses that authoritative marker binding and `BoundarySource::SceneObject { scene_object_id }`; AeroForge does not recover object IDs by parsing the marker text or filename.
 
 ## 6. Structured history quality
 
@@ -113,7 +121,7 @@ The UI also retains the last 12 history lines and the last 12 stdout/stderr line
 
 ## 7. Structured world-axis diagnostic boundary
 
-Generated-case load monitoring is separated from the physical tunnel-wall boundary set. `MARKER_HEATFLUX` and `MARKER_PLOTTING` still contain the configured tunnel/body walls, while `MARKER_MONITORING` is derived only from wall bindings whose provenance is `BoundarySource::SceneObject`. A generated tunnel with no scene body therefore emits no monitoring marker; a single `SceneObject.id=42` body emits exactly `MARKER_MONITORING= ( body_42 )`.
+Generated-case load monitoring is separated from the physical tunnel-wall boundary set. `MARKER_HEATFLUX` and `MARKER_PLOTTING` still contain the configured tunnel/body walls, while `MARKER_MONITORING` is derived only from wall bindings whose provenance is `BoundarySource::SceneObject`. A generated tunnel with no active scene body therefore emits no monitoring marker; a single active `SceneObject.id=42` body emits exactly `MARKER_MONITORING= ( body_42 )` regardless of whether its source geometry was analytic or imported.
 
 For generated cases that carry explicit coefficient references and at least one monitored body, AeroForge explicitly requests SU2 history groups `ITER, RMS_RES, AERO_COEFF, AERO_COEFF_SURF`. `AERO_COEFF` is required for aggregate world-axis coefficient history and `AERO_COEFF_SURF` requests one surface-coefficient set per monitored marker.
 
@@ -131,35 +139,39 @@ Relevant checkpoints include:
 
 - **run #253**: official upstream incompressible laminar-cylinder regression reproduced through AeroForge's SU2 adapter/process path, including exact iteration-10 reference values;
 - **run #365**: initial AeroForge-generated cases executed with real SU2 8.5.0, including an empty tunnel and a primitive-body case preserving `SceneObject.id=42 → body_42 → scene_object:42` provenance;
-- **run #393**: routine core tests, Windows app compile/unit tests, and GPU smoke all GREEN after adding solver-settings freshness, structured history parsing, conservative convergence-quality evaluation, UI integration and manifest-v2 persistence;
 - **run #409**: pinned SU2 8.5.0 external generated-case evidence passed after body-only monitoring was introduced; the no-body case emitted no `MARKER_MONITORING` line and the body case emitted exactly `MARKER_MONITORING= ( body_42 )`;
-- **run #411**: post-cleanup routine CI completed GREEN with the temporary body-monitoring evidence job absent;
-- **run #431**: routine core tests, Windows app compile/unit tests and GPU parity all GREEN after the explicit coefficient-reference implementation, manifest-v3 persistence, and reference-aware generated-case assertions were added;
-- **run #433 / `su2-generated-one-shot`**: the pinned outer SU2 8.5.0 archive passed SHA256 `aadc800cd9df34deff99d4725f5897f620c9f2979f62ab235313311bf501f09b`, reported `SU2 v8.5.0 "Harrier", The Open-Source CFD Code`, and the reference-aware generated external tests completed `2 passed; 0 failed`;
-- **run #435**: routine CI on the post-one-shot-cleanup head completed GREEN;
-- **run #449 / `su2-generated-one-shot`**: the pinned external runtime revalidated the explicit zero-angle world-axis and zero-origin coefficient-frame contract;
-- **run #451**: post-cleanup routine core/app/GPU CI completed GREEN with the temporary axis/origin evidence job removed;
-- **runs #455, #457, #459 and #461**: routine evidence remained GREEN while exact aggregate six-axis extraction, app integration, manifest-v4 persistence, monitored-body gating, and real-runtime diagnostic assertions were added and compiled;
-- **run #463 / `su2-generated-one-shot`**: the first real diagnostic-history assertion failed closed because SU2 history contained none of the six aggregate fields, identifying the missing explicit `AERO_COEFF` history request rather than weakening the extractor;
-- **run #465 / `su2-generated-one-shot`**: after generated configs explicitly requested `HISTORY_OUTPUT= ITER, RMS_RES, AERO_COEFF`, the same pinned archive SHA256 passed, the runtime reported `SU2 v8.5.0 "Harrier", The Open-Source CFD Code`, both generated tests passed (`2 passed; 0 failed`), and the real body-case history produced finite aggregate diagnostics: `CFx=1.057443042`, `CFy=-0.07758861071`, `CFz=-0.07758861071`, `CMx≈0`, `CMy=2.83920088`, `CMz=-2.83920088`;
-- **run #467**: post-evidence cleanup routine CI completed GREEN across core tests, Windows app compile/unit tests, and all three GPU parity smokes with the temporary SU2 job absent;
-- **run #487 / `su2-multi-body-one-shot`**: bounded failure instrumentation captured the real SU2 8.5.0 `history.csv` contract and established that surface fields are parenthesized (`CFx(body_3)`, ..., `CMz(body_9)`) rather than the initially assumed underscore names;
-- **run #489 / `su2-multi-body-one-shot`**: after the exact naming fix, the pinned runtime reported `SU2 v8.5.0 "Harrier", The Open-Source CFD Code`; `body_3` produced `CF=(0.6672644375, -0.02848445078, -0.02848445078)` and `CM=(3.400089777e-16, 1.755802498, -1.755802498)`, `body_9` produced `CF=(0.530493586, -0.01590075699, -0.01590075699)` and `CM=(2.42960813e-17, 1.382416704, -1.382416704)`, while the aggregate was `CF=(1.197758023, -0.04438520778, -0.04438520778)` and `CM=(3.64305059e-16, 3.138219202, -3.138219202)`; all six surface sums matched the aggregate with `max_surface_sum_error=5.000e-10`, and the external test completed `1 passed; 0 failed`;
-- **run #491**: post-evidence cleanup routine `core-tests`, `app-check`, and `gpu-smoke` all completed GREEN with the temporary multi-body SU2 job removed;
-- **run #493**: routine core tests, Windows app compile/unit tests, and GPU parity all completed GREEN after authoritative SceneObject-to-surface mapping, fail-closed per-body result promotion, manifest-v5 persistence, and aggregate/per-body UI separation were integrated.
+- **run #431**: routine core tests, Windows app compile/unit tests and GPU parity all GREEN after explicit coefficient-reference implementation and reference-aware generated-case assertions;
+- **run #433 / `su2-generated-one-shot`**: pinned SU2 8.5.0 archive SHA256 `aadc800cd9df34deff99d4725f5897f620c9f2979f62ab235313311bf501f09b` passed, banner was `SU2 v8.5.0 "Harrier", The Open-Source CFD Code`, and reference-aware generated external tests completed `2 passed; 0 failed`;
+- **run #449 / `su2-generated-one-shot`**: pinned external runtime revalidated the explicit zero-angle world-axis and zero-origin coefficient-frame contract;
+- **run #465 / `su2-generated-one-shot`**: after generated configs explicitly requested `HISTORY_OUTPUT= ITER, RMS_RES, AERO_COEFF`, both generated tests passed (`2 passed; 0 failed`) and the body fixture produced finite aggregate diagnostics `CF=(1.057443042, -0.07758861071, -0.07758861071)`, `CM≈(0, 2.83920088, -2.83920088)`;
+- **run #487 / `su2-multi-body-one-shot`**: bounded instrumentation captured the real SU2 8.5.0 parenthesized per-surface history contract (`CFx(body_3)`, ..., `CMz(body_9)`);
+- **run #489 / `su2-multi-body-one-shot`**: exact naming fix passed; `body_3` produced `CF=(0.6672644375, -0.02848445078, -0.02848445078)`, `CM=(3.400089777e-16, 1.755802498, -1.755802498)`, `body_9` produced `CF=(0.530493586, -0.01590075699, -0.01590075699)`, `CM=(2.42960813e-17, 1.382416704, -1.382416704)`, aggregate was `CF=(1.197758023, -0.04438520778, -0.04438520778)`, `CM=(3.64305059e-16, 3.138219202, -3.138219202)`, all six surface sums matched aggregate with `max_surface_sum_error=5.000e-10`, and the test completed `1 passed; 0 failed`;
+- **run #491**: temporary multi-body one-shot removed and routine core/app/GPU CI completed GREEN;
+- **run #493**: routine core/app/GPU CI completed GREEN after authoritative SceneObject-to-surface result mapping, manifest-v5 persistence, and aggregate/per-body UI separation;
+- **run #503**: routine core evidence passed after the imported-surface repair/audit contract was added;
+- **run #507**: routine core evidence passed after audited imported surfaces gained deterministic cell-center rasterization with stable SceneObject ownership;
+- **run #509**: routine generated-case evidence passed for `SurfaceMesh → audit → imported raster ownership → staircase SU2 mesh/config → body_42 → SceneObject 42` provenance;
+- **run #511**: routine core evidence compiled the ignored external imported-runtime target before any temporary external job was added;
+- **run #513 / `su2-imported-one-shot`**: the pinned SU2 8.5.0 runtime executed the audited imported-`SurfaceMesh` staircase path. The fixture produced aggregate `CF=(1.279538626, -0.1490820403, -0.1490820403)` and `CM≈(0, 2.153866187, -2.153866187)`; the single monitored surface matched the aggregate with `max_surface_aggregate_error=0.000e0`; the test completed `1 passed; 0 failed`;
+- **run #515**: the temporary imported-surface one-shot had been removed; routine core and GPU jobs completed successfully and the functional app compile/unit-test steps also succeeded before cache-postprocessing lingered;
+- **run #517**: routine core/app/GPU CI completed successfully after actual OBJ bytes were composed through `import_obj → accurate audit → imported raster → generated staircase SU2 marker/provenance`;
+- **run #537**: on the desktop mixed-geometry/import head, core-tests and all three GPU parity smokes completed successfully; Windows desktop compile/check and app unit tests also completed successfully. The app job itself was later cancelled only in the `Post Cache Cargo` cleanup step after those functional steps had succeeded and after a newer documentation head superseded it.
 
-The #465 and #489 coefficient values are **smoke-fixture diagnostic values**, not trusted aerodynamic reference values. The #489 result establishes the pinned SU2 8.5.0 per-surface history contract and same-reference additive consistency for the two-body generated fixture. It does not establish body-specific aerodynamic normalization, coefficient accuracy, body-fitted mesh quality, or engineering validation.
+The #465, #489 and #513 coefficient values are **smoke-fixture diagnostic values**, not trusted aerodynamic reference values. In particular, #513 starts from an in-memory imported `SurfaceMesh`; it is external proof of the audited imported-surface **staircase** solver path, not proof that a filesystem OBJ/STL parser, desktop UI interaction, higher-fidelity mesh generator, or body-fitted imported-mesh workflow was exercised by the external solver job. OBJ parser composition is separately covered by routine run #517.
 
 ## 9. Current non-claims
 
 AeroForge does not currently claim that accurate-mode output is engineering-valid merely because SU2 completed successfully, met the configured residual target, or produced finite coefficient diagnostics. In particular:
 
-- the generated geometry is staircase/voxel-derived, not body-fitted;
-- imported audited surfaces are not yet connected to a higher-fidelity volume-meshing path;
+- generated geometry from both analytic primitives and imported surfaces is currently staircase/voxel-derived, not body-fitted;
+- imported audited surfaces are connected to the current deterministic staircase generated-SU2 path, but **not** to a higher-fidelity/body-fitted exterior-fluid volume-meshing path;
+- the desktop path importer currently exposes OBJ/STL only; static glTF/GLB parsing exists in `geometry_core` but is not yet integrated into that UI;
+- interactive preview solid rasterization remains primitive-only even when imported surfaces are visible as sampled wireframes;
+- the imported-surface audit does not establish self-intersection freedom or mesher-grade CAD validity;
 - live progress/cancellation/process recovery are not implemented yet;
 - body-only monitoring, explicit SI `REF_AREA`/`REF_LENGTH`, fixed zero-angle world axes, zero moment origin, aggregate six-axis extraction, and per-body `AERO_COEFF_SURF` SceneObject attribution are implemented and externally smoke-proven under pinned SU2 8.5.0;
 - per-body values share the global coefficient reference and moment origin and must not be presented as automatically body-normalized engineering `Cd/Cl` values;
 - the displayed `CF*`/`CM*` values are diagnostics, not validated aerodynamic coefficients;
 - no grid/domain/model-sensitivity campaign has validated a generated body case against trusted dimensional reference data.
 
-The next execution milestone is process lifecycle control (live progress/cancellation/recovery). The next geometry/accurate-path milestone is to connect imported audited surfaces to a deterministic higher-fidelity meshing path, retain explicit marker/source provenance through generated volume meshing, and then exercise that imported-mesh path end to end with SU2. Promotion to engineering-valid coefficients requires independent mesh/domain/model/reference validation after those foundations exist.
+The next execution milestone is process lifecycle control (live progress/cancellation/recovery). The next geometry/accurate-path milestone is a declared higher-fidelity/body-fitted exterior-fluid meshing path that consumes audited imported surfaces directly while retaining stable marker/source provenance; that future path then needs its own real-SU2 E2E evidence. Promotion to engineering-valid coefficients requires independent mesh/domain/model/reference validation after those foundations exist.
