@@ -2,13 +2,13 @@
 
 AeroForge accurate mode separates **case preparation** from **solver execution**. Nothing launches automatically.
 
-## 1. Prepare the current scene revision
+## 1. Prepare the current scene + solver settings
 
 The accurate prepare window converts supported scene primitives into the generated-case path:
 
 `SceneObject.id → deterministic primitive voxelization → compact owner field → staircase tetrahedral fluid mesh → SU2 marker bindings/provenance → generated mesh/config bundle`.
 
-Preparation records the current `ProjectState.revision`. If the scene changes afterward, the prepared bundle is stale and the execute button is disabled until the new revision is prepared again.
+Preparation records both the current `ProjectState.revision` and a snapshot of the accurate solver settings used to build the config. The prepared bundle is stale if either the scene revision or any tracked accurate setting changes afterward. This includes flow model, inlet speed/temperature, turbulence settings, maximum iterations, and residual target. The execute button remains disabled until the new state/settings are prepared again.
 
 The current generated mesh is voxel-derived staircase geometry. It is not body-fitted and must not be presented as engineering-quality surface/volume meshing.
 
@@ -20,13 +20,13 @@ The execute window exposes one explicit action:
 
 Before launch AeroForge:
 
-1. requires a fresh prepared bundle for the current scene revision;
+1. requires a fresh prepared bundle for the current scene revision **and** solver-settings snapshot;
 2. discovers `SU2_CFD` through `SU2_RUN` or `PATH`;
 3. probes the executable banner;
 4. rejects runtimes whose banner does not contain `SU2 v8.5.0`;
 5. creates a new non-overwriting case directory;
 6. persists the mesh, config and marker provenance;
-7. launches `SU2_CFD` on a worker thread.
+7. launches `SU2_CFD` on a worker thread using the prepared immutable bundle/settings contract.
 
 The strict 8.5.0 gate is intentional: SU2 8.5.0 is the runtime version covered by AeroForge's external evidence. Supporting additional versions should require an explicit compatibility/evidence decision instead of silently accepting them.
 
@@ -48,48 +48,61 @@ A generated execution directory contains the generated SU2 inputs/provenance plu
 
 `aeroforge_run_manifest.tsv`
 
-The current manifest records:
+Manifest format version 2 records:
 
-- manifest format version;
 - scene revision;
 - probed SU2 version banner;
-- external process success flag;
-- process exit code.
+- external process success flag and exit code;
+- requested iteration budget;
+- configured log10 residual target;
+- structured history-gate status;
+- final parsed iteration when available;
+- worst final RMS residual across recognized RMS columns when available;
+- residual-column count and finite-value status;
+- explicit history parse/read error when structured quality is unavailable.
 
 Marker provenance separately preserves domain-face and scene-object source translation. For generated primitive bodies, a stable `SceneObject.id` survives through compact owner labeling into markers such as `body_42` and provenance such as `scene_object:42`.
 
-## 5. Result ingestion
+## 5. Structured history quality
 
-After process completion AeroForge currently ingests a deliberately small execution summary:
+After process completion AeroForge reads `history.csv`, or a deterministic sorted `history*.csv` fallback, and parses quoted SU2 CSV records. Recognized iteration columns are `INNER_ITER`, `OUTER_ITER`, `TIME_ITER`, `ITER`, and `ITERATION`. RMS fields are detected from normalized headers containing `RMS`.
 
-- process success/failure and exit code;
-- SU2 banner;
-- persisted case directory;
-- tail of `history.csv` (or a matching `history*.csv` fallback);
-- last 12 stdout lines;
-- last 12 stderr lines.
+The quality gate is deliberately conservative:
 
-This is **raw execution/result ingestion**, not aerodynamic post-processing. There is no current claim that the final history row is converged, that coefficients are trustworthy, or that a successful exit means an engineering-valid CFD result.
+- `residual_target_met` — at least one RMS field exists, every final RMS value is finite, and the worst final log10 RMS residual is at or below the configured target;
+- `iteration_budget_reached` — finite RMS evidence exists, the residual target was not met, and the requested iteration budget was exhausted;
+- `incomplete` — the history ended before either condition, or residual evidence is missing/non-finite;
+- `no_history_rows` — a valid history header exists but no usable iteration rows were found;
+- `unavailable` in the run manifest — no history file could be read or the CSV contract could not be parsed.
 
-## 6. External evidence
+**Process success and history quality are separate signals.** An exit code of zero does not imply residual convergence. Conversely, even `residual_target_met` establishes only that the configured residual gate passed for that run; it does not validate aerodynamic accuracy.
 
-Two distinct external SU2 8.5.0 checkpoints exist:
+The UI also retains the last 12 history lines and the last 12 stdout/stderr lines for direct inspection.
+
+## 6. Current result-ingestion boundary
+
+Structured history parsing is now implemented, but aerodynamic post-processing remains intentionally limited. The parser retains final numeric history values internally, yet AeroForge does not currently promote `CD`, `CL`, or similar fields to validated body coefficients.
+
+The generated config currently monitors the declared wall-marker set, which can include tunnel walls and body markers. Until body-only monitoring/reference-area semantics are explicit, a raw SU2 coefficient must not be described as a per-body engineering coefficient.
+
+## 7. External and routine evidence
+
+Three relevant checkpoints now exist:
 
 - **run #253**: official upstream incompressible laminar-cylinder regression reproduced through AeroForge's SU2 adapter/process path, including exact iteration-10 reference values;
-- **run #365**: AeroForge-generated cases executed with real SU2 8.5.0, including an empty tunnel and a primitive-body case preserving `SceneObject.id=42 → body_42 → scene_object:42` provenance.
+- **run #365**: AeroForge-generated cases executed with real SU2 8.5.0, including an empty tunnel and a primitive-body case preserving `SceneObject.id=42 → body_42 → scene_object:42` provenance;
+- **run #393**: routine core tests, Windows app compile/unit tests, and GPU smoke all GREEN after adding solver-settings freshness, structured history parsing, conservative convergence-quality evaluation, UI integration and manifest-v2 persistence.
 
-Routine CI after removing the temporary external-runtime one-shot remained GREEN, and **run #379** verifies the explicit desktop execution orchestration, Windows app compilation/unit tests, core tests and GPU smoke paths together.
+These checkpoints establish adapter/process/generated-case execution and quality-reporting compatibility. They do not establish engineering validation.
 
-These checkpoints establish adapter/process/generated-case execution compatibility. They do not establish engineering validation.
+## 8. Current non-claims
 
-## 7. Current non-claims
-
-AeroForge does not currently claim that accurate-mode output is engineering-valid merely because SU2 completed successfully. In particular:
+AeroForge does not currently claim that accurate-mode output is engineering-valid merely because SU2 completed successfully or met the configured residual target. In particular:
 
 - the generated geometry is staircase/voxel-derived, not body-fitted;
 - imported audited surfaces are not yet connected to a higher-fidelity volume-meshing path;
-- live convergence gates are not enforced in the UI;
-- aerodynamic coefficients are not yet promoted through a validated result-extraction pipeline;
+- live progress/cancellation/process recovery are not implemented yet;
+- body-only monitoring/reference-area semantics and validated aerodynamic coefficient extraction are not complete;
 - no grid/domain/model-sensitivity campaign has validated a generated body case against trusted dimensional reference data.
 
-The next accuracy milestone is structured history/result parsing with declared convergence gates, followed by higher-fidelity geometry/volume meshing and dimensional validation.
+The next execution milestone is process lifecycle control (live progress/cancellation/recovery). The next aerodynamic-result milestone is explicit body-only monitoring plus reference-area/axis semantics before exposing coefficients as structured outputs.
