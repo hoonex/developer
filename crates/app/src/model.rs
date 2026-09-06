@@ -1,3 +1,4 @@
+use aeroforge_geometry_core::SurfaceMesh;
 use bevy::prelude::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -12,6 +13,20 @@ pub struct SceneObject {
     pub id: u64,
     pub name: String,
     pub kind: PrimitiveKind,
+    pub position: Vec3,
+    pub rotation_deg: Vec3,
+    pub scale: Vec3,
+}
+
+/// Imported surface geometry stays separate from analytic primitives so existing preview/editor
+/// behavior remains stable while the accurate path gains an explicit audited-surface input.
+/// `mesh` is stored in object-local coordinates; the object transform is applied when a backend
+/// consumes the surface.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImportedSurfaceObject {
+    pub id: u64,
+    pub name: String,
+    pub mesh: SurfaceMesh,
     pub position: Vec3,
     pub rotation_deg: Vec3,
     pub scale: Vec3,
@@ -99,6 +114,7 @@ pub enum SelectedItem {
 #[derive(Resource)]
 pub struct ProjectState {
     pub objects: Vec<SceneObject>,
+    pub imported_surfaces: Vec<ImportedSurfaceObject>,
     pub wind_sources: Vec<WindSource>,
     pub simulation: SimulationSettings,
     pub selection: SelectedItem,
@@ -118,6 +134,7 @@ impl Default for ProjectState {
                 rotation_deg: Vec3::ZERO,
                 scale: Vec3::new(1.5, 1.5, 1.5),
             }],
+            imported_surfaces: Vec::new(),
             wind_sources: vec![WindSource {
                 id: 2,
                 name: "Main inlet".into(),
@@ -163,6 +180,26 @@ impl ProjectState {
         id
     }
 
+    pub fn add_imported_surface(&mut self, name: impl Into<String>, mesh: SurfaceMesh) -> u64 {
+        let id = self.alloc_id();
+        let name = name.into();
+        self.imported_surfaces.push(ImportedSurfaceObject {
+            id,
+            name: if name.trim().is_empty() {
+                format!("Imported {id}")
+            } else {
+                name
+            },
+            mesh,
+            position: Vec3::ZERO,
+            rotation_deg: Vec3::ZERO,
+            scale: Vec3::ONE,
+        });
+        self.selection = SelectedItem::Object(id);
+        self.touch();
+        id
+    }
+
     pub fn add_wind_source(&mut self) -> u64 {
         let id = self.alloc_id();
         self.wind_sources.push(WindSource {
@@ -200,4 +237,36 @@ pub fn rotation_from_degrees(degrees: Vec3) -> Quat {
         degrees.y.to_radians(),
         degrees.z.to_radians(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tetra_surface() -> SurfaceMesh {
+        SurfaceMesh {
+            positions: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            triangles: vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
+        }
+    }
+
+    #[test]
+    fn imported_surface_uses_shared_stable_scene_id_space() {
+        let mut state = ProjectState::default();
+        let initial_revision = state.revision;
+        let imported_id = state.add_imported_surface("tetra.obj", tetra_surface());
+        let primitive_id = state.add_object(PrimitiveKind::Sphere);
+
+        assert_eq!(imported_id, 3);
+        assert_eq!(primitive_id, 4);
+        assert_eq!(state.imported_surfaces[0].id, imported_id);
+        assert_eq!(state.imported_surfaces[0].name, "tetra.obj");
+        assert_eq!(state.selection, SelectedItem::Object(primitive_id));
+        assert_eq!(state.revision, initial_revision + 2);
+    }
 }
