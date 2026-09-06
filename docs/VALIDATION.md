@@ -42,6 +42,11 @@ The native LBM backend remains an interactive preview solver. GREEN numerical re
 | Explicit zero-angle world-axis / zero-origin coefficient frame | App + SU2 adapter | GREEN external smoke |
 | Exact aggregate `CFx/CFy/CFz/CMx/CMy/CMz` history extraction | App + SU2 adapter | GREEN external smoke |
 | Exact per-body `AERO_COEFF_SURF` six-axis SceneObject attribution | App + SU2 adapter | GREEN external smoke |
+| Imported-surface bounded repair/topology audit | Geometry + SU2 adapter | GREEN implementation regression |
+| Imported/primitive mixed stable-ID voxel ownership | App + SU2 adapter | GREEN implementation regression |
+| Audited imported `SurfaceMesh` → staircase SU2 execution | SU2 adapter | GREEN external execution smoke |
+| OBJ parser → audit → staircase marker/provenance composition | Geometry + SU2 adapter | GREEN routine integration |
+| Desktop OBJ/STL storage + mixed accurate preparation | App + SU2 adapter | GREEN functional compile/unit evidence |
 | Explicit desktop SU2 execution orchestration | App + SU2 adapter | GREEN implementation regression |
 | Structured SU2 history quality gate + manifest v5 diagnostic provenance | App + SU2 adapter | GREEN implementation regression |
 
@@ -193,7 +198,7 @@ These geometry-denominator differences are too small to explain the observed D8�
 
 ## Accurate SU2 backend status
 
-`aeroforge-accurate-backend` provides dimensional incompressible laminar/RANS-SST config generation, marker/filename validation, inlet-direction normalization, explicit SU2 8.5-compatible flow numerical-method settings, explicit positive finite SI coefficient-reference validation/rendering, fixed zero-angle/zero-sideslip world-axis and zero-origin moment semantics for the current generated +X-flow path, `SU2_RUN`/PATH discovery, banner probing, generated-case persistence, prepared-case process execution, structured final-history quality evaluation, exact aggregate six-axis extraction, and exact SU2 8.5.0 per-surface six-axis extraction for explicitly monitored marker tags.
+`aeroforge-accurate-backend` provides dimensional incompressible laminar/RANS-SST config generation, marker/filename validation, inlet-direction normalization, explicit SU2 8.5-compatible flow numerical-method settings, explicit positive finite SI coefficient-reference validation/rendering, fixed zero-angle/zero-sideslip world-axis and zero-origin moment semantics for the current generated +X-flow path, `SU2_RUN`/PATH discovery, banner probing, generated-case persistence, prepared-case process execution, structured final-history quality evaluation, exact aggregate six-axis extraction, exact SU2 8.5.0 per-surface six-axis extraction for explicitly monitored marker tags, bounded imported-surface repair/audit, imported-surface cell-center rasterization, and deterministic mixed primitive/imported SceneObject ownership.
 
 The pinned ignored upstream integration test mirrors the official SU2 8.5.0 incompressible laminar-cylinder regression contract: it runs through AeroForge's `discover_su2 → probe_su2_banner → run_su2_case` path, parses solver iteration 10, and compares the four upstream reference values with `1e-5` tolerance.
 
@@ -232,15 +237,43 @@ Run #489 produced:
 
 The temporary multi-body evidence job was removed immediately after capture. Post-cleanup run #491 completed `core-tests`, `app-check`, and `gpu-smoke` GREEN with no one-shot job remaining. Run #493 then completed the same routine jobs GREEN after app/result integration added authoritative SceneObject mapping, separate aggregate/per-body UI presentation, all-or-unavailable per-body promotion, and manifest-v5 persistence.
 
+### Imported-surface staircase evidence
+
+The imported geometry foundation deliberately separates **surface validity for the current raster path** from any future body-fitted meshing claim.
+
+The bounded accurate audit performs deterministic repair/topology checks and requires a single connected watertight two-manifold with consistent orientation and positive finite enclosed volume before imported geometry can be rasterized. It does not prove triangle self-intersection freedom or high-quality exterior-fluid meshability. Imported and primitive rasterizers feed one mixed owner contract; the lowest stable SceneObject ID owns overlaps across geometry kinds and duplicate cross-kind IDs fail closed.
+
+Routine evidence progressed in bounded stages:
+
+- run #503: imported-surface repair/audit contract passed core tests;
+- run #507: deterministic imported cell-center rasterization and stable ownership passed core tests;
+- run #509: in-memory `SurfaceMesh → audit → raster → generated staircase SU2 → body_42 → SceneObject 42` marker/provenance integration passed;
+- run #511: the ignored external imported-runtime target compiled in routine CI before any temporary one-shot was enabled.
+
+Run #513 then executed the imported `SurfaceMesh` staircase path with the pinned SU2 8.5.0 runtime. It produced:
+
+- aggregate `CF=(1.279538626, -0.1490820403, -0.1490820403)`;
+- aggregate `CM≈(0, 2.153866187, -2.153866187)`;
+- the single monitored surface matched aggregate with `max_surface_aggregate_error=0.000e0`;
+- external test result `1 passed; 0 failed`.
+
+The temporary imported-surface one-shot was removed immediately afterward. Run #517 subsequently completed routine core/app/GPU CI successfully with actual OBJ bytes composed through `import_obj → accurate audit → imported raster → generated staircase SU2 marker/provenance`.
+
+The desktop integration now stores imported surfaces in the same stable scene-ID namespace as primitives, transforms them from local to world coordinates for accurate preparation, audits them fail-closed, merges primitive/imported ownership deterministically, and feeds that owner field to the existing generated staircase SU2 builder. A dedicated desktop path-import window accepts OBJ/STL, exposes transform/delete controls, and renders a bounded sampled wireframe. Static glTF/GLB parsing remains a `geometry_core` capability rather than a wired desktop import feature.
+
+Run #537 covered the desktop mixed/import head: `core-tests` and all three GPU parity smokes completed successfully; Windows desktop compile/check and app unit tests also completed successfully. The app job's final conclusion was `cancelled` only because its `Post Cache Cargo` cleanup step was cancelled after those functional steps had already succeeded while a newer documentation head superseded it. This is not recorded as a functional app-test failure, and a newer documentation head is used for final routine closure.
+
+The #513 values are **smoke-fixture diagnostics**. #513 starts from an in-memory imported `SurfaceMesh`; it does not establish filesystem parser/UI E2E through the external solver, body-fitted mesh quality, coefficient accuracy, or engineering validation. The OBJ parser composition claim is separately routine evidence from #517.
+
 `aeroforge_run_manifest.tsv` format version 5 preserves the previous reference/frame/history/aggregate fields and adds per-body diagnostic count, indexed stable SceneObject ID + exact marker provenance, per-body `cfx/cfy/cfz/cmx/cmy/cmz`, and an explicit per-body diagnostic error when complete evidence cannot be promoted.
 
-These generated-case tests establish **mesh/config/marker/provenance persistence, body-vs-domain monitoring selection, explicit positive finite SI reference-denominator rendering/persistence, explicit world-axis/origin semantics, exact aggregate history-field ingestion, exact pinned-SU2 per-surface history ingestion, and SceneObject attribution/additive consistency for the evidenced two-body fixture**. They do **not** establish that a chosen `REF_AREA`/`REF_LENGTH` is physically appropriate for a scene, body-specific normalization, body-fitted meshing, aerodynamic coefficient accuracy, convergence, turbulence-model validity, or engineering validation. The current generated volume mesh is deliberately staircase/voxel-derived.
+These generated-case tests establish **mesh/config/marker/provenance persistence, body-vs-domain monitoring selection, explicit positive finite SI reference-denominator rendering/persistence, explicit world-axis/origin semantics, exact aggregate history-field ingestion, exact pinned-SU2 per-surface history ingestion, deterministic primitive/imported stable-ID ownership, and SceneObject attribution for the evidenced fixtures**. They do **not** establish that a chosen `REF_AREA`/`REF_LENGTH` is physically appropriate for a scene, body-specific normalization, body-fitted meshing, aerodynamic coefficient accuracy, convergence, turbulence-model validity, or engineering validation. The current generated volume mesh is deliberately staircase/voxel-derived.
 
 The desktop accurate-mode integration supports an explicit scene-and-settings-gated execution path. A user prepares the current scene and accurate solver settings, then explicitly chooses `Persist + run with SU2 8.5.0`. AeroForge refuses stale prepared bundles if either the scene revision or tracked solver settings—including coefficient reference area/length—changed, discovers and probes `SU2_CFD`, rejects non-8.5.0 banners, persists a new non-overwriting case directory, launches SU2 on a worker thread, and ingests process status plus history/stdout/stderr evidence after completion. There is still **no automatic solver launch**.
 
 Structured history parsing reads quoted SU2 CSV, recognizes standard iteration columns and RMS fields, and reports a conservative final quality state: residual target met, iteration budget reached without target, incomplete evidence, no usable history rows, or unavailable parse/read evidence. Non-finite or missing RMS evidence cannot pass merely because the iteration budget was exhausted. Process success, residual quality, aggregate diagnostics, and per-body diagnostics remain separate signals.
 
-Earlier run #393 remains GREEN evidence for solver-settings freshness, structured history parsing, conservative quality evaluation, UI integration, and manifest-v2 persistence. The current reference/frame/result implementation is superseded by the #449/#451, #465/#467, and #489/#491/#493 evidence chains above. The operational contract and non-claims are detailed in `docs/ACCURATE_EXECUTION.md`.
+Earlier run #393 remains GREEN evidence for solver-settings freshness, structured history parsing, conservative quality evaluation, UI integration, and manifest-v2 persistence. The current reference/frame/result implementation is superseded by the #449/#451, #465/#467, #489/#491/#493, and imported-surface #503→#513/#517 evidence chains above. The operational contract and non-claims are detailed in `docs/ACCURATE_EXECUTION.md`.
 
 ## Claims policy
 
@@ -259,6 +292,8 @@ Earlier run #393 remains GREEN evidence for solver-settings freshness, structure
 - The explicit `AOA=0`, sideslip `0`, origin `(0,0,0)` and world-axis mapping establish reproducible coordinate semantics for the current generated +X-flow path, not general aerodynamic validity for arbitrary frames.
 - GREEN aggregate `CFx/CFy/CFz/CMx/CMy/CMz` extraction establishes that AeroForge can request, parse, persist and display those exact finite SU2 fields under the evidenced runtime. It does not validate their physical accuracy.
 - GREEN per-body `AERO_COEFF_SURF` evidence establishes exact pinned-SU2 surface-field ingestion, authoritative SceneObject provenance mapping, and same-global-reference additive consistency for the tested two-body fixture. It does not establish body-specific normalization, engineering `Cd/Cl`, or physical accuracy.
+- Imported-surface external evidence establishes the audited `SurfaceMesh → cell-center occupancy → staircase SU2` runtime/provenance contract only. It does not establish parser/UI external E2E, self-intersection freedom, body-fitted meshing, or aerodynamic accuracy.
+- OBJ/STL desktop import and wireframe visualization are editor/input capabilities, not CFD validation. The native preview still ignores imported surfaces for solid physics.
 - The GREEN desktop execution/history-quality path establishes explicit launch/persistence/quality-reporting behavior only; neither a successful process exit nor `residual_target_met` is an aerodynamic accuracy claim.
 - Staircase voxel boundaries must not be described as body-fitted surfaces.
 - Accurate SU2 results must retain solver version, mesh/config provenance, convergence history, geometry revision, coefficient-reference values, coefficient-frame/origin provenance and source-translation decisions.
@@ -266,7 +301,8 @@ Earlier run #393 remains GREEN evidence for solver-settings freshness, structure
 ## Next validation milestones
 
 1. Add live iteration progress, cancellation and explicit external-process lifecycle/recovery handling while retaining immutable prepared-case provenance.
-2. Connect imported audited surfaces to a deterministic repair/body-fitted or otherwise declared higher-fidelity volume-meshing path; keep staircase voxel meshing explicitly labeled as such.
-3. Preserve deterministic marker/source provenance through that imported-surface volume-mesh path and exercise an AeroForge-generated imported-mesh SU2 E2E case.
-4. Validate a body-containing generated case against trusted dimensional reference data with grid/domain/model sensitivity before making engineering claims.
-5. Do not extend the native D8/D10/D12 cylinder ladder by brute force unless a later force/boundary change requires revalidation.
+2. Add a body-fitted or otherwise explicitly higher-fidelity **exterior-fluid** volume-meshing path that consumes audited imported surfaces directly; keep the current staircase path labeled as such.
+3. Preserve deterministic marker/source provenance through that higher-fidelity path and exercise that distinct imported-mesh path end to end with pinned SU2.
+4. Add imported-surface preview solid-mask/SDF integration only with explicit CPU/GPU parity and provenance tests; do not silently imply it from accurate-path support.
+5. Validate a body-containing generated case against trusted dimensional reference data with grid/domain/model sensitivity before making engineering claims.
+6. Do not extend the native D8/D10/D12 cylinder ladder by brute force unless a later force/boundary change requires revalidation.
