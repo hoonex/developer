@@ -83,8 +83,8 @@ jobs:
           echo "AEROFORGE_SU2_BANNER=$SU2_BANNER"
           echo "SU2_RUN=$(dirname "$SU2_CFD")" >> "$GITHUB_ENV"
           echo "OMP_NUM_THREADS=1" >> "$GITHUB_ENV"
-      - name: Run AeroForge-generated mesh through SU2
-        run: cargo test -p aeroforge-accurate-backend --test su2_generated generated_closed_tunnel_runs_through_su2_850 -- --ignored --nocapture
+      - name: Run AeroForge-generated meshes through SU2
+        run: cargo test -p aeroforge-accurate-backend --test su2_generated -- --ignored --nocapture
 
   app-check:
     runs-on: windows-latest
