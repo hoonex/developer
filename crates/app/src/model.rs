@@ -62,6 +62,7 @@ pub enum SolverMode {
 pub enum PreviewBoundaryPreset {
     Periodic,
     ChannelYNoSlip,
+    WindTunnelX,
 }
 
 #[derive(Clone, Debug)]
@@ -72,6 +73,8 @@ pub struct SimulationSettings {
     pub kinematic_viscosity: f32,
     pub mode: SolverMode,
     pub preview_boundary: PreviewBoundaryPreset,
+    /// Physical inlet speed used by the validated x-min velocity / x-max pressure preview preset.
+    pub preview_inlet_speed_mps: f32,
 }
 
 impl SimulationSettings {
@@ -132,6 +135,7 @@ impl Default for ProjectState {
                 kinematic_viscosity: 1.48e-5,
                 mode: SolverMode::InteractivePreview,
                 preview_boundary: PreviewBoundaryPreset::Periodic,
+                preview_inlet_speed_mps: 12.0,
             },
             selection: SelectedItem::Object(1),
             running: false,
