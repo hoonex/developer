@@ -462,7 +462,7 @@ mod tests {
 
         let text = fs::read_to_string(root.join(RUN_MANIFEST_FILENAME)).unwrap();
         assert!(text.contains("scene_revision\t81"));
-        assert!(text.contains("SU2 v8.5.0 \\"Harrier\\"\\tvalidated"));
+        assert!(text.contains(r#"SU2 v8.5.0 \"Harrier\"\tvalidated"#));
         assert!(text.contains("process_success\ttrue"));
         assert!(text.contains("exit_code\t0"));
 
