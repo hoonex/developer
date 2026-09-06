@@ -1,4 +1,5 @@
 mod generated_case;
+mod prepared_case;
 mod scene_provenance;
 mod su2;
 mod su2_mesh;
@@ -7,6 +8,10 @@ mod voxel_mesh;
 
 pub use generated_case::{
     build_generated_su2_case_bundle, GeneratedSu2CaseBundle, GeneratedSu2CaseError,
+};
+pub use prepared_case::{
+    prepare_generated_su2_case_directory, run_prepared_generated_su2_case,
+    PrepareGeneratedCaseError, PreparedGeneratedSu2Case,
 };
 pub use scene_provenance::{
     build_active_scene_owner_marker_provenance, build_scene_owner_marker_provenance,
