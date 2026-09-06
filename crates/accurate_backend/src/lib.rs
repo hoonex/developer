@@ -13,9 +13,10 @@ pub use generated_case::{
     GeneratedSu2CaseBundle, GeneratedSu2CaseError,
 };
 pub use history::{
-    evaluate_su2_history_quality, extract_su2_world_axis_diagnostics,
-    summarize_su2_history_csv, Su2DiagnosticError, Su2HistoryError, Su2HistoryGateStatus,
-    Su2HistoryQuality, Su2HistorySummary, Su2HistoryValue, Su2WorldAxisDiagnostics,
+    evaluate_su2_history_quality, extract_su2_surface_world_axis_diagnostics,
+    extract_su2_world_axis_diagnostics, summarize_su2_history_csv, Su2DiagnosticError,
+    Su2HistoryError, Su2HistoryGateStatus, Su2HistoryQuality, Su2HistorySummary,
+    Su2HistoryValue, Su2SurfaceWorldAxisDiagnostics, Su2WorldAxisDiagnostics,
 };
 pub use prepared_case::{
     prepare_generated_su2_case_directory, run_prepared_generated_su2_case,
