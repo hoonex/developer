@@ -81,19 +81,21 @@ The UI also retains the last 12 history lines and the last 12 stdout/stderr line
 
 ## 6. Current result-ingestion boundary
 
-Structured history parsing is now implemented, but aerodynamic post-processing remains intentionally limited. The parser retains final numeric history values internally, yet AeroForge does not currently promote `CD`, `CL`, or similar fields to validated body coefficients.
+Structured history parsing is implemented, and generated-case load monitoring is now separated from the physical tunnel-wall boundary set. `MARKER_HEATFLUX` and `MARKER_PLOTTING` still contain the configured tunnel/body walls, while `MARKER_MONITORING` is derived only from wall bindings whose provenance is `BoundarySource::SceneObject`. A generated tunnel with no scene body therefore emits no monitoring marker; a single `SceneObject.id=42` body emits exactly `MARKER_MONITORING= ( body_42 )`.
 
-The generated config currently monitors the declared wall-marker set, which can include tunnel walls and body markers. Until body-only monitoring/reference-area semantics are explicit, a raw SU2 coefficient must not be described as a per-body engineering coefficient.
+This makes body-vs-domain monitoring semantics explicit, but aerodynamic post-processing remains intentionally limited. The parser retains final numeric history values internally, yet AeroForge does not currently promote `CD`, `CL`, or similar fields to validated body coefficients. Explicit coefficient reference semantics such as reference area/length and force/moment axes still need a declared contract before raw history fields can be interpreted as structured body coefficients. Multi-body coefficient attribution also remains a separate problem.
 
 ## 7. External and routine evidence
 
-Three relevant checkpoints now exist:
+Four relevant checkpoints now exist:
 
 - **run #253**: official upstream incompressible laminar-cylinder regression reproduced through AeroForge's SU2 adapter/process path, including exact iteration-10 reference values;
-- **run #365**: AeroForge-generated cases executed with real SU2 8.5.0, including an empty tunnel and a primitive-body case preserving `SceneObject.id=42 → body_42 → scene_object:42` provenance;
-- **run #393**: routine core tests, Windows app compile/unit tests, and GPU smoke all GREEN after adding solver-settings freshness, structured history parsing, conservative convergence-quality evaluation, UI integration and manifest-v2 persistence.
+- **run #365**: initial AeroForge-generated cases executed with real SU2 8.5.0, including an empty tunnel and a primitive-body case preserving `SceneObject.id=42 → body_42 → scene_object:42` provenance;
+- **run #393**: routine core tests, Windows app compile/unit tests, and GPU smoke all GREEN after adding solver-settings freshness, structured history parsing, conservative convergence-quality evaluation, UI integration and manifest-v2 persistence;
+- **run #409**: the pinned SU2 8.5.0 archive passed its SHA256 check, reported `SU2 v8.5.0 "Harrier", The Open-Source CFD Code`, and both generated external tests passed after body-only monitoring was introduced. The no-body case asserted that no `MARKER_MONITORING` line was emitted; the primitive-body case asserted exactly `MARKER_MONITORING= ( body_42 )`. Both cases were then accepted and advanced by the real solver. The temporary evidence job was removed afterward;
+- **run #411**: routine CI on the post-cleanup head completed GREEN across core tests, Windows app compile/unit tests, and all three GPU parity smokes with the one-shot job absent.
 
-These checkpoints establish adapter/process/generated-case execution and quality-reporting compatibility. They do not establish engineering validation.
+These checkpoints establish adapter/process/generated-case execution, body-vs-domain monitoring configuration, and quality-reporting compatibility. They do not establish engineering validation or coefficient normalization accuracy.
 
 ## 8. Current non-claims
 
@@ -102,7 +104,7 @@ AeroForge does not currently claim that accurate-mode output is engineering-vali
 - the generated geometry is staircase/voxel-derived, not body-fitted;
 - imported audited surfaces are not yet connected to a higher-fidelity volume-meshing path;
 - live progress/cancellation/process recovery are not implemented yet;
-- body-only monitoring/reference-area semantics and validated aerodynamic coefficient extraction are not complete;
+- body-only monitoring is implemented and externally smoke-proven, but reference-area/reference-length, force/moment-axis semantics, multi-body coefficient attribution, and validated aerodynamic coefficient extraction are not complete;
 - no grid/domain/model-sensitivity campaign has validated a generated body case against trusted dimensional reference data.
 
-The next execution milestone is process lifecycle control (live progress/cancellation/recovery). The next aerodynamic-result milestone is explicit body-only monitoring plus reference-area/axis semantics before exposing coefficients as structured outputs.
+The next execution milestone is process lifecycle control (live progress/cancellation/recovery). The next aerodynamic-result milestone is an explicit coefficient-reference contract followed by structured **diagnostic** coefficient extraction; promotion to engineering-valid coefficients requires independent mesh/domain/model/reference validation.
