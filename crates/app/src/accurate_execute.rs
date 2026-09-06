@@ -31,6 +31,8 @@ pub enum AccurateExecutionStatus {
 struct AccurateRunContract {
     requested_iterations: u32,
     residual_target_log10: f64,
+    reference_area_m2: f64,
+    reference_length_m: f64,
 }
 
 impl From<&AccurateSettings> for AccurateRunContract {
@@ -38,6 +40,8 @@ impl From<&AccurateSettings> for AccurateRunContract {
         Self {
             requested_iterations: settings.max_iterations,
             residual_target_log10: settings.convergence_log10,
+            reference_area_m2: settings.reference_area_m2,
+            reference_length_m: settings.reference_length_m,
         }
     }
 }
@@ -444,8 +448,10 @@ fn write_run_manifest(
         .map(|value| value.to_string())
         .unwrap_or_else(|| "none".into());
     let mut text = format!(
-        "key\tvalue\nformat_version\t2\nscene_revision\t{revision}\nsu2_banner\t{}\nprocess_success\t{success}\nexit_code\t{exit_code}\nhistory_requested_iterations\t{}\nhistory_residual_target_log10\t{}\n",
+        "key\tvalue\nformat_version\t3\nscene_revision\t{revision}\nsu2_banner\t{}\nprocess_success\t{success}\nexit_code\t{exit_code}\ncoefficient_reference_area_m2\t{}\ncoefficient_reference_length_m\t{}\nhistory_requested_iterations\t{}\nhistory_residual_target_log10\t{}\n",
         escape_manifest_value(banner),
+        contract.reference_area_m2,
+        contract.reference_length_m,
         contract.requested_iterations,
         contract.residual_target_log10
     );
@@ -572,6 +578,8 @@ mod tests {
         AccurateRunContract {
             requested_iterations: 100,
             residual_target_log10: -6.0,
+            reference_area_m2: 2.5,
+            reference_length_m: 1.25,
         }
     }
 
@@ -628,7 +636,7 @@ mod tests {
     }
 
     #[test]
-    fn run_manifest_persists_runtime_and_history_quality() {
+    fn run_manifest_persists_runtime_history_and_coefficient_reference() {
         let root = temp_root("run-manifest");
         fs::create_dir_all(&root).unwrap();
         let history = summarize_su2_history_csv(
@@ -649,11 +657,13 @@ mod tests {
         .unwrap();
 
         let text = fs::read_to_string(root.join(RUN_MANIFEST_FILENAME)).unwrap();
-        assert!(text.contains("format_version\t2"));
+        assert!(text.contains("format_version\t3"));
         assert!(text.contains("scene_revision\t81"));
         assert!(text.contains(r#"SU2 v8.5.0 \"Harrier\"\tvalidated"#));
         assert!(text.contains("process_success\ttrue"));
         assert!(text.contains("exit_code\t0"));
+        assert!(text.contains("coefficient_reference_area_m2\t2.5"));
+        assert!(text.contains("coefficient_reference_length_m\t1.25"));
         assert!(text.contains("history_requested_iterations\t100"));
         assert!(text.contains("history_residual_target_log10\t-6"));
         assert!(text.contains("history_gate\tresidual_target_met"));
