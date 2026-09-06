@@ -84,7 +84,7 @@ pub fn build_generated_su2_case_bundle(
         .iter()
         .filter(|binding| {
             binding.role == BoundaryRole::Wall
-                && matches!(binding.source, BoundarySource::SceneObject { .. })
+                && matches!(&binding.source, BoundarySource::SceneObject { .. })
         })
         .map(|binding| binding.tag.clone())
         .collect::<Vec<_>>();
@@ -184,48 +184,12 @@ mod tests {
         };
         let marker_map = Su2MarkerMap {
             bindings: vec![
-                binding(
-                    1,
-                    "inlet",
-                    BoundaryRole::Inlet,
-                    DomainAxis::X,
-                    DomainSide::Min,
-                ),
-                binding(
-                    2,
-                    "outlet",
-                    BoundaryRole::Outlet,
-                    DomainAxis::X,
-                    DomainSide::Max,
-                ),
-                binding(
-                    3,
-                    "y_min",
-                    BoundaryRole::Wall,
-                    DomainAxis::Y,
-                    DomainSide::Min,
-                ),
-                binding(
-                    4,
-                    "y_max",
-                    BoundaryRole::Wall,
-                    DomainAxis::Y,
-                    DomainSide::Max,
-                ),
-                binding(
-                    5,
-                    "z_min",
-                    BoundaryRole::Wall,
-                    DomainAxis::Z,
-                    DomainSide::Min,
-                ),
-                binding(
-                    6,
-                    "z_max",
-                    BoundaryRole::Wall,
-                    DomainAxis::Z,
-                    DomainSide::Max,
-                ),
+                binding(1, "inlet", BoundaryRole::Inlet, DomainAxis::X, DomainSide::Min),
+                binding(2, "outlet", BoundaryRole::Outlet, DomainAxis::X, DomainSide::Max),
+                binding(3, "y_min", BoundaryRole::Wall, DomainAxis::Y, DomainSide::Min),
+                binding(4, "y_max", BoundaryRole::Wall, DomainAxis::Y, DomainSide::Max),
+                binding(5, "z_min", BoundaryRole::Wall, DomainAxis::Z, DomainSide::Min),
+                binding(6, "z_max", BoundaryRole::Wall, DomainAxis::Z, DomainSide::Max),
             ],
         };
         let case = Su2Case {
