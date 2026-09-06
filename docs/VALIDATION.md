@@ -25,6 +25,8 @@ The native LBM backend remains an interactive preview solver. GREEN numerical re
 | Per-object momentum-exchange provenance | CPU | GREEN implementation regression |
 | Periodic/no-slip/moving/open/far-field parity | CPU + exact app WGSL | GREEN |
 | WindTunnelX / ExternalFlowX runtime mapping | CPU + GPU + UI | GREEN |
+| Imported/primitive shared preview solid ownership | CPU + GPU preparation | GREEN implementation regression |
+| Imported preview explicit geometry budget / fail-closed audit | App | GREEN implementation regression |
 | Re=60 cylinder shedding | Native preview | GREEN |
 | Periodic-y D8/D10/D12 sensitivity | Native preview | GREEN evidence |
 | Free-stream-y D8/D10/D12 sensitivity | Native preview | GREEN evidence |
@@ -46,7 +48,9 @@ The native LBM backend remains an interactive preview solver. GREEN numerical re
 | Imported/primitive mixed stable-ID voxel ownership | App + SU2 adapter | GREEN implementation regression |
 | Audited imported `SurfaceMesh` → staircase SU2 execution | SU2 adapter | GREEN external execution smoke |
 | OBJ parser → audit → staircase marker/provenance composition | Geometry + SU2 adapter | GREEN routine integration |
-| Desktop OBJ/STL storage + mixed accurate preparation | App + SU2 adapter | GREEN functional compile/unit evidence |
+| Desktop OBJ/STL/static-glTF/GLB import + local buffer resolution | App + Geometry | GREEN functional compile/unit evidence |
+| Imported viewport indexed mesh / picking / transform gizmo integration | App | GREEN functional compile/unit evidence |
+| Desktop mixed imported preparation into preview + accurate path | App + SU2 adapter | GREEN functional compile/unit evidence |
 | Explicit desktop SU2 execution orchestration | App + SU2 adapter | GREEN implementation regression |
 | Structured SU2 history quality gate + manifest v5 diagnostic provenance | App + SU2 adapter | GREEN implementation regression |
 
@@ -184,7 +188,7 @@ Detailed reference provenance is in `docs/CYLINDER_REFERENCE_COMPARISON.md` and 
 
 ## Momentum-exchange force status
 
-`solid_force_lattice()` sums the fluid-on-solid bounce-back link reaction `Σ 2 f_i* c_i`; outer-domain wall reactions are excluded. The CPU reference path also carries compact per-cell owner labels, maps them back to stable `u64 SceneObject.id` values, and accumulates per-object momentum exchange at the same bounce-back links as the aggregate force. Regression coverage includes aggregate=sum(per-object), separated solids, rest-zero force, deterministic overlap ownership, and provenance invalidation after geometry edits/deletion/rebuild.
+`solid_force_lattice()` sums the fluid-on-solid bounce-back link reaction `Σ 2 f_i* c_i`; outer-domain wall reactions are excluded. The CPU reference path also carries compact per-cell owner labels, maps them back to stable `u64 SceneObject.id` values, and accumulates per-object momentum exchange at the same bounce-back links as the aggregate force. Regression coverage includes aggregate=sum(per-object), separated solids, rest-zero force, deterministic overlap ownership, and provenance invalidation after geometry edits/deletion/rebuild. Imported surfaces now enter this same CPU ownership table after passing the shared closed-surface audit/raster path. The GPU preview still uploads only a binary solid mask and therefore does not yet expose per-object GPU momentum exchange.
 
 For the exact binary cell-center masks:
 
@@ -259,11 +263,15 @@ Run #513 then executed the imported `SurfaceMesh` staircase path with the pinned
 
 The temporary imported-surface one-shot was removed immediately afterward. Run #517 subsequently completed routine core/app/GPU CI successfully with actual OBJ bytes composed through `import_obj → accurate audit → imported raster → generated staircase SU2 marker/provenance`.
 
-The desktop integration now stores imported surfaces in the same stable scene-ID namespace as primitives, transforms them from local to world coordinates for accurate preparation, audits them fail-closed, merges primitive/imported ownership deterministically, and feeds that owner field to the existing generated staircase SU2 builder. A dedicated desktop path-import window accepts OBJ/STL, exposes transform/delete controls, and renders a bounded sampled wireframe. Static glTF/GLB parsing remains a `geometry_core` capability rather than a wired desktop import feature.
+The desktop integration now stores imported surfaces in the same stable scene-ID namespace as primitives. The path-import window accepts OBJ/STL/static glTF/GLB. GLB BIN chunks and base64 buffers are resolved by the core parser; external glTF `.bin` references are loaded only through validated local-relative paths inside the document directory. URI schemes, absolute paths, query/fragment references and parent traversal fail closed. Skins and morph targets are rejected as non-static CFD geometry.
 
-Run #537 covered the desktop mixed/import head: `core-tests` and all three GPU parity smokes completed successfully; Windows desktop compile/check and app unit tests also completed successfully. The app job's final conclusion was `cancelled` only because its `Post Cache Cargo` cleanup step was cancelled after those functional steps had already succeeded while a newer documentation head superseded it. This is not recorded as a functional app-test failure, and a newer documentation head is used for final routine closure.
+Imported surfaces are converted to finite indexed Bevy editor meshes for viewport picking and the same W/E/R transform-gizmo target used by primitives. A selected imported-surface inspector exposes name, position, rotation, signed scale and deletion. The same object transform is consumed by the shared solver-raster adapter, so gizmo/inspector edits touch project revision and invalidate stale prepared accurate bundles.
 
-The #513 values are **smoke-fixture diagnostics**. #513 starts from an in-memory imported `SurfaceMesh`; it does not establish filesystem parser/UI E2E through the external solver, body-fitted mesh quality, coefficient accuracy, or engineering validation. The OBJ parser composition claim is separately routine evidence from #517.
+The native preview and generated accurate path now use the same deterministic primitive/imported cell-center ownership field. CPU preview keeps the compact owner labels, so imported stable IDs participate in the existing CPU per-object momentum-exchange provenance contract. GPU preview derives a binary solid mask from the same field but does not yet retain per-object force attribution. Imported-surface preview uses an explicit 200,000-cell preparation limit because the winding-based occupancy path is not yet accelerated/cached for large grids; the grid is never silently reduced.
+
+Routine run #555 completed core/app/GPU GREEN after glTF/GLB desktop import, external-buffer policy, shared imported preview ownership, budget/error UI, and mixed CPU/GPU solid preparation were integrated. Run #557 compiled and unit-tested the imported indexed editor-mesh/picking/gizmo foundation while routine core/GPU remained GREEN through the functional steps. Run #561 then completed all three routine jobs GREEN after viewport gizmo integration and the imported selection inspector were wired together.
+
+The #513 values are **smoke-fixture diagnostics**. #513 starts from an in-memory imported `SurfaceMesh`; it does not establish filesystem parser/UI E2E through the external solver, body-fitted mesh quality, coefficient accuracy, or engineering validation. File-parser/editor/preview composition claims above are routine implementation evidence, not external aerodynamic validation.
 
 `aeroforge_run_manifest.tsv` format version 5 preserves the previous reference/frame/history/aggregate fields and adds per-body diagnostic count, indexed stable SceneObject ID + exact marker provenance, per-body `cfx/cfy/cfz/cmx/cmy/cmz`, and an explicit per-body diagnostic error when complete evidence cannot be promoted.
 
@@ -273,7 +281,7 @@ The desktop accurate-mode integration supports an explicit scene-and-settings-ga
 
 Structured history parsing reads quoted SU2 CSV, recognizes standard iteration columns and RMS fields, and reports a conservative final quality state: residual target met, iteration budget reached without target, incomplete evidence, no usable history rows, or unavailable parse/read evidence. Non-finite or missing RMS evidence cannot pass merely because the iteration budget was exhausted. Process success, residual quality, aggregate diagnostics, and per-body diagnostics remain separate signals.
 
-Earlier run #393 remains GREEN evidence for solver-settings freshness, structured history parsing, conservative quality evaluation, UI integration, and manifest-v2 persistence. The current reference/frame/result implementation is superseded by the #449/#451, #465/#467, #489/#491/#493, and imported-surface #503→#513/#517 evidence chains above. The operational contract and non-claims are detailed in `docs/ACCURATE_EXECUTION.md`.
+Earlier run #393 remains GREEN evidence for solver-settings freshness, structured history parsing, conservative quality evaluation, UI integration, and manifest-v2 persistence. The current reference/frame/result implementation is superseded by the #449/#451, #465/#467, #489/#491/#493, and imported-surface #503→#513/#517/#555/#557/#561 evidence chains above. The operational contract and non-claims are detailed in `docs/ACCURATE_EXECUTION.md`.
 
 ## Claims policy
 
@@ -292,8 +300,9 @@ Earlier run #393 remains GREEN evidence for solver-settings freshness, structure
 - The explicit `AOA=0`, sideslip `0`, origin `(0,0,0)` and world-axis mapping establish reproducible coordinate semantics for the current generated +X-flow path, not general aerodynamic validity for arbitrary frames.
 - GREEN aggregate `CFx/CFy/CFz/CMx/CMy/CMz` extraction establishes that AeroForge can request, parse, persist and display those exact finite SU2 fields under the evidenced runtime. It does not validate their physical accuracy.
 - GREEN per-body `AERO_COEFF_SURF` evidence establishes exact pinned-SU2 surface-field ingestion, authoritative SceneObject provenance mapping, and same-global-reference additive consistency for the tested two-body fixture. It does not establish body-specific normalization, engineering `Cd/Cl`, or physical accuracy.
-- Imported-surface external evidence establishes the audited `SurfaceMesh → cell-center occupancy → staircase SU2` runtime/provenance contract only. It does not establish parser/UI external E2E, self-intersection freedom, body-fitted meshing, or aerodynamic accuracy.
-- OBJ/STL desktop import and wireframe visualization are editor/input capabilities, not CFD validation. The native preview still ignores imported surfaces for solid physics.
+- Imported-surface external evidence establishes the audited `SurfaceMesh → cell-center occupancy → staircase SU2` runtime/provenance contract only. It does not establish filesystem parser/UI external E2E, self-intersection freedom, body-fitted meshing, or aerodynamic accuracy.
+- Desktop OBJ/STL/static-glTF/GLB import, viewport picking/gizmos, and imported preview solid consumption are editor/implementation capabilities, not CFD validation.
+- Imported preview support uses the same staircase ownership semantics and an explicit current 200,000-cell preparation limit; this is not an SDF/body-fitted geometry claim and the GPU path still lacks per-object force attribution.
 - The GREEN desktop execution/history-quality path establishes explicit launch/persistence/quality-reporting behavior only; neither a successful process exit nor `residual_target_met` is an aerodynamic accuracy claim.
 - Staircase voxel boundaries must not be described as body-fitted surfaces.
 - Accurate SU2 results must retain solver version, mesh/config provenance, convergence history, geometry revision, coefficient-reference values, coefficient-frame/origin provenance and source-translation decisions.
@@ -303,6 +312,6 @@ Earlier run #393 remains GREEN evidence for solver-settings freshness, structure
 1. Add live iteration progress, cancellation and explicit external-process lifecycle/recovery handling while retaining immutable prepared-case provenance.
 2. Add a body-fitted or otherwise explicitly higher-fidelity **exterior-fluid** volume-meshing path that consumes audited imported surfaces directly; keep the current staircase path labeled as such.
 3. Preserve deterministic marker/source provenance through that higher-fidelity path and exercise that distinct imported-mesh path end to end with pinned SU2.
-4. Add imported-surface preview solid-mask/SDF integration only with explicit CPU/GPU parity and provenance tests; do not silently imply it from accurate-path support.
+4. Accelerate/cache imported-surface preview occupancy before raising its explicit cell budget, and add GPU per-object ownership/force attribution only with CPU/GPU provenance regressions.
 5. Validate a body-containing generated case against trusted dimensional reference data with grid/domain/model sensitivity before making engineering claims.
 6. Do not extend the native D8/D10/D12 cylinder ladder by brute force unless a later force/boundary change requires revalidation.
