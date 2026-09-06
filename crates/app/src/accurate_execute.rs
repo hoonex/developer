@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use aeroforge_accurate_backend::{
     discover_su2, prepare_generated_su2_case_directory, probe_su2_banner,
@@ -15,6 +16,7 @@ use crate::model::{ProjectState, SolverMode};
 
 const SUPPORTED_SU2_BANNER_FRAGMENT: &str = "SU2 v8.5.0";
 const OUTPUT_TAIL_LINES: usize = 12;
+const RUN_MANIFEST_FILENAME: &str = "aeroforge_run_manifest.tsv";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AccurateExecutionStatus {
@@ -149,6 +151,7 @@ pub fn draw_accurate_execute_ui(
                 ui.monospace(format!("SU2: {}", run.su2_banner));
                 ui.monospace(format!("Exit code: {:?}", run.exit_code));
                 ui.monospace(format!("Case: {}", run.case_directory.display()));
+                ui.monospace(format!("Run manifest: {RUN_MANIFEST_FILENAME}"));
                 if let Some(history) = &run.history_tail {
                     ui.collapsing("history.csv tail", |ui| {
                         ui.monospace(history);
@@ -211,7 +214,8 @@ fn launch_run(
 ) {
     let sequence = execution.next_sequence;
     execution.next_sequence = execution.next_sequence.saturating_add(1);
-    let case_name = case_directory_name(revision, sequence);
+    let nonce = run_nonce_millis();
+    let case_name = case_directory_name(revision, sequence, nonce);
     let completion = Arc::clone(&execution.completion);
 
     execution.status = AccurateExecutionStatus::Running;
@@ -301,12 +305,27 @@ fn execute_case(
     let summary = AccurateRunSummary {
         revision,
         case_directory: prepared.working_directory.clone(),
-        su2_banner: banner,
+        su2_banner: banner.clone(),
         exit_code: run.exit_code,
         history_tail: read_history_tail(&prepared.working_directory),
         stdout_tail: tail_lines(&run.stdout, OUTPUT_TAIL_LINES),
         stderr_tail: tail_lines(&run.stderr, OUTPUT_TAIL_LINES),
     };
+
+    if let Err(error) = write_run_manifest(
+        &prepared.working_directory,
+        revision,
+        &banner,
+        run.success,
+        run.exit_code,
+    ) {
+        return AccurateRunCompletion::Failed {
+            message: format!(
+                "SU2 process finished, but AeroForge could not persist {RUN_MANIFEST_FILENAME}: {error}"
+            ),
+            summary: Some(summary),
+        };
+    }
 
     if run.success {
         AccurateRunCompletion::Succeeded(summary)
@@ -318,8 +337,36 @@ fn execute_case(
     }
 }
 
-fn case_directory_name(revision: u64, sequence: u64) -> String {
-    format!("case_r{revision}_{sequence:04}")
+fn run_nonce_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+
+fn case_directory_name(revision: u64, sequence: u64, nonce: u128) -> String {
+    format!("case_r{revision}_{sequence:04}_{nonce}")
+}
+
+fn write_run_manifest(
+    case_directory: &Path,
+    revision: u64,
+    banner: &str,
+    success: bool,
+    exit_code: Option<i32>,
+) -> std::io::Result<()> {
+    let exit_code = exit_code
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "none".into());
+    let text = format!(
+        "key\tvalue\nformat_version\t1\nscene_revision\t{revision}\nsu2_banner\t{}\nprocess_success\t{success}\nexit_code\t{exit_code}\n",
+        escape_manifest_value(banner)
+    );
+    fs::write(case_directory.join(RUN_MANIFEST_FILENAME), text)
+}
+
+fn escape_manifest_value(value: &str) -> String {
+    value.chars().flat_map(char::escape_default).collect()
 }
 
 fn read_history_tail(case_directory: &Path) -> Option<String> {
@@ -355,12 +402,25 @@ fn tail_lines(text: &str, max_lines: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_root(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "aeroforge-{label}-{}-{nonce}",
+            std::process::id()
+        ))
+    }
 
     #[test]
-    fn case_directory_name_preserves_revision_and_sequence() {
-        assert_eq!(case_directory_name(42, 7), "case_r42_0007");
-        assert_eq!(case_directory_name(0, 12_345), "case_r0_12345");
+    fn case_directory_name_preserves_revision_sequence_and_nonce() {
+        assert_eq!(
+            case_directory_name(42, 7, 123_456),
+            "case_r42_0007_123456"
+        );
+        assert_eq!(case_directory_name(0, 12_345, 9), "case_r0_12345_9");
     }
 
     #[test]
@@ -371,14 +431,7 @@ mod tests {
 
     #[test]
     fn history_tail_prefers_standard_history_csv() {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "aeroforge-history-tail-{}-{nonce}",
-            std::process::id()
-        ));
+        let root = temp_root("history-tail");
         fs::create_dir_all(&root).unwrap();
         let rows = (0..20)
             .map(|index| format!("row-{index}"))
@@ -390,6 +443,28 @@ mod tests {
         assert!(tail.starts_with("row-8"));
         assert!(tail.ends_with("row-19"));
         assert_eq!(tail.lines().count(), OUTPUT_TAIL_LINES);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn run_manifest_persists_revision_runtime_and_exit_status() {
+        let root = temp_root("run-manifest");
+        fs::create_dir_all(&root).unwrap();
+        write_run_manifest(
+            &root,
+            81,
+            "SU2 v8.5.0 \"Harrier\"\tvalidated",
+            true,
+            Some(0),
+        )
+        .unwrap();
+
+        let text = fs::read_to_string(root.join(RUN_MANIFEST_FILENAME)).unwrap();
+        assert!(text.contains("scene_revision\t81"));
+        assert!(text.contains("SU2 v8.5.0 \\"Harrier\\"\\tvalidated"));
+        assert!(text.contains("process_success\ttrue"));
+        assert!(text.contains("exit_code\t0"));
 
         fs::remove_dir_all(root).unwrap();
     }
