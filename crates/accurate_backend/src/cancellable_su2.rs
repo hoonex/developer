@@ -193,6 +193,19 @@ pub fn request_su2_case_cancellation(working_directory: &Path) -> bool {
     true
 }
 
+/// Reads the recorded termination for one completed registered case without consuming it.
+///
+/// Higher layers use this to classify a completed direct child while leaving the record available
+/// for the lifecycle owner that persists cancellation provenance.
+pub fn peek_su2_case_termination(working_directory: &Path) -> Option<Su2RunTermination> {
+    registered_runs()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .finished
+        .get(working_directory)
+        .copied()
+}
+
 /// Consumes the recorded direct-child termination for one completed registered case.
 pub fn take_su2_case_termination(working_directory: &Path) -> Option<Su2RunTermination> {
     registered_runs()
@@ -337,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn registered_case_can_be_cancelled_without_touching_other_paths() {
+    fn registered_case_can_be_peeked_then_consumed_after_cancellation() {
         let root = temp_root("registered-cancel");
         std::fs::create_dir_all(&root).unwrap();
         let executable = std::env::current_exe().unwrap();
@@ -363,9 +376,18 @@ mod tests {
         let result = worker.join().unwrap().unwrap();
         assert_eq!(result.termination, Su2RunTermination::Cancelled);
         assert_eq!(
+            peek_su2_case_termination(&root),
+            Some(Su2RunTermination::Cancelled)
+        );
+        assert_eq!(
+            peek_su2_case_termination(&root),
+            Some(Su2RunTermination::Cancelled)
+        );
+        assert_eq!(
             take_su2_case_termination(&root),
             Some(Su2RunTermination::Cancelled)
         );
+        assert_eq!(peek_su2_case_termination(&root), None);
         assert_eq!(take_su2_case_termination(&root), None);
         std::fs::remove_dir_all(root).unwrap();
     }
