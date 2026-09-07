@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -14,10 +14,23 @@ const RUN_MANIFEST_FILENAME: &str = "aeroforge_run_manifest.tsv";
 const LIFECYCLE_PROVENANCE_FILENAME: &str = "aeroforge_lifecycle.tsv";
 const EXECUTION_ATTEMPT_FILENAME: &str = "aeroforge_execution_attempt.tsv";
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ExecutionAttemptEvidence {
+    Missing,
+    Valid { requested_epoch_ms: u128 },
+    Invalid(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct UnclassifiedPersistedCase {
+    path: PathBuf,
+    execution_attempt: ExecutionAttemptEvidence,
+}
+
 #[derive(Resource)]
 pub struct AccurateRecoveryUi {
     scanned_root: Option<PathBuf>,
-    incomplete_cases: Vec<PathBuf>,
+    incomplete_cases: Vec<UnclassifiedPersistedCase>,
     scan_error: Option<String>,
     previous_status: AccurateExecutionStatus,
 }
@@ -104,24 +117,30 @@ pub fn draw_accurate_recovery_notice(
         ui.horizontal_wrapped(|ui| {
             for case in recovery.incomplete_cases.iter().rev().take(3) {
                 let name = case
+                    .path
                     .file_name()
                     .and_then(|value| value.to_str())
                     .unwrap_or("unclassified case");
-                let attempt = case.join(EXECUTION_ATTEMPT_FILENAME).is_file();
-                let attempt_text = if attempt {
-                    "immutable launch_requested marker present"
-                } else {
-                    "no execution-attempt marker (legacy or pre-marker case)"
+                let attempt_text = match &case.execution_attempt {
+                    ExecutionAttemptEvidence::Missing => {
+                        "no execution-attempt marker (legacy or pre-marker case)".to_owned()
+                    }
+                    ExecutionAttemptEvidence::Valid { requested_epoch_ms } => format!(
+                        "validated launch_requested marker · requested_epoch_ms={requested_epoch_ms}"
+                    ),
+                    ExecutionAttemptEvidence::Invalid(error) => {
+                        format!("execution-attempt marker is present but untrusted: {error}")
+                    }
                 };
                 ui.monospace(name)
-                    .on_hover_text(format!("{}\n{attempt_text}", case.display()));
+                    .on_hover_text(format!("{}\n{attempt_text}", case.path.display()));
             }
             if recovery.incomplete_cases.len() > 3 {
                 ui.weak(format!("+{} more", recovery.incomplete_cases.len() - 3));
             }
         });
         ui.small(
-            "An execution-attempt marker proves only that launch was requested for that persisted case; it does not prove child creation, continued process liveness, or resumability.",
+            "Only a strictly validated execution-attempt marker is treated as launch-request evidence. Even a valid marker does not prove child creation, continued process liveness, or resumability.",
         );
     });
 
@@ -148,7 +167,7 @@ fn refresh_scan(root: &Path, recovery: &mut AccurateRecoveryUi) {
 fn scan_unclassified_persisted_cases(
     root: &Path,
     active_cases: impl IntoIterator<Item = PathBuf>,
-) -> Result<Vec<PathBuf>, String> {
+) -> Result<Vec<UnclassifiedPersistedCase>, String> {
     if root.as_os_str().is_empty() {
         return Ok(Vec::new());
     }
@@ -184,11 +203,77 @@ fn scan_unclassified_persisted_cases(
         let has_terminal_evidence = path.join(RUN_MANIFEST_FILENAME).is_file()
             || path.join(LIFECYCLE_PROVENANCE_FILENAME).is_file();
         if !has_terminal_evidence {
-            cases.push(path);
+            cases.push(UnclassifiedPersistedCase {
+                execution_attempt: read_execution_attempt_evidence(&path),
+                path,
+            });
         }
     }
-    cases.sort();
+    cases.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(cases)
+}
+
+fn read_execution_attempt_evidence(case_directory: &Path) -> ExecutionAttemptEvidence {
+    let path = case_directory.join(EXECUTION_ATTEMPT_FILENAME);
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return ExecutionAttemptEvidence::Missing;
+        }
+        Err(error) => {
+            return ExecutionAttemptEvidence::Invalid(format!(
+                "failed to read {}: {error}",
+                path.display()
+            ));
+        }
+    };
+
+    match parse_execution_attempt_marker(&text) {
+        Ok(requested_epoch_ms) => ExecutionAttemptEvidence::Valid { requested_epoch_ms },
+        Err(error) => ExecutionAttemptEvidence::Invalid(error),
+    }
+}
+
+fn parse_execution_attempt_marker(text: &str) -> Result<u128, String> {
+    let mut lines = text.lines();
+    if lines.next() != Some("key\tvalue") {
+        return Err("missing exact key/value header".into());
+    }
+
+    let mut fields = BTreeMap::<&str, &str>::new();
+    for line in lines {
+        let Some((key, value)) = line.split_once('\t') else {
+            return Err(format!("malformed marker row `{line}`"));
+        };
+        if key.is_empty() || value.is_empty() || value.contains('\t') {
+            return Err(format!("invalid marker row `{line}`"));
+        }
+        if fields.insert(key, value).is_some() {
+            return Err(format!("duplicate marker key `{key}`"));
+        }
+    }
+
+    if fields.len() != 4 {
+        return Err(format!(
+            "expected exactly 4 marker fields after header, found {}",
+            fields.len()
+        ));
+    }
+    if fields.get("format_version") != Some(&"1") {
+        return Err("unsupported or missing format_version".into());
+    }
+    if fields.get("event") != Some(&"launch_requested") {
+        return Err("unsupported or missing event".into());
+    }
+    if fields.get("scope") != Some(&"direct_su2_child") {
+        return Err("unsupported or missing scope".into());
+    }
+    let requested_epoch_ms = fields
+        .get("requested_epoch_ms")
+        .ok_or_else(|| "missing requested_epoch_ms".to_owned())?
+        .parse::<u128>()
+        .map_err(|_| "requested_epoch_ms is not an unsigned integer".to_owned())?;
+    Ok(requested_epoch_ms)
 }
 
 fn looks_like_generated_case_name(name: &str) -> bool {
@@ -227,6 +312,12 @@ mod tests {
         ))
     }
 
+    fn valid_attempt_text(epoch: u128) -> String {
+        format!(
+            "key\tvalue\nformat_version\t1\nevent\tlaunch_requested\nscope\tdirect_su2_child\nrequested_epoch_ms\t{epoch}\n"
+        )
+    }
+
     #[test]
     fn generated_case_name_filter_is_strict() {
         assert!(looks_like_generated_case_name("case_r42_0007_123456"));
@@ -238,6 +329,26 @@ mod tests {
     }
 
     #[test]
+    fn execution_attempt_parser_accepts_only_exact_v1_contract() {
+        assert_eq!(parse_execution_attempt_marker(&valid_attempt_text(123)), Ok(123));
+        assert!(parse_execution_attempt_marker(
+            "key\tvalue\nformat_version\t2\nevent\tlaunch_requested\nscope\tdirect_su2_child\nrequested_epoch_ms\t123\n"
+        )
+        .unwrap_err()
+        .contains("format_version"));
+        assert!(parse_execution_attempt_marker(
+            "key\tvalue\nformat_version\t1\nevent\tlaunch_requested\nscope\tdirect_su2_child\nrequested_epoch_ms\t123\nextra\tvalue\n"
+        )
+        .unwrap_err()
+        .contains("exactly 4"));
+        assert!(parse_execution_attempt_marker(
+            "key\tvalue\nformat_version\t1\nevent\tlaunch_requested\nscope\tdirect_su2_child\nrequested_epoch_ms\tnot-a-number\n"
+        )
+        .unwrap_err()
+        .contains("unsigned integer"));
+    }
+
+    #[test]
     fn scan_flags_only_unclassified_inactive_generated_cases() {
         let root = temp_root("classification");
         fs::create_dir_all(&root).unwrap();
@@ -246,20 +357,38 @@ mod tests {
         let cancelled = root.join("case_r1_0002_200");
         let active = root.join("case_r1_0003_300");
         let interrupted = root.join("case_r1_0004_400");
+        let corrupt = root.join("case_r1_0005_500");
         let noise = root.join("case_notes");
-        for path in [&completed, &cancelled, &active, &interrupted, &noise] {
+        for path in [&completed, &cancelled, &active, &interrupted, &corrupt, &noise] {
             fs::create_dir_all(path).unwrap();
         }
         fs::write(completed.join(RUN_MANIFEST_FILENAME), "terminal").unwrap();
         fs::write(cancelled.join(LIFECYCLE_PROVENANCE_FILENAME), "cancelled").unwrap();
         fs::write(
             interrupted.join(EXECUTION_ATTEMPT_FILENAME),
+            valid_attempt_text(456),
+        )
+        .unwrap();
+        fs::write(
+            corrupt.join(EXECUTION_ATTEMPT_FILENAME),
             "event\tlaunch_requested\n",
         )
         .unwrap();
 
         let cases = scan_unclassified_persisted_cases(&root, [active]).unwrap();
-        assert_eq!(cases, vec![interrupted]);
+        assert_eq!(cases.len(), 2);
+        assert_eq!(cases[0].path, interrupted);
+        assert_eq!(
+            cases[0].execution_attempt,
+            ExecutionAttemptEvidence::Valid {
+                requested_epoch_ms: 456
+            }
+        );
+        assert_eq!(cases[1].path, corrupt);
+        assert!(matches!(
+            &cases[1].execution_attempt,
+            ExecutionAttemptEvidence::Invalid(error) if error.contains("key/value header")
+        ));
         fs::remove_dir_all(root).unwrap();
     }
 
