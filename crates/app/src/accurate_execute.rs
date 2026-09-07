@@ -6,9 +6,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use aeroforge_accurate_backend::{
     discover_su2, evaluate_su2_history_quality, extract_su2_surface_world_axis_diagnostics,
-    extract_su2_world_axis_diagnostics, prepare_generated_su2_case_directory, probe_su2_banner,
-    run_prepared_generated_su2_case, summarize_su2_history_csv, BoundaryRole, BoundarySource,
-    GeneratedSu2CaseBundle, Su2HistoryGateStatus, Su2HistoryQuality, Su2WorldAxisDiagnostics,
+    extract_su2_world_axis_diagnostics, peek_su2_case_termination,
+    prepare_generated_su2_case_directory, probe_su2_banner, run_prepared_generated_su2_case,
+    summarize_su2_history_csv, BoundaryRole, BoundarySource, GeneratedSu2CaseBundle,
+    Su2HistoryGateStatus, Su2HistoryQuality, Su2RunTermination, Su2WorldAxisDiagnostics,
 };
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
@@ -25,7 +26,16 @@ const COEFFICIENT_FRAME_MANIFEST: &str = "su2_world_xyz_aeroforge_y_up_aoa0_side
 pub enum AccurateExecutionStatus {
     Idle,
     Running,
+    Cancelling,
+    Cancelled,
     Succeeded,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AccurateTerminalKind {
+    Succeeded,
+    Cancelled,
     Failed,
 }
 
@@ -82,6 +92,7 @@ pub struct AccurateRunSummary {
 #[derive(Debug)]
 enum AccurateRunCompletion {
     Succeeded(AccurateRunSummary),
+    Cancelled(AccurateRunSummary),
     Failed {
         message: String,
         summary: Option<AccurateRunSummary>,
@@ -161,11 +172,11 @@ pub fn draw_accurate_execute_ui(
                 );
             }
 
-            let running = execution.status == AccurateExecutionStatus::Running;
+            let active = execution_is_active(execution.status);
             let root_ok = !execution.case_root.trim().is_empty();
             let run_clicked = ui
                 .add_enabled(
-                    fresh && root_ok && !running,
+                    fresh && root_ok && !active,
                     egui::Button::new("Persist + run with SU2 8.5.0"),
                 )
                 .clicked();
@@ -196,6 +207,19 @@ pub fn draw_accurate_execute_ui(
                         execution.running_revision.unwrap_or_default()
                     ));
                     ui.spinner();
+                }
+                AccurateExecutionStatus::Cancelling => {
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        format!(
+                            "Execution: cancelling scene revision {}",
+                            execution.running_revision.unwrap_or_default()
+                        ),
+                    );
+                    ui.spinner();
+                }
+                AccurateExecutionStatus::Cancelled => {
+                    ui.colored_label(egui::Color32::YELLOW, "Execution: cancelled by user");
                 }
                 AccurateExecutionStatus::Succeeded => {
                     ui.colored_label(
@@ -329,7 +353,7 @@ pub fn draw_accurate_execute_ui(
                     });
                 }
                 ui.small(
-                    "Process success, residual quality and coefficient diagnostics are separate signals. Even a residual-target pass on the current staircase mesh is not an engineering-valid aerodynamic result.",
+                    "Process success, residual quality, coefficient diagnostics and user cancellation are separate signals. Even a residual-target pass on the current staircase mesh is not an engineering-valid aerodynamic result.",
                 );
             }
             if let Some(error) = &execution.last_error {
@@ -338,6 +362,13 @@ pub fn draw_accurate_execute_ui(
         });
 
     Ok(())
+}
+
+fn execution_is_active(status: AccurateExecutionStatus) -> bool {
+    matches!(
+        status,
+        AccurateExecutionStatus::Running | AccurateExecutionStatus::Cancelling
+    )
 }
 
 fn collect_completion(execution: &mut AccurateExecutionRuntime) {
@@ -356,6 +387,11 @@ fn collect_completion(execution: &mut AccurateExecutionRuntime) {
     match completion {
         AccurateRunCompletion::Succeeded(summary) => {
             execution.status = AccurateExecutionStatus::Succeeded;
+            execution.last_run = Some(summary);
+            execution.last_error = None;
+        }
+        AccurateRunCompletion::Cancelled(summary) => {
+            execution.status = AccurateExecutionStatus::Cancelled;
             execution.last_run = Some(summary);
             execution.last_error = None;
         }
@@ -546,13 +582,29 @@ fn execute_case(
         };
     }
 
-    if run.success {
-        AccurateRunCompletion::Succeeded(summary)
-    } else {
-        AccurateRunCompletion::Failed {
+    match classify_terminal_kind(
+        peek_su2_case_termination(&prepared.working_directory),
+        run.success,
+    ) {
+        AccurateTerminalKind::Succeeded => AccurateRunCompletion::Succeeded(summary),
+        AccurateTerminalKind::Cancelled => AccurateRunCompletion::Cancelled(summary),
+        AccurateTerminalKind::Failed => AccurateRunCompletion::Failed {
             message: format!("SU2_CFD exited unsuccessfully with code {:?}.", run.exit_code),
             summary: Some(summary),
-        }
+        },
+    }
+}
+
+fn classify_terminal_kind(
+    termination: Option<Su2RunTermination>,
+    process_success: bool,
+) -> AccurateTerminalKind {
+    if termination == Some(Su2RunTermination::Cancelled) {
+        AccurateTerminalKind::Cancelled
+    } else if process_success {
+        AccurateTerminalKind::Succeeded
+    } else {
+        AccurateTerminalKind::Failed
     }
 }
 
@@ -854,6 +906,43 @@ mod tests {
             "case_r42_0007_123456"
         );
         assert_eq!(case_directory_name(0, 12_345, 9), "case_r0_12345_9");
+    }
+
+    #[test]
+    fn active_status_includes_cancelling_but_not_cancelled() {
+        assert!(execution_is_active(AccurateExecutionStatus::Running));
+        assert!(execution_is_active(AccurateExecutionStatus::Cancelling));
+        assert!(!execution_is_active(AccurateExecutionStatus::Cancelled));
+        assert!(!execution_is_active(AccurateExecutionStatus::Succeeded));
+        assert!(!execution_is_active(AccurateExecutionStatus::Failed));
+    }
+
+    #[test]
+    fn terminal_kind_prioritizes_confirmed_cancellation() {
+        assert_eq!(
+            classify_terminal_kind(Some(Su2RunTermination::Cancelled), false),
+            AccurateTerminalKind::Cancelled
+        );
+        assert_eq!(
+            classify_terminal_kind(Some(Su2RunTermination::Cancelled), true),
+            AccurateTerminalKind::Cancelled
+        );
+        assert_eq!(
+            classify_terminal_kind(Some(Su2RunTermination::Completed), true),
+            AccurateTerminalKind::Succeeded
+        );
+        assert_eq!(
+            classify_terminal_kind(Some(Su2RunTermination::Completed), false),
+            AccurateTerminalKind::Failed
+        );
+        assert_eq!(
+            classify_terminal_kind(None, true),
+            AccurateTerminalKind::Succeeded
+        );
+        assert_eq!(
+            classify_terminal_kind(None, false),
+            AccurateTerminalKind::Failed
+        );
     }
 
     #[test]
