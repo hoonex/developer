@@ -66,6 +66,19 @@ pub(crate) fn prepare_tetgen_from_state(
 mod tests {
     use super::*;
     use bevy::prelude::Vec3;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_root(label: &str) -> std::path::PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "aeroforge-desktop-tetgen-{label}-{}-{nonce}",
+            std::process::id()
+        ))
+    }
 
     #[test]
     fn worker_snapshot_preserves_geometry_settings_and_revision() {
@@ -81,5 +94,61 @@ mod tests {
         assert_eq!(snapshot.imported_surfaces, state.imported_surfaces);
         assert_eq!(snapshot.simulation.grid, [7, 8, 9]);
         assert_eq!(snapshot.selection, state.selection);
+    }
+
+    #[test]
+    fn configured_real_tetgen_prepares_and_persists_desktop_case() {
+        if std::env::var("AEROFORGE_REQUIRE_REAL_TETGEN")
+            .ok()
+            .as_deref()
+            != Some("1")
+        {
+            return;
+        }
+
+        assert!(
+            discover_tetgen().is_some(),
+            "AEROFORGE_REQUIRE_REAL_TETGEN=1 requires tetgen on PATH or TETGEN_EXECUTABLE"
+        );
+
+        let mut state = ProjectState::default();
+        state.objects[0].position = Vec3::new(0.0, 2.0, 0.0);
+        state.touch();
+
+        let (prepared_case, summary) =
+            prepare_tetgen_from_state(&state, &AccurateSettings::default()).unwrap();
+        assert!(prepared_case.is_validated_tetgen());
+        assert_eq!(prepared_case.mesh_kind_label(), "Validated external TetGen handoff");
+        assert_eq!(summary.active_body_markers, 1);
+        assert!(summary.points > 0);
+        assert!(summary.tetrahedra > 0);
+        assert!(summary.boundary_triangles > 0);
+        assert!(prepared_case
+            .bundle()
+            .config_text
+            .contains("MARKER_MONITORING= ( body_1 )"));
+
+        let root = temp_root("real");
+        fs::create_dir_all(&root).unwrap();
+        let persisted = prepared_case.persist(&root, "case_a").unwrap();
+        let case_dir = &persisted.working_directory;
+
+        let exterior = fs::read_to_string(case_dir.join("aeroforge_exterior_handoff.tsv")).unwrap();
+        assert!(exterior.contains("contract\tvalidated_exterior_handoff"));
+        assert!(exterior.contains("body_fitted_status\tnot_established"));
+        assert!(exterior.contains("engineering_quality_status\tnot_established"));
+
+        let tetgen = fs::read_to_string(case_dir.join("aeroforge_tetgen_handoff.tsv")).unwrap();
+        assert!(tetgen.contains("contract\tvalidated_external_tetgen_handoff"));
+        assert!(tetgen.contains("body_fitted_status\tnot_established"));
+        assert!(tetgen.contains("engineering_quality_status\tnot_established"));
+        assert!(case_dir.join("aeroforge_tetgen_input.poly").is_file());
+
+        let fidelity = fs::read_to_string(case_dir.join("aeroforge_mesh_fidelity.tsv")).unwrap();
+        assert!(fidelity.contains("mesh_fidelity\tunclassified_audited_volume"));
+        assert!(fidelity.contains("body_fitted_status\tnot_established"));
+        assert!(fidelity.contains("engineering_quality_status\tnot_established"));
+
+        fs::remove_dir_all(root).unwrap();
     }
 }

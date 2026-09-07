@@ -36,7 +36,7 @@ jobs:
 
   tetgen-real-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -59,6 +59,10 @@ jobs:
         env:
           AEROFORGE_REQUIRE_REAL_TETGEN: "1"
         run: cargo test -p aeroforge-accurate-backend configured_real_tetgen_reaches_validated_handoff -- --nocapture
+      - name: Validate desktop TetGen prepare and provenance persistence
+        env:
+          AEROFORGE_REQUIRE_REAL_TETGEN: "1"
+        run: cargo test -p aeroforge-app configured_real_tetgen_prepares_and_persists_desktop_case -- --nocapture
 
   app-check:
     runs-on: windows-latest
