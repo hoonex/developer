@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aeroforge_accurate_backend::{
-    evaluate_su2_history_quality, request_su2_case_cancellation,
+    active_su2_case_paths, evaluate_su2_history_quality, request_su2_case_cancellation,
     summarize_su2_history_csv, take_su2_case_termination, Su2HistoryQuality,
     Su2RunTermination,
 };
@@ -17,22 +17,11 @@ use crate::model::{ProjectState, SolverMode};
 
 const LIFECYCLE_PROVENANCE_FILENAME: &str = "aeroforge_lifecycle.tsv";
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum AccurateLifecycleStatus {
-    #[default]
-    Idle,
-    Running,
-    Cancelling,
-    Cancelled,
-}
-
 #[derive(Resource, Default)]
 pub struct AccurateLifecycleRuntime {
-    pub status: AccurateLifecycleStatus,
     active_key: Option<(u64, u64)>,
     active_root: Option<PathBuf>,
     active_case: Option<PathBuf>,
-    cancel_requested: bool,
     cancellation_sent: bool,
     live_quality: Option<Su2HistoryQuality>,
     live_error: Option<String>,
@@ -54,12 +43,18 @@ pub fn draw_accurate_lifecycle_ui(
     synchronize_lifecycle(&mut execution, &prepared, &mut lifecycle);
 
     let active = matches!(
-        lifecycle.status,
-        AccurateLifecycleStatus::Running | AccurateLifecycleStatus::Cancelling
+        execution.status,
+        AccurateExecutionStatus::Running | AccurateExecutionStatus::Cancelling
     );
-    if !active && lifecycle.status != AccurateLifecycleStatus::Cancelled {
+    let cancelled = execution.status == AccurateExecutionStatus::Cancelled;
+    if !active && !cancelled {
         return Ok(());
     }
+
+    let cancelled_case = lifecycle
+        .last_cancelled_case
+        .clone()
+        .or_else(|| execution.last_run.as_ref().map(|run| run.case_directory.clone()));
 
     let ctx = contexts.ctx_mut()?;
     egui::Window::new("SU2 live lifecycle")
@@ -74,7 +69,7 @@ pub fn draw_accurate_lifecycle_ui(
                 if let Some(case) = &lifecycle.active_case {
                     ui.monospace(format!("Case: {}", case.display()));
                 } else {
-                    ui.small("Waiting for the persisted case directory...");
+                    ui.small("Waiting for the direct SU2 child to register its persisted case...");
                 }
 
                 if let Some(quality) = &lifecycle.live_quality {
@@ -96,13 +91,13 @@ pub fn draw_accurate_lifecycle_ui(
                 if let Some(error) = &lifecycle.live_error {
                     ui.colored_label(
                         egui::Color32::YELLOW,
-                        format!("Live history sample unavailable: {error}"),
+                        format!("Live lifecycle sample unavailable: {error}"),
                     );
                 }
 
                 ui.separator();
-                match lifecycle.status {
-                    AccurateLifecycleStatus::Cancelling => {
+                match execution.status {
+                    AccurateExecutionStatus::Cancelling => {
                         if lifecycle.cancellation_sent {
                             ui.colored_label(
                                 egui::Color32::YELLOW,
@@ -111,24 +106,26 @@ pub fn draw_accurate_lifecycle_ui(
                         } else {
                             ui.colored_label(
                                 egui::Color32::YELLOW,
-                                "Cancellation queued; waiting for the SU2 child registration.",
+                                "Cancellation queued; waiting for the direct SU2 child registration.",
                             );
                         }
                     }
-                    AccurateLifecycleStatus::Running => {
+                    AccurateExecutionStatus::Running => {
                         if ui.button("Cancel direct SU2_CFD child").clicked() {
-                            lifecycle.cancel_requested = true;
-                            lifecycle.status = AccurateLifecycleStatus::Cancelling;
+                            execution.status = AccurateExecutionStatus::Cancelling;
                         }
                     }
-                    AccurateLifecycleStatus::Idle | AccurateLifecycleStatus::Cancelled => {}
+                    AccurateExecutionStatus::Idle
+                    | AccurateExecutionStatus::Cancelled
+                    | AccurateExecutionStatus::Succeeded
+                    | AccurateExecutionStatus::Failed => {}
                 }
                 ui.small(
                     "Cancellation targets only the direct SU2_CFD child started by AeroForge. It does not claim process-tree, launcher, MPI-worker, pause/resume, or crash-recovery semantics.",
                 );
-            } else if lifecycle.status == AccurateLifecycleStatus::Cancelled {
+            } else if cancelled {
                 ui.colored_label(egui::Color32::YELLOW, "Last execution: cancelled by user");
-                if let Some(case) = &lifecycle.last_cancelled_case {
+                if let Some(case) = &cancelled_case {
                     ui.monospace(format!("Case: {}", case.display()));
                     ui.monospace(format!(
                         "Lifecycle provenance: {}",
@@ -141,13 +138,13 @@ pub fn draw_accurate_lifecycle_ui(
                 if let Some(error) = &lifecycle.provenance_error {
                     ui.colored_label(
                         egui::Color32::YELLOW,
-                        format!("Lifecycle provenance write failed: {error}"),
+                        format!("Lifecycle provenance unavailable: {error}"),
                     );
                 }
                 if ui.button("Dismiss cancellation status").clicked() {
+                    execution.status = AccurateExecutionStatus::Idle;
                     lifecycle.last_cancelled_case = None;
                     lifecycle.provenance_error = None;
-                    lifecycle.status = AccurateLifecycleStatus::Idle;
                 }
             }
         });
@@ -160,11 +157,9 @@ fn begin_active_run(
     key: (u64, u64),
     case_root: &str,
 ) {
-    lifecycle.status = AccurateLifecycleStatus::Running;
     lifecycle.active_key = Some(key);
     lifecycle.active_root = Some(PathBuf::from(case_root.trim()));
     lifecycle.active_case = None;
-    lifecycle.cancel_requested = false;
     lifecycle.cancellation_sent = false;
     lifecycle.live_quality = None;
     lifecycle.live_error = None;
@@ -177,7 +172,11 @@ fn synchronize_lifecycle(
     prepared: &AccurateRuntime,
     lifecycle: &mut AccurateLifecycleRuntime,
 ) {
-    if execution.status == AccurateExecutionStatus::Running {
+    let active = matches!(
+        execution.status,
+        AccurateExecutionStatus::Running | AccurateExecutionStatus::Cancelling
+    );
+    if active {
         let Some(revision) = execution.running_revision else {
             return;
         };
@@ -189,7 +188,14 @@ fn synchronize_lifecycle(
 
         if lifecycle.active_case.is_none() {
             if let Some(root) = lifecycle.active_root.as_deref() {
-                lifecycle.active_case = find_active_case_directory(root, revision, sequence);
+                match find_registered_active_case(root, revision, sequence) {
+                    Ok(Some(case)) => {
+                        lifecycle.active_case = Some(case);
+                        lifecycle.live_error = None;
+                    }
+                    Ok(None) => {}
+                    Err(error) => lifecycle.live_error = Some(error),
+                }
             }
         }
 
@@ -205,9 +211,10 @@ fn synchronize_lifecycle(
                 Err(error) => lifecycle.live_error = Some(error),
             }
 
-            if lifecycle.cancel_requested && !lifecycle.cancellation_sent {
+            if execution.status == AccurateExecutionStatus::Cancelling
+                && !lifecycle.cancellation_sent
+            {
                 lifecycle.cancellation_sent = request_su2_case_cancellation(case);
-                lifecycle.status = AccurateLifecycleStatus::Cancelling;
             }
         }
         return;
@@ -220,11 +227,10 @@ fn synchronize_lifecycle(
         .active_case
         .clone()
         .or_else(|| execution.last_run.as_ref().map(|run| run.case_directory.clone()));
-    let mut cancelled = false;
+
     if let Some(case) = completed_case {
-        if let Some(termination) = take_su2_case_termination(&case) {
-            if termination == Su2RunTermination::Cancelled {
-                cancelled = true;
+        match take_su2_case_termination(&case) {
+            Some(Su2RunTermination::Cancelled) => {
                 lifecycle.last_cancelled_case = Some(case.clone());
                 lifecycle.provenance_error = write_cancelled_lifecycle_provenance(
                     &case,
@@ -234,21 +240,26 @@ fn synchronize_lifecycle(
                 )
                 .err()
                 .map(|error| error.to_string());
-                execution.status = AccurateExecutionStatus::Idle;
-                execution.last_error = None;
             }
+            Some(Su2RunTermination::Completed) => {}
+            None if execution.status == AccurateExecutionStatus::Cancelled => {
+                lifecycle.provenance_error = Some(format!(
+                    "execution is cancelled but no registered direct-child termination remained for {}",
+                    case.display()
+                ));
+            }
+            None => {}
         }
+    } else if execution.status == AccurateExecutionStatus::Cancelled {
+        lifecycle.provenance_error = Some(
+            "execution is cancelled but no persisted case identity is available for lifecycle provenance"
+                .into(),
+        );
     }
 
-    lifecycle.status = if cancelled {
-        AccurateLifecycleStatus::Cancelled
-    } else {
-        AccurateLifecycleStatus::Idle
-    };
     lifecycle.active_key = None;
     lifecycle.active_root = None;
     lifecycle.active_case = None;
-    lifecycle.cancel_requested = false;
     lifecycle.cancellation_sent = false;
     lifecycle.live_quality = None;
     lifecycle.live_error = None;
@@ -284,25 +295,42 @@ fn write_cancelled_lifecycle_provenance(
     file.sync_all()
 }
 
-fn find_active_case_directory(root: &Path, revision: u64, sequence: u64) -> Option<PathBuf> {
+fn select_registered_active_case(
+    candidates: impl IntoIterator<Item = PathBuf>,
+    root: &Path,
+    revision: u64,
+    sequence: u64,
+) -> Result<Option<PathBuf>, String> {
     if root.as_os_str().is_empty() {
-        return None;
+        return Ok(None);
     }
     let prefix = format!("case_r{revision}_{sequence:04}_");
-    let mut candidates = fs::read_dir(root)
-        .ok()?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
+    let mut matches = candidates
+        .into_iter()
         .filter(|path| {
-            path.is_dir()
+            path.parent() == Some(root)
                 && path
                     .file_name()
                     .and_then(|name| name.to_str())
                     .is_some_and(|name| name.starts_with(&prefix))
         })
         .collect::<Vec<_>>();
-    candidates.sort();
-    candidates.pop()
+    matches.sort();
+    match matches.len() {
+        0 => Ok(None),
+        1 => Ok(matches.pop()),
+        count => Err(format!(
+            "{count} registered active SU2 cases matched revision {revision} sequence {sequence}; refusing ambiguous cancellation/progress targeting"
+        )),
+    }
+}
+
+fn find_registered_active_case(
+    root: &Path,
+    revision: u64,
+    sequence: u64,
+) -> Result<Option<PathBuf>, String> {
+    select_registered_active_case(active_su2_case_paths(), root, revision, sequence)
 }
 
 fn find_history_path(case_directory: &Path) -> Option<PathBuf> {
@@ -366,23 +394,39 @@ mod tests {
         begin_active_run(&mut lifecycle, (42, 7), &root);
         root.clear();
         root.push_str("second-root");
-        assert_eq!(lifecycle.status, AccurateLifecycleStatus::Running);
         assert_eq!(lifecycle.active_key, Some((42, 7)));
         assert_eq!(lifecycle.active_root, Some(PathBuf::from("first-root")));
     }
 
     #[test]
-    fn active_case_discovery_is_revision_and_sequence_bounded() {
-        let root = temp_root("case-discovery");
-        fs::create_dir_all(root.join("case_r42_0007_100")).unwrap();
-        fs::create_dir_all(root.join("case_r42_0007_200")).unwrap();
-        fs::create_dir_all(root.join("case_r42_0008_999")).unwrap();
-        fs::create_dir_all(root.join("case_r41_0007_999")).unwrap();
+    fn registered_case_selection_is_revision_sequence_and_root_bounded() {
+        let root = PathBuf::from("runs");
+        let candidates = vec![
+            root.join("case_r42_0007_200"),
+            root.join("case_r42_0008_999"),
+            root.join("case_r41_0007_999"),
+            PathBuf::from("other").join("case_r42_0007_999"),
+        ];
         assert_eq!(
-            find_active_case_directory(&root, 42, 7),
+            select_registered_active_case(candidates, &root, 42, 7).unwrap(),
             Some(root.join("case_r42_0007_200"))
         );
-        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn registered_case_selection_fails_closed_on_ambiguity() {
+        let root = PathBuf::from("runs");
+        let error = select_registered_active_case(
+            vec![
+                root.join("case_r42_0007_100"),
+                root.join("case_r42_0007_200"),
+            ],
+            &root,
+            42,
+            7,
+        )
+        .unwrap_err();
+        assert!(error.contains("2 registered active SU2 cases matched"));
     }
 
     #[test]
