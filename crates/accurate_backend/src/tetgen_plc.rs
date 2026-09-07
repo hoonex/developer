@@ -8,26 +8,19 @@ use crate::imported_surface::AuditedImportedSurfaceBody;
 use crate::source_containment::ContainmentValidatedExteriorMesherInput;
 use crate::su2_mesh::{BoundarySource, DomainAxis, DomainSide};
 
-/// TetGen switches paired with [`prepare_tetgen_plc`].
+/// Baseline external TetGen PLC switches.
 ///
-/// `-p` consumes the generated PLC, `-Y` prevents boundary facet splitting, `-z` keeps all output
-/// indices zero-based, `-C` asks TetGen to check the final mesh, `-Q` keeps stdout concise, and `-I`
-/// suppresses iteration suffixes so a private working directory has deterministic output names.
-/// No quality or maximum-volume claim is made by this baseline switch set.
-pub const TETGEN_BASELINE_SWITCHES: &str = "-pYzCQI";
+/// `-p` consumes `.poly`, `-Y` preserves input boundary facets, `-z` uses zero-based output,
+/// `-C` checks the final mesh, and `-Q` keeps routine output concise. Iteration suffixes are kept
+/// deliberately: TetGen's `-I` also suppresses `.node` output, which would make added/interior
+/// output nodes impossible to reconstruct safely.
+pub const TETGEN_BASELINE_SWITCHES: &str = "-pYzCQ";
 
-/// Explicit bounded policy for finding one strictly interior volume-hole point per solid body.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TetgenHoleSeedPolicy {
-    /// Geometric boundary tolerance in source-mesh coordinate units. Must be finite and positive.
     pub geometric_epsilon: f64,
-    /// Initial inward displacement as a fraction of the selected triangle's shortest edge.
-    /// Must be finite and in `(0, 0.25]`.
     pub initial_inward_edge_fraction: f64,
-    /// Maximum number of deterministic inward-offset attempts. Each failed attempt halves the
-    /// previous displacement. Must be non-zero.
     pub max_attempts: usize,
-    /// Explicit worst-case point/triangle work budget for winding validation of all hole seeds.
     pub max_point_triangle_tests: usize,
 }
 
@@ -40,7 +33,6 @@ pub struct TetgenHoleSeed {
     pub attempts: usize,
 }
 
-/// Immutable prepared PLC text plus deterministic evidence needed by a later external TetGen runner.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreparedTetgenPlc {
     poly_text: String,
@@ -172,20 +164,10 @@ impl Error for TetgenPlcError {}
 
 /// Converts containment-admitted exterior geometry into a deterministic marked TetGen `.poly` PLC.
 ///
-/// The outer domain is emitted as six marked quadrilateral facets. Every audited source triangle is
-/// emitted unchanged as one marked internal facet using that SceneObject's authoritative wall marker.
-/// One strictly interior volume-hole point is generated per solid body so TetGen removes the solid
-/// volume and retains its surface as an exterior-fluid boundary.
-///
-/// Hole points are not guessed from an AABB center. For each positively oriented audited body, the
-/// largest-area source triangle (stable first-index tie break) is selected, its outward normal is
-/// reversed, and a candidate is displaced inward from the triangle centroid. Failed candidates are
-/// retried only by deterministic halving. Every candidate is checked against the complete source
-/// shell with a solid-angle winding test and explicit boundary tolerance. Worst-case winding work is
-/// reserved before any search begins; no random sampling or silent work reduction occurs.
-///
-/// This function prepares input text only. It does not execute TetGen, parse a volume mesh, or make
-/// any body-fitted/quality/CFD claim.
+/// The outer domain is six marked quads; every audited source triangle is copied unchanged as a
+/// marked internal facet. One strictly interior volume-hole point is proven per solid body by a
+/// bounded inward-normal search plus full-shell winding validation. The returned value only prepares
+/// external-mesher input; it does not execute TetGen or make a body-fitted/quality/CFD claim.
 pub fn prepare_tetgen_plc(
     input: &ContainmentValidatedExteriorMesherInput,
     hole_seed_policy: TetgenHoleSeedPolicy,
@@ -453,8 +435,8 @@ fn find_hole_seed(
     let initial_offset = shortest_edge * policy.initial_inward_edge_fraction;
 
     for attempt in 0..policy.max_attempts {
-        let divisor = 2.0_f64.powi(i32::try_from(attempt).unwrap_or(i32::MAX));
-        let offset = initial_offset / divisor;
+        let exponent = i32::try_from(attempt).unwrap_or(i32::MAX);
+        let offset = initial_offset / 2.0_f64.powi(exponent);
         if !offset.is_finite() || offset <= policy.geometric_epsilon {
             break;
         }
@@ -745,7 +727,7 @@ mod tests {
     fn deterministic_plc_preserves_domain_and_scene_markers() {
         let prepared = prepare_tetgen_plc(&containment_input(), seed_policy(1_000)).unwrap();
 
-        assert_eq!(prepared.switches(), "-pYzCQI");
+        assert_eq!(prepared.switches(), "-pYzCQ");
         assert_eq!(prepared.point_count(), 12);
         assert_eq!(prepared.facet_count(), 10);
         assert_eq!(prepared.hole_seeds().len(), 1);
