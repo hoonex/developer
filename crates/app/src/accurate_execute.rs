@@ -148,218 +148,221 @@ pub fn draw_accurate_execute_ui(
     collect_completion(&mut execution);
 
     let ctx = contexts.ctx_mut()?;
-    egui::Window::new("Accurate solve — execute SU2")
-        .default_width(430.0)
-        .resizable(true)
-        .show(ctx, |ui| {
-            ui.label("Explicit execution only: persist the prepared case, then launch pinned-compatible SU2 in a worker thread.");
-            ui.small(
-                "The editor remains responsive while SU2 runs. Execution is currently restricted to SU2 8.5.0, the version covered by external-runtime evidence.",
-            );
-            ui.separator();
-
-            ui.horizontal(|ui| {
-                ui.label("Case root");
-                ui.text_edit_singleline(&mut execution.case_root);
-            });
-            ui.small("Relative paths resolve from the AeroForge process working directory. Existing case directories are never overwritten.");
-
-            let fresh = prepared.is_fresh_for(state.revision);
-            if !fresh {
-                ui.colored_label(
-                    egui::Color32::YELLOW,
-                    "Prepare the current scene revision and solver settings before execution.",
+    egui::CentralPanel::default().show(ctx, |ui| {
+        ui.heading("Run / Results");
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .id_salt("accurate_execute_scroll")
+            .show(ui, |ui| {
+                ui.label("Explicit execution only: persist the prepared case, then launch pinned-compatible SU2 in a worker thread.");
+                ui.small(
+                    "The editor remains responsive while SU2 runs. Execution is currently restricted to SU2 8.5.0, the version covered by external-runtime evidence.",
                 );
-            }
+                ui.separator();
 
-            let active = execution_is_active(execution.status);
-            let root_ok = !execution.case_root.trim().is_empty();
-            let run_clicked = ui
-                .add_enabled(
-                    fresh && root_ok && !active,
-                    egui::Button::new("Persist + run with SU2 8.5.0"),
-                )
-                .clicked();
+                ui.horizontal(|ui| {
+                    ui.label("Case root");
+                    ui.text_edit_singleline(&mut execution.case_root);
+                });
+                ui.small("Relative paths resolve from the AeroForge process working directory. Existing case directories are never overwritten.");
 
-            if run_clicked {
-                if let (Some(bundle), Some(settings)) =
-                    (prepared.bundle.clone(), prepared.prepared_settings.as_ref())
-                {
-                    let root = PathBuf::from(execution.case_root.trim());
-                    launch_run(
-                        &mut execution,
-                        root,
-                        state.revision,
-                        AccurateRunContract::from(settings),
-                        bundle,
-                    );
-                }
-            }
-
-            ui.separator();
-            match execution.status {
-                AccurateExecutionStatus::Idle => {
-                    ui.label("Execution: idle");
-                }
-                AccurateExecutionStatus::Running => {
-                    ui.label(format!(
-                        "Execution: running scene revision {}",
-                        execution.running_revision.unwrap_or_default()
-                    ));
-                    ui.spinner();
-                }
-                AccurateExecutionStatus::Cancelling => {
+                let fresh = prepared.is_fresh_for(state.revision);
+                if !fresh {
                     ui.colored_label(
                         egui::Color32::YELLOW,
-                        format!(
-                            "Execution: cancelling scene revision {}",
-                            execution.running_revision.unwrap_or_default()
-                        ),
-                    );
-                    ui.spinner();
-                }
-                AccurateExecutionStatus::Cancelled => {
-                    ui.colored_label(egui::Color32::YELLOW, "Execution: cancelled by user");
-                }
-                AccurateExecutionStatus::Succeeded => {
-                    ui.colored_label(
-                        egui::Color32::GREEN,
-                        "Execution: SU2 process completed successfully",
-                    );
-                }
-                AccurateExecutionStatus::Failed => {
-                    ui.colored_label(egui::Color32::RED, "Execution: failed");
-                }
-            }
-
-            if let Some(run) = &execution.last_run {
-                ui.monospace(format!("Revision: {}", run.revision));
-                ui.monospace(format!("SU2: {}", run.su2_banner));
-                ui.monospace(format!("Exit code: {:?}", run.exit_code));
-                ui.monospace(format!("Case: {}", run.case_directory.display()));
-                ui.monospace(format!("Run manifest: {RUN_MANIFEST_FILENAME}"));
-                ui.monospace(format!(
-                    "Monitored SceneObject bodies: {}",
-                    run.monitored_scene_body_count
-                ));
-
-                if let Some(quality) = &run.history_quality {
-                    let worst_residual = quality
-                        .max_residual_log10
-                        .map(|value| format!("{value:.4}"))
-                        .unwrap_or_else(|| "n/a".into());
-                    let last_iteration = quality
-                        .last_iteration
-                        .map(|value| value.to_string())
-                        .unwrap_or_else(|| "n/a".into());
-                    let label = format!(
-                        "History gate: {} | last iter {last_iteration} | worst RMS {worst_residual} | target {:.4}",
-                        history_gate_name(quality.status),
-                        quality.residual_target_log10
-                    );
-                    let color = match quality.status {
-                        Su2HistoryGateStatus::ResidualTargetMet => egui::Color32::GREEN,
-                        Su2HistoryGateStatus::IterationBudgetReached
-                        | Su2HistoryGateStatus::Incomplete => egui::Color32::YELLOW,
-                        Su2HistoryGateStatus::NoHistoryRows => egui::Color32::RED,
-                    };
-                    ui.colored_label(color, label);
-                }
-                if let Some(error) = &run.history_error {
-                    ui.colored_label(
-                        egui::Color32::YELLOW,
-                        format!("History quality unavailable: {error}"),
+                        "Prepare the current scene revision and solver settings before execution.",
                     );
                 }
 
-                if run.monitored_scene_body_count == 0 {
-                    ui.small(
-                        "No SceneObject body is in MARKER_MONITORING, so aerodynamic coefficient diagnostics are intentionally suppressed for this run.",
-                    );
-                } else {
-                    if let Some(diagnostics) = &run.world_axis_diagnostics {
-                        ui.collapsing("Aggregate world-axis coefficient diagnostics", |ui| {
-                            ui.monospace(format!(
-                                "CFx={:.8}  CFy={:.8}  CFz={:.8}",
-                                diagnostics.force_coefficient_xyz[0],
-                                diagnostics.force_coefficient_xyz[1],
-                                diagnostics.force_coefficient_xyz[2]
-                            ));
-                            ui.monospace(format!(
-                                "CMx={:.8}  CMy={:.8}  CMz={:.8}",
-                                diagnostics.moment_coefficient_xyz[0],
-                                diagnostics.moment_coefficient_xyz[1],
-                                diagnostics.moment_coefficient_xyz[2]
-                            ));
-                            ui.small(
-                                "Aggregate over all SceneObject markers in SU2 MARKER_MONITORING. Generated accurate cases use AOA=0°, sideslip=0° and moment origin (0,0,0) m. AeroForge is Y-up: SU2 CL is +Z at this frame, while +Y vertical is CFy/CSF. These are diagnostics, not engineering-validated coefficients.",
-                            );
-                        });
+                let active = execution_is_active(execution.status);
+                let root_ok = !execution.case_root.trim().is_empty();
+                let run_clicked = ui
+                    .add_enabled(
+                        fresh && root_ok && !active,
+                        egui::Button::new("Persist + run with SU2 8.5.0"),
+                    )
+                    .clicked();
+
+                if run_clicked {
+                    if let (Some(bundle), Some(settings)) =
+                        (prepared.bundle.clone(), prepared.prepared_settings.as_ref())
+                    {
+                        let root = PathBuf::from(execution.case_root.trim());
+                        launch_run(
+                            &mut execution,
+                            root,
+                            state.revision,
+                            AccurateRunContract::from(settings),
+                            bundle,
+                        );
                     }
-                    if let Some(error) = &run.diagnostic_error {
+                }
+
+                ui.separator();
+                match execution.status {
+                    AccurateExecutionStatus::Idle => {
+                        ui.label("Execution: idle");
+                    }
+                    AccurateExecutionStatus::Running => {
+                        ui.label(format!(
+                            "Execution: running scene revision {}",
+                            execution.running_revision.unwrap_or_default()
+                        ));
+                        ui.spinner();
+                    }
+                    AccurateExecutionStatus::Cancelling => {
                         ui.colored_label(
                             egui::Color32::YELLOW,
-                            format!("Aggregate world-axis diagnostics unavailable: {error}"),
+                            format!(
+                                "Execution: cancelling scene revision {}",
+                                execution.running_revision.unwrap_or_default()
+                            ),
+                        );
+                        ui.spinner();
+                    }
+                    AccurateExecutionStatus::Cancelled => {
+                        ui.colored_label(egui::Color32::YELLOW, "Execution: cancelled by user");
+                    }
+                    AccurateExecutionStatus::Succeeded => {
+                        ui.colored_label(
+                            egui::Color32::GREEN,
+                            "Execution: SU2 process completed successfully",
+                        );
+                    }
+                    AccurateExecutionStatus::Failed => {
+                        ui.colored_label(egui::Color32::RED, "Execution: failed");
+                    }
+                }
+
+                if let Some(run) = &execution.last_run {
+                    ui.monospace(format!("Revision: {}", run.revision));
+                    ui.monospace(format!("SU2: {}", run.su2_banner));
+                    ui.monospace(format!("Exit code: {:?}", run.exit_code));
+                    ui.monospace(format!("Case: {}", run.case_directory.display()));
+                    ui.monospace(format!("Run manifest: {RUN_MANIFEST_FILENAME}"));
+                    ui.monospace(format!(
+                        "Monitored SceneObject bodies: {}",
+                        run.monitored_scene_body_count
+                    ));
+
+                    if let Some(quality) = &run.history_quality {
+                        let worst_residual = quality
+                            .max_residual_log10
+                            .map(|value| format!("{value:.4}"))
+                            .unwrap_or_else(|| "n/a".into());
+                        let last_iteration = quality
+                            .last_iteration
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "n/a".into());
+                        let label = format!(
+                            "History gate: {} | last iter {last_iteration} | worst RMS {worst_residual} | target {:.4}",
+                            history_gate_name(quality.status),
+                            quality.residual_target_log10
+                        );
+                        let color = match quality.status {
+                            Su2HistoryGateStatus::ResidualTargetMet => egui::Color32::GREEN,
+                            Su2HistoryGateStatus::IterationBudgetReached
+                            | Su2HistoryGateStatus::Incomplete => egui::Color32::YELLOW,
+                            Su2HistoryGateStatus::NoHistoryRows => egui::Color32::RED,
+                        };
+                        ui.colored_label(color, label);
+                    }
+                    if let Some(error) = &run.history_error {
+                        ui.colored_label(
+                            egui::Color32::YELLOW,
+                            format!("History quality unavailable: {error}"),
                         );
                     }
 
-                    if let Some(per_body) = &run.per_body_diagnostics {
-                        ui.collapsing("Per-body world-axis coefficient diagnostics", |ui| {
-                            for body in per_body {
-                                ui.monospace(format!(
-                                    "SceneObject {} | marker {}",
-                                    body.scene_object_id, body.marker
-                                ));
+                    if run.monitored_scene_body_count == 0 {
+                        ui.small(
+                            "No SceneObject body is in MARKER_MONITORING, so aerodynamic coefficient diagnostics are intentionally suppressed for this run.",
+                        );
+                    } else {
+                        if let Some(diagnostics) = &run.world_axis_diagnostics {
+                            ui.collapsing("Aggregate world-axis coefficient diagnostics", |ui| {
                                 ui.monospace(format!(
                                     "CFx={:.8}  CFy={:.8}  CFz={:.8}",
-                                    body.world_axis_diagnostics.force_coefficient_xyz[0],
-                                    body.world_axis_diagnostics.force_coefficient_xyz[1],
-                                    body.world_axis_diagnostics.force_coefficient_xyz[2]
+                                    diagnostics.force_coefficient_xyz[0],
+                                    diagnostics.force_coefficient_xyz[1],
+                                    diagnostics.force_coefficient_xyz[2]
                                 ));
                                 ui.monospace(format!(
                                     "CMx={:.8}  CMy={:.8}  CMz={:.8}",
-                                    body.world_axis_diagnostics.moment_coefficient_xyz[0],
-                                    body.world_axis_diagnostics.moment_coefficient_xyz[1],
-                                    body.world_axis_diagnostics.moment_coefficient_xyz[2]
+                                    diagnostics.moment_coefficient_xyz[0],
+                                    diagnostics.moment_coefficient_xyz[1],
+                                    diagnostics.moment_coefficient_xyz[2]
                                 ));
-                                ui.separator();
-                            }
-                            ui.small(
-                                "SceneObject IDs come from the persisted marker-provenance binding, not from parsing marker text. Every body uses the same global SU2 REF_AREA / REF_LENGTH and moment origin as the aggregate result; these are world-axis coefficient diagnostics, not body-specific engineering Cd/Cl values.",
+                                ui.small(
+                                    "Aggregate over all SceneObject markers in SU2 MARKER_MONITORING. Generated accurate cases use AOA=0°, sideslip=0° and moment origin (0,0,0) m. AeroForge is Y-up: SU2 CL is +Z at this frame, while +Y vertical is CFy/CSF. These are diagnostics, not engineering-validated coefficients.",
+                                );
+                            });
+                        }
+                        if let Some(error) = &run.diagnostic_error {
+                            ui.colored_label(
+                                egui::Color32::YELLOW,
+                                format!("Aggregate world-axis diagnostics unavailable: {error}"),
                             );
+                        }
+
+                        if let Some(per_body) = &run.per_body_diagnostics {
+                            ui.collapsing("Per-body world-axis coefficient diagnostics", |ui| {
+                                for body in per_body {
+                                    ui.monospace(format!(
+                                        "SceneObject {} | marker {}",
+                                        body.scene_object_id, body.marker
+                                    ));
+                                    ui.monospace(format!(
+                                        "CFx={:.8}  CFy={:.8}  CFz={:.8}",
+                                        body.world_axis_diagnostics.force_coefficient_xyz[0],
+                                        body.world_axis_diagnostics.force_coefficient_xyz[1],
+                                        body.world_axis_diagnostics.force_coefficient_xyz[2]
+                                    ));
+                                    ui.monospace(format!(
+                                        "CMx={:.8}  CMy={:.8}  CMz={:.8}",
+                                        body.world_axis_diagnostics.moment_coefficient_xyz[0],
+                                        body.world_axis_diagnostics.moment_coefficient_xyz[1],
+                                        body.world_axis_diagnostics.moment_coefficient_xyz[2]
+                                    ));
+                                    ui.separator();
+                                }
+                                ui.small(
+                                    "SceneObject IDs come from the persisted marker-provenance binding, not from parsing marker text. Every body uses the same global SU2 REF_AREA / REF_LENGTH and moment origin as the aggregate result; these are world-axis coefficient diagnostics, not body-specific engineering Cd/Cl values.",
+                                );
+                            });
+                        }
+                        if let Some(error) = &run.per_body_diagnostic_error {
+                            ui.colored_label(
+                                egui::Color32::YELLOW,
+                                format!("Per-body world-axis diagnostics unavailable: {error}"),
+                            );
+                        }
+                    }
+
+                    if let Some(history) = &run.history_tail {
+                        ui.collapsing("history CSV tail", |ui| {
+                            ui.monospace(history);
                         });
                     }
-                    if let Some(error) = &run.per_body_diagnostic_error {
-                        ui.colored_label(
-                            egui::Color32::YELLOW,
-                            format!("Per-body world-axis diagnostics unavailable: {error}"),
-                        );
+                    if !run.stdout_tail.is_empty() {
+                        ui.collapsing("SU2 stdout tail", |ui| {
+                            ui.monospace(&run.stdout_tail);
+                        });
                     }
+                    if !run.stderr_tail.is_empty() {
+                        ui.collapsing("SU2 stderr tail", |ui| {
+                            ui.monospace(&run.stderr_tail);
+                        });
+                    }
+                    ui.small(
+                        "Process success, residual quality, coefficient diagnostics and user cancellation are separate signals. Even a residual-target pass on the current staircase mesh is not an engineering-valid aerodynamic result.",
+                    );
                 }
-
-                if let Some(history) = &run.history_tail {
-                    ui.collapsing("history CSV tail", |ui| {
-                        ui.monospace(history);
-                    });
+                if let Some(error) = &execution.last_error {
+                    ui.colored_label(egui::Color32::RED, error);
                 }
-                if !run.stdout_tail.is_empty() {
-                    ui.collapsing("SU2 stdout tail", |ui| {
-                        ui.monospace(&run.stdout_tail);
-                    });
-                }
-                if !run.stderr_tail.is_empty() {
-                    ui.collapsing("SU2 stderr tail", |ui| {
-                        ui.monospace(&run.stderr_tail);
-                    });
-                }
-                ui.small(
-                    "Process success, residual quality, coefficient diagnostics and user cancellation are separate signals. Even a residual-target pass on the current staircase mesh is not an engineering-valid aerodynamic result.",
-                );
-            }
-            if let Some(error) = &execution.last_error {
-                ui.colored_label(egui::Color32::RED, error);
-            }
-        });
+            });
+    });
 
     Ok(())
 }
