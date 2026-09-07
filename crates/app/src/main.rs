@@ -67,8 +67,10 @@ fn main() {
             EguiPrimaryContextPass,
             (
                 ui::draw_ui,
-                surface_import::draw_surface_import_ui,
-                editor_toolbar::draw_transform_toolbar,
+                surface_import::draw_surface_import_ui
+                    .run_if(accurate_workspace::viewport_tools_visible),
+                editor_toolbar::draw_transform_toolbar
+                    .run_if(accurate_workspace::viewport_tools_visible),
                 accurate_workspace::draw_accurate_workspace_selector,
                 accurate_prepare::draw_accurate_prepare_ui
                     .run_if(accurate_workspace::prepare_tab_selected),
