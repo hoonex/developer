@@ -4,7 +4,6 @@ use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
 use bevy_panorbit_camera::PanOrbitCameraPlugin;
 
 mod accurate_execute;
-mod accurate_lifecycle;
 mod accurate_prepare;
 mod accurate_scene_geometry;
 mod accurate_workspace;
@@ -17,7 +16,6 @@ mod surface_import;
 mod ui;
 
 use accurate_execute::AccurateExecutionRuntime;
-use accurate_lifecycle::AccurateLifecycleRuntime;
 use accurate_prepare::AccurateRuntime;
 use accurate_workspace::AccurateWorkspaceUi;
 use model::ProjectState;
@@ -31,7 +29,6 @@ fn main() {
         .init_resource::<SimulationRuntime>()
         .init_resource::<AccurateRuntime>()
         .init_resource::<AccurateExecutionRuntime>()
-        .init_resource::<AccurateLifecycleRuntime>()
         .init_resource::<AccurateWorkspaceUi>()
         .init_resource::<SurfaceImportRuntime>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -77,7 +74,6 @@ fn main() {
                     .run_if(accurate_workspace::prepare_tab_selected),
                 accurate_execute::draw_accurate_execute_ui
                     .run_if(accurate_workspace::run_tab_selected),
-                accurate_lifecycle::draw_accurate_lifecycle_ui,
             )
                 .chain(),
         )
