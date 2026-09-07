@@ -9,7 +9,7 @@ use crate::exterior_mesh::{
     validate_declared_exterior_fluid_mesh_input, DeclaredExteriorFluidMeshError,
 };
 use crate::imported_surface::AuditedImportedSurfaceBody;
-use crate::su2_mesh::{BoundaryRole, BoundarySource, Su2MarkerBinding, Su2MarkerMap};
+use crate::su2_mesh::{BoundarySource, Su2MarkerMap};
 
 /// Bounded geometric comparison policy for a future source-surface -> exterior-volume handoff.
 ///
@@ -140,14 +140,12 @@ impl From<DeclaredExteriorFluidMeshError> for SourceSurfaceCorrespondenceError {
     }
 }
 
-/// Validates a bounded, bidirectional geometric proximity contract between audited source surfaces
-/// and SceneObject body boundaries in an already-declared exterior-fluid `VolumeMesh`.
+/// Validates bounded, bidirectional geometric proximity between audited source surfaces and
+/// SceneObject body boundaries in an already-declared exterior-fluid `VolumeMesh`.
 ///
-/// For each body, AeroForge compares every source triangle vertex plus triangle centroid against
-/// the closest generated body-boundary triangle, and every generated body-boundary vertex plus
-/// triangle centroid against the closest source triangle. No random/downsampled subset is used. If
-/// the explicit pair-test budget would be exceeded, validation fails before running the expensive
-/// comparison.
+/// Every source/body triangle vertex and triangle centroid is checked against the opposite triangle
+/// surface. No random/downsampled subset is used. If the explicit pair-test budget would be
+/// exceeded, validation fails before the expensive comparison starts.
 ///
 /// Passing this contract proves only bounded bidirectional sample-to-surface proximity under the
 /// supplied tolerance. It does **not** prove exact triangle-to-triangle coincidence, normal/feature
@@ -182,9 +180,9 @@ pub fn validate_source_surface_correspondence(
     let marker_scene_ids = marker_map
         .bindings
         .iter()
-        .filter_map(|binding| match binding.source {
+        .filter_map(|binding| match &binding.source {
             BoundarySource::SceneObject { scene_object_id } => {
-                Some((binding.marker, scene_object_id))
+                Some((binding.marker, *scene_object_id))
             }
             _ => None,
         })
@@ -215,7 +213,7 @@ pub fn validate_source_surface_correspondence(
         }
     }
 
-    let mut prepared = Vec::<PreparedBodyComparison<'_>>::new();
+    let mut prepared = Vec::<PreparedBodyComparison>::new();
     let mut requested_tests = 0_usize;
     for &scene_object_id in &exterior.scene_object_ids {
         let source = sources[&scene_object_id];
@@ -233,11 +231,12 @@ pub fn validate_source_surface_correspondence(
             .len()
             .checked_mul(source_triangles.len())
             .ok_or(SourceSurfaceCorrespondenceError::ComparisonBudgetOverflow)?;
-        let body_tests = forward
-            .checked_add(reverse)
-            .ok_or(SourceSurfaceCorrespondenceError::ComparisonBudgetOverflow)?;
         requested_tests = requested_tests
-            .checked_add(body_tests)
+            .checked_add(
+                forward
+                    .checked_add(reverse)
+                    .ok_or(SourceSurfaceCorrespondenceError::ComparisonBudgetOverflow)?,
+            )
             .ok_or(SourceSurfaceCorrespondenceError::ComparisonBudgetOverflow)?;
 
         prepared.push(PreparedBodyComparison {
@@ -258,8 +257,10 @@ pub fn validate_source_surface_correspondence(
 
     let mut bodies = Vec::with_capacity(prepared.len());
     for body in prepared {
-        let source_to_boundary = max_closest_distance(&body.source_samples, &body.boundary_triangles);
-        let boundary_to_source = max_closest_distance(&body.boundary_samples, &body.source_triangles);
+        let source_to_boundary =
+            max_closest_distance(&body.source_samples, &body.boundary_triangles);
+        let boundary_to_source =
+            max_closest_distance(&body.boundary_samples, &body.source_triangles);
         if source_to_boundary > policy.distance_tolerance
             || boundary_to_source > policy.distance_tolerance
         {
@@ -287,7 +288,7 @@ pub fn validate_source_surface_correspondence(
     })
 }
 
-struct PreparedBodyComparison<'a> {
+struct PreparedBodyComparison {
     scene_object_id: u64,
     source_triangles: Vec<[[f64; 3]; 3]>,
     boundary_triangles: Vec<[[f64; 3]; 3]>,
@@ -358,7 +359,7 @@ fn volume_boundary_triangles(
 fn surface_samples(mesh: &SurfaceMesh) -> Vec<[f64; 3]> {
     let mut used_vertices = BTreeSet::<u32>::new();
     for triangle in &mesh.triangles {
-        used_vertices.extend(triangle);
+        used_vertices.extend(triangle.iter().copied());
     }
     let mut samples = used_vertices
         .into_iter()
@@ -371,7 +372,7 @@ fn surface_samples(mesh: &SurfaceMesh) -> Vec<[f64; 3]> {
 fn volume_boundary_samples(mesh: &VolumeMesh, triangles: &[[u32; 3]]) -> Vec<[f64; 3]> {
     let mut used_vertices = BTreeSet::<u32>::new();
     for triangle in triangles {
-        used_vertices.extend(triangle);
+        used_vertices.extend(triangle.iter().copied());
     }
     let mut samples = used_vertices
         .into_iter()
@@ -476,13 +477,15 @@ fn squared_distance(a: [f64; 3], b: [f64; 3]) -> f64 {
 mod tests {
     use super::*;
     use aeroforge_geometry_core::SurfaceMesh;
-    use aeroforge_volume_core::{BlockBoundaryMarkers, BoundaryMarkerId};
+    use aeroforge_volume_core::BlockBoundaryMarkers;
 
     use crate::imported_surface::{
         audit_imported_surface_for_accurate_meshing, AccurateImportedSurfacePolicy,
     };
     use crate::scene_provenance::build_scene_owner_marker_provenance;
-    use crate::su2_mesh::{DomainAxis, DomainSide};
+    use crate::su2_mesh::{
+        BoundaryRole, BoundarySource, DomainAxis, DomainSide, Su2MarkerBinding,
+    };
     use crate::voxel_mesh::{tetrahedralize_voxel_fluid_domain, VoxelFluidDomainSpec};
 
     fn domain() -> VoxelFluidDomainSpec {
@@ -533,12 +536,18 @@ mod tests {
                 [x0, y1, z1],
             ],
             triangles: vec![
-                [0, 2, 1], [0, 3, 2],
-                [4, 5, 6], [4, 6, 7],
-                [0, 1, 5], [0, 5, 4],
-                [3, 7, 6], [3, 6, 2],
-                [0, 4, 7], [0, 7, 3],
-                [1, 2, 6], [1, 6, 5],
+                [0, 2, 1],
+                [0, 3, 2],
+                [4, 5, 6],
+                [4, 6, 7],
+                [0, 1, 5],
+                [0, 5, 4],
+                [3, 7, 6],
+                [3, 6, 2],
+                [0, 4, 7],
+                [0, 7, 3],
+                [1, 2, 6],
+                [1, 6, 5],
             ],
         }
     }
