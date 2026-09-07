@@ -34,6 +34,32 @@ jobs:
       - name: Test numerical, geometry, volume and accurate-backend cores
         run: cargo test -p aeroforge-flow-core -p aeroforge-geometry-core -p aeroforge-volume-core -p aeroforge-accurate-backend -- --nocapture
 
+  tetgen-real-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install external TetGen test dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tetgen
+          command -v tetgen
+      - name: Cache TetGen smoke Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-tetgen-smoke-cargo-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Validate real TetGen PLC to exterior handoff
+        env:
+          AEROFORGE_REQUIRE_REAL_TETGEN: "1"
+        run: cargo test -p aeroforge-accurate-backend configured_real_tetgen_reaches_validated_handoff -- --nocapture
+
   app-check:
     runs-on: windows-latest
     steps:

@@ -26,6 +26,9 @@ mod validated_case;
 mod voxel_case;
 mod voxel_mesh;
 
+#[cfg(test)]
+mod tetgen_real_smoke;
+
 pub use cancellable_su2::{
     active_su2_case_paths, peek_su2_case_termination, request_su2_case_cancellation,
     run_su2_case_cancellable, run_su2_case_registered, take_su2_case_termination,
