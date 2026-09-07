@@ -12,7 +12,40 @@ use crate::su2_mesh::{BoundarySource, Su2MarkerBinding};
 
 const CONFIG_FILENAME: &str = "case.cfg";
 const PROVENANCE_FILENAME: &str = "marker_provenance.tsv";
+const MESH_FIDELITY_FILENAME: &str = "aeroforge_mesh_fidelity.tsv";
 const EXECUTION_ATTEMPT_FILENAME: &str = "aeroforge_execution_attempt.tsv";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Su2MeshFidelity {
+    /// Generic compatibility path for a caller-supplied `VolumeMesh` that passed the existing
+    /// volume/marker audit. AeroForge intentionally makes no body-fitted claim for this variant.
+    UnclassifiedAuditedVolume,
+    /// Current AeroForge generated path: cell-center occupancy and Cartesian staircase recovery.
+    StaircaseVoxelDerived,
+}
+
+impl Su2MeshFidelity {
+    pub fn manifest_token(self) -> &'static str {
+        match self {
+            Self::UnclassifiedAuditedVolume => "unclassified_audited_volume",
+            Self::StaircaseVoxelDerived => "staircase_voxel_derived",
+        }
+    }
+
+    fn surface_geometry_status(self) -> &'static str {
+        match self {
+            Self::UnclassifiedAuditedVolume => "not_classified",
+            Self::StaircaseVoxelDerived => "cell_center_staircase",
+        }
+    }
+
+    fn body_fitted_status(self) -> &'static str {
+        match self {
+            Self::UnclassifiedAuditedVolume => "not_established",
+            Self::StaircaseVoxelDerived => "false",
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreparedGeneratedSu2Case {
@@ -66,12 +99,30 @@ impl From<std::io::Error> for PrepareGeneratedCaseError {
 }
 
 /// Persists a validated generated bundle into a *new* case directory. Existing case directories
-/// are never overwritten. If any file write fails, the newly-created directory is removed on a
-/// best-effort basis and no prepared handle is returned.
+/// are never overwritten. The compatibility entry point deliberately records only
+/// `UnclassifiedAuditedVolume`; callers that know the actual generated geometry contract should
+/// use `prepare_generated_su2_case_directory_with_fidelity` instead of inferring body-fitted state.
 pub fn prepare_generated_su2_case_directory(
     root: &Path,
     case_directory_name: &str,
     bundle: &GeneratedSu2CaseBundle,
+) -> Result<PreparedGeneratedSu2Case, PrepareGeneratedCaseError> {
+    prepare_generated_su2_case_directory_with_fidelity(
+        root,
+        case_directory_name,
+        bundle,
+        Su2MeshFidelity::UnclassifiedAuditedVolume,
+    )
+}
+
+/// Persists a validated generated bundle and an immutable, bounded mesh-fidelity sidecar into a
+/// new case directory. Current fidelity variants intentionally contain no body-fitted option: that
+/// claim must not become representable until a distinct mesher exists and has its own evidence.
+pub fn prepare_generated_su2_case_directory_with_fidelity(
+    root: &Path,
+    case_directory_name: &str,
+    bundle: &GeneratedSu2CaseBundle,
+    mesh_fidelity: Su2MeshFidelity,
 ) -> Result<PreparedGeneratedSu2Case, PrepareGeneratedCaseError> {
     if !safe_relative_name(case_directory_name) {
         return Err(PrepareGeneratedCaseError::InvalidCaseDirectoryName);
@@ -101,6 +152,7 @@ pub fn prepare_generated_su2_case_directory(
             case_dir.join(PROVENANCE_FILENAME),
             render_marker_provenance(&bundle.marker_bindings).as_bytes(),
         )?;
+        write_mesh_fidelity_provenance(&case_dir, mesh_fidelity)?;
         Ok(())
     })();
 
@@ -136,6 +188,29 @@ pub fn run_prepared_generated_su2_case(
         || {},
     )
     .map(|result| result.run)
+}
+
+fn write_mesh_fidelity_provenance(
+    case_directory: &Path,
+    mesh_fidelity: Su2MeshFidelity,
+) -> std::io::Result<()> {
+    let text = render_mesh_fidelity_provenance(mesh_fidelity);
+    let path = case_directory.join(MESH_FIDELITY_FILENAME);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(text.as_bytes())?;
+    file.sync_all()
+}
+
+fn render_mesh_fidelity_provenance(mesh_fidelity: Su2MeshFidelity) -> String {
+    format!(
+        "key\tvalue\nformat_version\t1\nmesh_fidelity\t{}\nsurface_geometry_status\t{}\nbody_fitted_status\t{}\nengineering_quality_status\tnot_established\n",
+        mesh_fidelity.manifest_token(),
+        mesh_fidelity.surface_geometry_status(),
+        mesh_fidelity.body_fitted_status(),
+    )
 }
 
 fn write_execution_attempt_marker(case_directory: &Path) -> std::io::Result<()> {
@@ -244,7 +319,7 @@ mod tests {
     }
 
     #[test]
-    fn preparation_writes_mesh_config_and_provenance_without_overwrite() {
+    fn preparation_writes_mesh_config_provenance_and_unclassified_fidelity_without_overwrite() {
         let root = temp_root("prepare");
         let prepared = prepare_generated_su2_case_directory(&root, "case_a", &bundle()).unwrap();
         assert_eq!(
@@ -262,12 +337,48 @@ mod tests {
         assert!(provenance.contains("7\tbody_42\tWall\tscene_object:42"));
         assert!(provenance.contains("1\tinlet\tInlet\tdomain_face:X:Min"));
 
+        let fidelity = fs::read_to_string(
+            prepared
+                .working_directory
+                .join(MESH_FIDELITY_FILENAME),
+        )
+        .unwrap();
+        assert!(fidelity.contains("format_version\t1"));
+        assert!(fidelity.contains("mesh_fidelity\tunclassified_audited_volume"));
+        assert!(fidelity.contains("surface_geometry_status\tnot_classified"));
+        assert!(fidelity.contains("body_fitted_status\tnot_established"));
+        assert!(fidelity.contains("engineering_quality_status\tnot_established"));
+
         let second = prepare_generated_su2_case_directory(&root, "case_a", &bundle());
         assert!(matches!(
             second,
             Err(PrepareGeneratedCaseError::Io(ref error))
                 if error.kind() == std::io::ErrorKind::AlreadyExists
         ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn explicit_staircase_fidelity_is_persisted_without_body_fitted_claim() {
+        let root = temp_root("staircase-fidelity");
+        let prepared = prepare_generated_su2_case_directory_with_fidelity(
+            &root,
+            "case_a",
+            &bundle(),
+            Su2MeshFidelity::StaircaseVoxelDerived,
+        )
+        .unwrap();
+        let fidelity = fs::read_to_string(
+            prepared
+                .working_directory
+                .join(MESH_FIDELITY_FILENAME),
+        )
+        .unwrap();
+        assert!(fidelity.contains("mesh_fidelity\tstaircase_voxel_derived"));
+        assert!(fidelity.contains("surface_geometry_status\tcell_center_staircase"));
+        assert!(fidelity.contains("body_fitted_status\tfalse"));
+        assert!(fidelity.contains("engineering_quality_status\tnot_established"));
+        assert!(!fidelity.contains("body_fitted_status\ttrue"));
         fs::remove_dir_all(root).unwrap();
     }
 
