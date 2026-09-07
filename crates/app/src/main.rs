@@ -5,6 +5,7 @@ use bevy_panorbit_camera::PanOrbitCameraPlugin;
 
 mod accurate_execute;
 mod accurate_prepare;
+mod accurate_recovery;
 mod accurate_scene_geometry;
 mod accurate_workspace;
 mod editor_toolbar;
@@ -17,6 +18,7 @@ mod ui;
 
 use accurate_execute::AccurateExecutionRuntime;
 use accurate_prepare::AccurateRuntime;
+use accurate_recovery::AccurateRecoveryUi;
 use accurate_workspace::AccurateWorkspaceUi;
 use model::ProjectState;
 use simulation::SimulationRuntime;
@@ -29,6 +31,7 @@ fn main() {
         .init_resource::<SimulationRuntime>()
         .init_resource::<AccurateRuntime>()
         .init_resource::<AccurateExecutionRuntime>()
+        .init_resource::<AccurateRecoveryUi>()
         .init_resource::<AccurateWorkspaceUi>()
         .init_resource::<SurfaceImportRuntime>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -72,6 +75,7 @@ fn main() {
                 editor_toolbar::draw_transform_toolbar
                     .run_if(accurate_workspace::viewport_tools_visible),
                 accurate_workspace::draw_accurate_workspace_selector,
+                accurate_recovery::draw_accurate_recovery_notice,
                 accurate_prepare::draw_accurate_prepare_ui
                     .run_if(accurate_workspace::prepare_tab_selected),
                 accurate_execute::draw_accurate_execute_ui
