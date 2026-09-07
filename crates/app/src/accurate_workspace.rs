@@ -20,6 +20,7 @@ const LIFECYCLE_PROVENANCE_FILENAME: &str = "aeroforge_lifecycle.tsv";
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AccurateWorkspaceTab {
     #[default]
+    Viewport,
     Prepare,
     Run,
 }
@@ -70,6 +71,11 @@ pub fn draw_accurate_workspace_selector(
             ui.strong("Accurate solve");
             ui.separator();
             ui.add_enabled_ui(!active, |ui| {
+                ui.selectable_value(
+                    &mut workspace.tab,
+                    AccurateWorkspaceTab::Viewport,
+                    "Viewport",
+                );
                 ui.selectable_value(
                     &mut workspace.tab,
                     AccurateWorkspaceTab::Prepare,
@@ -231,6 +237,14 @@ pub fn run_tab_selected(
     workspace: Res<AccurateWorkspaceUi>,
 ) -> bool {
     state.simulation.mode == SolverMode::Accurate && workspace.tab == AccurateWorkspaceTab::Run
+}
+
+pub fn viewport_tools_visible(
+    state: Res<ProjectState>,
+    workspace: Res<AccurateWorkspaceUi>,
+) -> bool {
+    state.simulation.mode != SolverMode::Accurate
+        || workspace.tab == AccurateWorkspaceTab::Viewport
 }
 
 fn begin_active_run(
