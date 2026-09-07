@@ -12,7 +12,7 @@ AeroForge deliberately separates **interactive preview** from **engineering solv
 
 ### Interactive preview: native GPU LBM
 
-Use a voxel/SDF domain and D3Q19 lattice-Boltzmann method (LBM). The CPU implementation in `flow_core` is the correctness/reference kernel. The production preview path will move the same field model to GPU compute.
+Use a voxel/SDF domain and D3Q19 lattice-Boltzmann method (LBM). The CPU implementation in `flow_core` is the correctness/reference kernel. The production preview path uses the same field model on GPU compute where supported.
 
 Why LBM for preview:
 
@@ -35,33 +35,65 @@ Current preview limitations stay visible in the UI:
 
 `flow_core::scaling` provides physical-scaling diagnostics so the program can state when cubic-grid or BGK relaxation constraints make a quantitative mapping implausible instead of silently changing viscosity.
 
+`FarField` in the native preview is the prescribed free-stream NEQ boundary implemented by AeroForge. It must not be described as a generic characteristic, convective, or non-reflecting boundary.
+
 ### Accurate solve v1: SU2 adapter
 
-The first engineering-grade backend should integrate **SU2_CFD** rather than attempting to recreate an industrial finite-volume/RANS stack inside AeroForge from scratch.
+The first accurate backend integrates **SU2_CFD** rather than attempting to recreate an industrial finite-volume/RANS stack inside AeroForge from scratch.
 
-Target initial configuration:
+Current evidenced runtime contract:
 
-- incompressible Navier-Stokes / RANS;
+- SU2 8.5.0 Harrier;
+- incompressible Navier-Stokes / RANS-SST configuration where requested;
 - dimensional units;
-- SST turbulence model where turbulent RANS is requested;
 - explicit residual/convergence history;
-- native force / drag / lift extraction;
-- result import into AeroForge for common visualization and comparison.
+- exact aggregate world-axis force/moment coefficient ingestion;
+- exact SU2 8.5.0 parenthesized per-surface coefficient ingestion;
+- result and provenance import into AeroForge.
 
-AeroForge owns case preparation, geometry revision tracking, mesh provenance, config generation, process execution, progress parsing, result ingestion, and reproducibility metadata. SU2 owns the accurate numerical solve.
+AeroForge owns case preparation, geometry revision tracking, mesh provenance, config generation, process execution, progress parsing, result ingestion, cancellation coordination, and reproducibility metadata. SU2 owns the numerical solve.
 
 The adapter must detect capabilities rather than pretend every preview source maps one-to-one to SU2:
 
-- domain-boundary Plane/Nozzle sources can map to velocity inlets;
-- internal fan/propulsor-like surfaces can map to actuator-disk-style models where physically appropriate;
-- arbitrary BoxVolume/Sphere preview forcing is **not** automatically an equivalent accurate boundary condition and must be reported as unsupported or converted through an explicit physical model chosen by the user;
-- every accurate result records SU2 version, config, mesh hash, geometry revision, convergence history, and source translation decisions.
+- domain-boundary Plane/Nozzle sources can map to velocity inlets when an explicit physical translation exists;
+- internal fan/propulsor-like surfaces can map to actuator-style models only when explicitly implemented and physically appropriate;
+- arbitrary BoxVolume/Sphere preview forcing is **not** automatically an equivalent accurate boundary condition and must remain unsupported or use an explicit physical model;
+- every accurate result records solver/runtime, config, mesh/provenance, geometry revision, convergence history, coefficient references/frame, and source translation decisions.
 
-Packaging SU2 inside AeroForge is a separate distribution/licensing task. Initial development may discover an existing SU2 installation or use a separately provisioned executable; the UI must report the exact backend used.
+The current generated accurate mesh is deterministic cell-center occupancy converted to a Cartesian staircase tetrahedral fluid mesh with six tetrahedra per fluid voxel. It is **not body-fitted** and must not be presented as engineering-quality meshing.
+
+Packaging SU2 inside AeroForge is a separate distribution/licensing task. Current desktop execution discovers a separately provisioned runtime and restricts execution to the externally evidenced SU2 8.5.0 contract.
 
 ### Future native accurate backend
 
 A native pressure-based finite-volume backend may be added later behind the same project/result interface. It is not a prerequisite for delivering credible accurate results while the SU2 adapter is available.
+
+## Desktop workspace
+
+The desktop editor is organized around one viewport-first shell rather than independent feature windows competing for permanent space:
+
+- the left **Scene** panel defaults to 235 px and is resizable;
+- the right **Inspector** panel defaults to 350 px and is resizable;
+- analytic primitives and imported surfaces share one `Geometry` selection list;
+- the main Inspector is the single editor for selected analytic geometry, imported surfaces, and wind sources;
+- simulation controls remain in the Inspector, while preview-runtime and lower-level GPU diagnostics are collapsible rather than permanently consuming vertical space;
+- surface import is an on-demand, import-only dialog; imported-object transform/delete controls are not duplicated inside the import path;
+- successful import selects the new stable `SceneObject.id`, so subsequent editing happens through the common Scene/Inspector path.
+
+Accurate mode has a dedicated **Accurate solve** workspace strip. It owns the desktop solve lifecycle presentation and makes the heavy views mutually exclusive:
+
+- `Prepare` shows the generated-case preparation surface;
+- `Run / Results` shows explicit SU2 persistence/execution and final diagnostics;
+- while SU2 is running or cancelling, `Run / Results` remains selected so completion polling cannot be hidden by a tab switch;
+- live history, registered-case identity, direct-child cancellation state, and cancellation-provenance status are shown in the solve workspace strip;
+- the former standalone `SU2 live lifecycle` window and duplicate lifecycle resource were removed;
+- `AccurateExecutionStatus` remains the single execution lifecycle state owner: `Idle / Running / Cancelling / Cancelled / Succeeded / Failed`.
+
+Live targeting is based on the backend registry of actually active direct-child cases, bounded by run root, scene revision, and sequence. The workspace does not discover an active run by selecting a similarly named old directory from disk. Ambiguous registered matches fail closed.
+
+Cancellation targets only the direct `SU2_CFD` child registered for that case. It does **not** claim process-tree or MPI-worker cancellation, pause/resume, checkpoint restart, or crash recovery. Confirmed user cancellation may persist the immutable bounded `aeroforge_lifecycle.tsv` sidecar; this is not a recovery journal and does not change `aeroforge_run_manifest.tsv` format v5.
+
+These workspace changes are editor/layout/integration behavior. Routine compile/unit/GPU CI proves source integration and regressions only; no rendered-window screenshot or pixel-level visual-design proof is implied by those checks.
 
 ## Wind source model
 
@@ -88,7 +120,7 @@ Implemented geometry capabilities:
 1. analytic Box / Sphere / Cylinder creation, viewport picking, and transform gizmos;
 2. `geometry_core` parsers for STL, OBJ, and static glTF/GLB surface geometry;
 3. desktop OBJ/STL/glTF/GLB path import into object-local `SurfaceMesh` storage, including GLB BIN and base64-buffer support through `geometry_core` plus explicit local-relative external `.bin` resolution for `.gltf`; URI schemes, absolute paths, query/fragment references and parent-directory traversal fail closed;
-4. imported surfaces are promoted to finite indexed Bevy editor meshes for viewport picking and the common W/E/R transform gizmo path, while an imported-selection inspector exposes the same position/rotation/signed-scale transform and deletion contract;
+4. imported surfaces are promoted to finite indexed Bevy editor meshes for viewport picking and the common W/E/R transform-gizmo path, while the unified main Inspector owns name, position, rotation, signed scale, and deletion for the selected imported SceneObject;
 5. topology reporting plus a deterministic bounded repair/audit contract for imported surfaces entering solver rasterization;
 6. one shared primitive/imported cell-center ownership raster feeds native CPU/GPU preview preparation and the generated staircase SU2 path, with deterministic lowest-stable-ID overlap ownership and duplicate cross-kind IDs failing closed;
 7. stable imported `SceneObject.id` provenance survives the current generated staircase tetrahedral SU2 mesh and marker bindings.
@@ -132,12 +164,16 @@ Every result set carries enough provenance to prevent stale or incomparable resu
 - solver backend and exact version;
 - geometry revision/hash;
 - source definitions and backend translation;
-- grid/mesh resolution and mesh hash;
+- grid/mesh resolution and mesh/provenance identity;
 - fluid properties;
 - timestep/relaxation/numerical scheme settings;
 - convergence/residual history where applicable;
-- force/drag/lift integration settings;
-- completion status and any warnings about unsupported physics or scaling.
+- explicit coefficient reference area/length and coordinate/moment frame for accurate diagnostics;
+- completion status and warnings about unsupported physics or scaling.
+
+For the current generated +X-flow SU2 path, coefficient references are explicit positive finite SI `REF_AREA` / `REF_LENGTH`; AeroForge pins `AOA=0`, sideslip=0, and moment origin `(0,0,0)`. AeroForge is Y-up, so raw SU2 `CL` is not silently relabeled as AeroForge vertical lift. Aggregate and per-body diagnostics retain exact world-axis `CFx/CFy/CFz/CMx/CMy/CMz` terminology and share the global reference/origin contract.
+
+Per-body values are attributed through persisted marker bindings and `BoundarySource::SceneObject { scene_object_id }`, never by reverse-parsing marker text. They are not automatically body-normalized engineering `Cd/Cl` values.
 
 Preview and accurate result sets can coexist for comparison, but the UI always labels which backend produced each field or scalar.
 
@@ -145,7 +181,7 @@ Preview and accurate result sets can coexist for comparison, but the UI always l
 
 Numerical claims require benchmark evidence, not screenshots.
 
-Preview/reference milestones:
+Preview/reference milestones include:
 
 - D3Q19 equilibrium/rest conservation;
 - uniform periodic flow conservation;
@@ -153,14 +189,16 @@ Preview/reference milestones:
 - Poiseuille/channel-flow profile;
 - lid-driven cavity benchmark;
 - flow around a cylinder and vortex shedding regime;
-- grid-convergence checks.
+- grid/domain sensitivity checks.
 
-Accurate-backend milestones:
+Accurate-backend milestones include:
 
 - reproduce selected upstream SU2 regression/tutorial cases without AeroForge translation changes;
-- canonical external cylinder drag cases;
-- NACA airfoil cases against published reference data;
-- mesh-convergence and turbulence-model sensitivity checks;
-- cross-backend comparison where the preview regime is expected to overlap.
+- generated and imported staircase cases through the pinned runtime;
+- exact aggregate/per-surface diagnostic ingestion and stable SceneObject attribution;
+- future body-fitted/higher-fidelity exterior-fluid meshing through a distinct evidenced path;
+- trusted dimensional body reference comparisons with grid/domain/model sensitivity before engineering coefficient claims.
+
+Existing cylinder/grid/domain studies are diagnostics and do not establish formal GCI. Successful SU2 exit, finite coefficients, aggregate/surface consistency, or `residual_target_met` do not by themselves establish aerodynamic accuracy.
 
 UI screenshots are evidence for editor/visualization behavior only. They are never CFD validation.
