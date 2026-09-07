@@ -8,18 +8,18 @@ mod accurate_prepare;
 mod accurate_scene_geometry;
 mod editor_toolbar;
 mod gpu_preview;
-mod imported_inspector;
 mod model;
 mod scene;
 mod simulation;
 mod surface_import;
-mod ui;
+mod ui_shell;
 
 use accurate_execute::AccurateExecutionRuntime;
 use accurate_prepare::AccurateRuntime;
 use model::ProjectState;
 use simulation::SimulationRuntime;
 use surface_import::SurfaceImportRuntime;
+use ui_shell::DesktopUiState;
 
 fn main() {
     App::new()
@@ -29,6 +29,7 @@ fn main() {
         .init_resource::<AccurateRuntime>()
         .init_resource::<AccurateExecutionRuntime>()
         .init_resource::<SurfaceImportRuntime>()
+        .init_resource::<DesktopUiState>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "AeroForge — 3D Aerodynamics Workbench".into(),
@@ -64,12 +65,11 @@ fn main() {
         .add_systems(
             EguiPrimaryContextPass,
             (
-                ui::draw_ui,
-                surface_import::draw_surface_import_ui,
-                imported_inspector::draw_imported_inspector,
+                ui_shell::draw_ui_shell,
+                surface_import::draw_surface_import_ui.run_if(ui_shell::show_import_dialog),
                 editor_toolbar::draw_transform_toolbar,
-                accurate_prepare::draw_accurate_prepare_ui,
-                accurate_execute::draw_accurate_execute_ui,
+                accurate_prepare::draw_accurate_prepare_ui.run_if(ui_shell::show_prepare_dialog),
+                accurate_execute::draw_accurate_execute_ui.run_if(ui_shell::show_execute_dialog),
             )
                 .chain(),
         )
