@@ -12,6 +12,10 @@ use crate::exterior_quality::{
     ExteriorMeshQualityReport,
 };
 use crate::imported_surface::AuditedImportedSurfaceBody;
+use crate::source_intersection::{
+    validate_source_surface_intersections, SourceSurfaceIntersectionError,
+    SourceSurfaceIntersectionPolicy, SourceSurfaceIntersectionReport,
+};
 use crate::su2_mesh::Su2MarkerMap;
 use crate::surface_correspondence::{
     validate_source_surface_correspondence, SourceSurfaceCorrespondenceError,
@@ -22,14 +26,16 @@ use crate::surface_correspondence::{
 ///
 /// Construction is intentionally restricted to [`validate_candidate_exterior_mesher_handoff`],
 /// which requires stable exterior-boundary provenance, caller-selected local tetrahedron quality,
-/// and bounded source-surface correspondence. Holding this value proves only those contracts. It is
-/// deliberately not a body-fitted, non-intersection, or CFD-accuracy certificate.
+/// bounded source-surface intersection checks, and bounded source-surface correspondence. Holding
+/// this value proves only those contracts under the supplied policies. It is deliberately not a
+/// body-fitted, volumetric non-overlap, feature-preservation, or CFD-accuracy certificate.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValidatedExteriorMesherHandoff {
     pub mesh: VolumeMesh,
     pub marker_map: Su2MarkerMap,
     pub exterior: DeclaredExteriorFluidMeshReport,
     pub quality: ExteriorMeshQualityReport,
+    pub source_intersections: SourceSurfaceIntersectionReport,
     pub correspondence: SourceSurfaceCorrespondenceReport,
 }
 
@@ -37,6 +43,7 @@ pub struct ValidatedExteriorMesherHandoff {
 pub enum ExteriorMesherHandoffError {
     Exterior(DeclaredExteriorFluidMeshError),
     Quality(ExteriorMeshQualityError),
+    SourceIntersection(SourceSurfaceIntersectionError),
     Correspondence(SourceSurfaceCorrespondenceError),
 }
 
@@ -45,6 +52,9 @@ impl Display for ExteriorMesherHandoffError {
         match self {
             Self::Exterior(error) => write!(f, "candidate exterior mesher provenance failed: {error}"),
             Self::Quality(error) => write!(f, "candidate exterior mesher local quality failed: {error}"),
+            Self::SourceIntersection(error) => {
+                write!(f, "candidate exterior mesher source intersection gate failed: {error}")
+            }
             Self::Correspondence(error) => {
                 write!(f, "candidate exterior mesher source correspondence failed: {error}")
             }
@@ -57,6 +67,7 @@ impl Error for ExteriorMesherHandoffError {
         match self {
             Self::Exterior(error) => Some(error),
             Self::Quality(error) => Some(error),
+            Self::SourceIntersection(error) => Some(error),
             Self::Correspondence(error) => Some(error),
         }
     }
@@ -74,6 +85,12 @@ impl From<ExteriorMeshQualityError> for ExteriorMesherHandoffError {
     }
 }
 
+impl From<SourceSurfaceIntersectionError> for ExteriorMesherHandoffError {
+    fn from(value: SourceSurfaceIntersectionError) -> Self {
+        Self::SourceIntersection(value)
+    }
+}
+
 impl From<SourceSurfaceCorrespondenceError> for ExteriorMesherHandoffError {
     fn from(value: SourceSurfaceCorrespondenceError) -> Self {
         Self::Correspondence(value)
@@ -83,26 +100,31 @@ impl From<SourceSurfaceCorrespondenceError> for ExteriorMesherHandoffError {
 /// Validates and takes ownership of one candidate exterior-fluid mesher result.
 ///
 /// A caller must provide the candidate tetrahedral mesh, its authoritative SU2 marker/source map,
-/// audited source surfaces keyed by stable `SceneObject.id`, and explicit local-quality and
-/// correspondence policies. The candidate is promoted to an owned handoff only after:
+/// audited source surfaces keyed by stable `SceneObject.id`, and explicit local-quality,
+/// source-intersection, and correspondence policies. The candidate is promoted to an owned handoff
+/// only after:
 ///
 /// 1. the declared exterior-fluid topology/provenance contract succeeds;
-/// 2. caller-selected tetra mean-ratio and edge-ratio limits succeed; and
-/// 3. bounded bidirectional source-surface correspondence succeeds.
+/// 2. caller-selected tetra mean-ratio and edge-ratio limits succeed;
+/// 3. bounded source-shell self/inter-body intersection checks succeed; and
+/// 4. bounded bidirectional source-surface correspondence succeeds.
 ///
 /// This function does not assign or infer mesh fidelity. In particular, successful construction
-/// must not be translated into `body_fitted_status=true`; source self-intersection checks,
-/// volumetric overlap checks, feature preservation, boundary-layer evidence, and solver validation
+/// must not be translated into `body_fitted_status=true`; volumetric tetrahedron overlap checks,
+/// minimum body separation, feature preservation, boundary-layer evidence, and solver validation
 /// remain separate obligations.
 pub fn validate_candidate_exterior_mesher_handoff(
     mesh: VolumeMesh,
     marker_map: Su2MarkerMap,
     audited_sources: &[AuditedImportedSurfaceBody],
     quality_policy: ExteriorMeshQualityPolicy,
+    source_intersection_policy: SourceSurfaceIntersectionPolicy,
     correspondence_policy: SourceSurfaceCorrespondencePolicy,
 ) -> Result<ValidatedExteriorMesherHandoff, ExteriorMesherHandoffError> {
     let exterior = validate_declared_exterior_fluid_mesh_input(&mesh, &marker_map)?;
     let quality = validate_exterior_mesh_quality(&mesh, quality_policy)?;
+    let source_intersections =
+        validate_source_surface_intersections(audited_sources, source_intersection_policy)?;
     let correspondence = validate_source_surface_correspondence(
         &mesh,
         &marker_map,
@@ -115,6 +137,7 @@ pub fn validate_candidate_exterior_mesher_handoff(
         marker_map,
         exterior,
         quality,
+        source_intersections,
         correspondence,
     })
 }
@@ -224,6 +247,13 @@ mod tests {
         }
     }
 
+    fn source_intersection_policy() -> SourceSurfaceIntersectionPolicy {
+        SourceSurfaceIntersectionPolicy {
+            geometric_epsilon: 1.0e-10,
+            max_triangle_pair_tests: 100_000,
+        }
+    }
+
     fn quality_policy() -> ExteriorMeshQualityPolicy {
         ExteriorMeshQualityPolicy {
             min_mean_ratio: 1.0e-6,
@@ -239,6 +269,7 @@ mod tests {
             marker_map,
             &[source],
             quality_policy(),
+            source_intersection_policy(),
             correspondence_policy(),
         )
         .unwrap();
@@ -247,6 +278,8 @@ mod tests {
         assert_eq!(handoff.exterior.domain_boundary_count, 6);
         assert!(handoff.quality.min_mean_ratio > 0.0);
         assert!(handoff.quality.max_edge_length_ratio <= 10.0);
+        assert_eq!(handoff.source_intersections.scene_object_ids, vec![42]);
+        assert!(handoff.source_intersections.triangle_pair_tests > 0);
         assert_eq!(handoff.correspondence.bodies.len(), 1);
         assert_eq!(handoff.correspondence.bodies[0].scene_object_id, 42);
         assert_eq!(handoff.correspondence.point_triangle_tests, 480);
@@ -271,6 +304,7 @@ mod tests {
                 min_mean_ratio: 1.0,
                 max_edge_length_ratio: 10.0,
             },
+            source_intersection_policy(),
             correspondence_policy(),
         )
         .unwrap_err();
@@ -279,6 +313,30 @@ mod tests {
             error,
             ExteriorMesherHandoffError::Quality(
                 ExteriorMeshQualityError::MeanRatioBelowLimit { .. }
+            )
+        ));
+    }
+
+    #[test]
+    fn source_intersection_budget_is_required_before_handoff() {
+        let (mesh, marker_map, source) = fixture();
+        let error = validate_candidate_exterior_mesher_handoff(
+            mesh,
+            marker_map,
+            &[source],
+            quality_policy(),
+            SourceSurfaceIntersectionPolicy {
+                max_triangle_pair_tests: 1,
+                ..source_intersection_policy()
+            },
+            correspondence_policy(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ExteriorMesherHandoffError::SourceIntersection(
+                SourceSurfaceIntersectionError::PairBudgetExceeded { .. }
             )
         ));
     }
@@ -295,6 +353,7 @@ mod tests {
             marker_map,
             &[source],
             quality_policy(),
+            source_intersection_policy(),
             SourceSurfaceCorrespondencePolicy {
                 distance_tolerance: 1.0e-3,
                 ..correspondence_policy()
@@ -325,6 +384,7 @@ mod tests {
             marker_map,
             &[source],
             quality_policy(),
+            source_intersection_policy(),
             correspondence_policy(),
         )
         .unwrap_err();
