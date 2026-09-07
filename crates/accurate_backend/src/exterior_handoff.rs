@@ -26,16 +26,21 @@ use crate::surface_correspondence::{
 ///
 /// Construction is intentionally restricted to [`validate_candidate_exterior_mesher_handoff`],
 /// which requires stable exterior-boundary provenance, caller-selected local tetrahedron quality,
-/// bounded source-surface intersection checks, and bounded source-surface correspondence. Holding
-/// this value proves only those contracts under the supplied policies. It is deliberately not a
-/// body-fitted, volumetric non-overlap, feature-preservation, or CFD-accuracy certificate.
+/// bounded source-surface intersection checks, and bounded source-surface correspondence. The
+/// exact caller-selected policies are retained alongside the resulting reports so downstream
+/// provenance does not lose the thresholds/tolerances/budgets that admitted the candidate.
+/// Holding this value proves only those contracts under the retained policies. It is deliberately
+/// not a body-fitted, volumetric non-overlap, feature-preservation, or CFD-accuracy certificate.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValidatedExteriorMesherHandoff {
     pub mesh: VolumeMesh,
     pub marker_map: Su2MarkerMap,
     pub exterior: DeclaredExteriorFluidMeshReport,
+    pub quality_policy: ExteriorMeshQualityPolicy,
     pub quality: ExteriorMeshQualityReport,
+    pub source_intersection_policy: SourceSurfaceIntersectionPolicy,
     pub source_intersections: SourceSurfaceIntersectionReport,
+    pub correspondence_policy: SourceSurfaceCorrespondencePolicy,
     pub correspondence: SourceSurfaceCorrespondenceReport,
 }
 
@@ -109,10 +114,10 @@ impl From<SourceSurfaceCorrespondenceError> for ExteriorMesherHandoffError {
 /// 3. bounded source-shell self/inter-body intersection checks succeed; and
 /// 4. bounded bidirectional source-surface correspondence succeeds.
 ///
-/// This function does not assign or infer mesh fidelity. In particular, successful construction
-/// must not be translated into `body_fitted_status=true`; volumetric tetrahedron overlap checks,
-/// minimum body separation, feature preservation, boundary-layer evidence, and solver validation
-/// remain separate obligations.
+/// The exact policies used for steps 2-4 are retained in the returned handoff. This function does
+/// not assign or infer mesh fidelity. In particular, successful construction must not be translated
+/// into `body_fitted_status=true`; volumetric tetrahedron overlap checks, minimum body separation,
+/// feature preservation, boundary-layer evidence, and solver validation remain separate obligations.
 pub fn validate_candidate_exterior_mesher_handoff(
     mesh: VolumeMesh,
     marker_map: Su2MarkerMap,
@@ -122,22 +127,27 @@ pub fn validate_candidate_exterior_mesher_handoff(
     correspondence_policy: SourceSurfaceCorrespondencePolicy,
 ) -> Result<ValidatedExteriorMesherHandoff, ExteriorMesherHandoffError> {
     let exterior = validate_declared_exterior_fluid_mesh_input(&mesh, &marker_map)?;
-    let quality = validate_exterior_mesh_quality(&mesh, quality_policy)?;
-    let source_intersections =
-        validate_source_surface_intersections(audited_sources, source_intersection_policy)?;
+    let quality = validate_exterior_mesh_quality(&mesh, quality_policy.clone())?;
+    let source_intersections = validate_source_surface_intersections(
+        audited_sources,
+        source_intersection_policy.clone(),
+    )?;
     let correspondence = validate_source_surface_correspondence(
         &mesh,
         &marker_map,
         audited_sources,
-        correspondence_policy,
+        correspondence_policy.clone(),
     )?;
 
     Ok(ValidatedExteriorMesherHandoff {
         mesh,
         marker_map,
         exterior,
+        quality_policy,
         quality,
+        source_intersection_policy,
         source_intersections,
+        correspondence_policy,
         correspondence,
     })
 }
@@ -276,10 +286,16 @@ mod tests {
 
         assert_eq!(handoff.exterior.scene_object_ids, vec![42]);
         assert_eq!(handoff.exterior.domain_boundary_count, 6);
+        assert_eq!(handoff.quality_policy, quality_policy());
         assert!(handoff.quality.min_mean_ratio > 0.0);
         assert!(handoff.quality.max_edge_length_ratio <= 10.0);
+        assert_eq!(
+            handoff.source_intersection_policy,
+            source_intersection_policy()
+        );
         assert_eq!(handoff.source_intersections.scene_object_ids, vec![42]);
         assert!(handoff.source_intersections.triangle_pair_tests > 0);
+        assert_eq!(handoff.correspondence_policy, correspondence_policy());
         assert_eq!(handoff.correspondence.bodies.len(), 1);
         assert_eq!(handoff.correspondence.bodies[0].scene_object_id, 42);
         assert_eq!(handoff.correspondence.point_triangle_tests, 480);
