@@ -10,6 +10,7 @@ mod mixed_scene_voxel;
 mod prepared_case;
 mod primitive_voxel;
 mod scene_provenance;
+mod source_intersection;
 mod su2;
 mod su2_mesh;
 mod surface_correspondence;
@@ -66,6 +67,10 @@ pub use primitive_voxel::{
 pub use scene_provenance::{
     build_active_scene_owner_marker_provenance, build_scene_owner_marker_provenance,
     scene_object_wall_tag, SceneOwnerMarkerProvenance, SceneOwnerProvenanceError,
+};
+pub use source_intersection::{
+    validate_source_surface_intersections, SourceSurfaceIntersectionError,
+    SourceSurfaceIntersectionPolicy, SourceSurfaceIntersectionReport,
 };
 pub use su2::{
     discover_su2, probe_su2_banner, run_su2_case, FlowModel, InletBoundary, Su2Case,
