@@ -1,4 +1,5 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -267,10 +268,20 @@ fn write_cancelled_lifecycle_provenance(
         .and_then(|quality| quality.max_residual_log10)
         .map(|value| value.to_string())
         .unwrap_or_else(|| "none".into());
+    let confirmed_epoch_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
     let text = format!(
-        "key\tvalue\nformat_version\t1\ntermination\tcancelled\ncancellation_scope\tdirect_su2_child\nscene_revision\t{revision}\nrun_sequence\t{sequence}\nlive_last_iteration\t{last_iteration}\nlive_max_residual_log10\t{max_residual}\n"
+        "key\tvalue\nformat_version\t1\ntermination\tcancelled\ncancellation_scope\tdirect_su2_child\nscene_revision\t{revision}\nrun_sequence\t{sequence}\nconfirmed_epoch_ms\t{confirmed_epoch_ms}\nlive_last_iteration\t{last_iteration}\nlive_max_residual_log10\t{max_residual}\n"
     );
-    fs::write(case_directory.join(LIFECYCLE_PROVENANCE_FILENAME), text)
+    let path = case_directory.join(LIFECYCLE_PROVENANCE_FILENAME);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(text.as_bytes())?;
+    file.sync_all()
 }
 
 fn find_active_case_directory(root: &Path, revision: u64, sequence: u64) -> Option<PathBuf> {
@@ -394,7 +405,7 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_run_persists_bounded_lifecycle_provenance() {
+    fn cancelled_run_persists_immutable_bounded_lifecycle_provenance() {
         let root = temp_root("cancel-provenance");
         fs::create_dir_all(&root).unwrap();
         write_cancelled_lifecycle_provenance(&root, 42, 7, None).unwrap();
@@ -404,7 +415,11 @@ mod tests {
         assert!(text.contains("cancellation_scope\tdirect_su2_child"));
         assert!(text.contains("scene_revision\t42"));
         assert!(text.contains("run_sequence\t7"));
+        assert!(text.contains("confirmed_epoch_ms\t"));
         assert!(text.contains("live_last_iteration\tnone"));
+
+        let error = write_cancelled_lifecycle_provenance(&root, 42, 7, None).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
         fs::remove_dir_all(root).unwrap();
     }
 }
