@@ -13,6 +13,7 @@ permissions:
 # Evidence-only rerun after the desktop GPU storage-binding fix.
 env:
   CARGO_TERM_COLOR: always
+  WGPU_SETTINGS_PRIO: webgl2
 
 jobs:
   screenshot:
