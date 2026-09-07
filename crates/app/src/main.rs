@@ -4,6 +4,7 @@ use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
 use bevy_panorbit_camera::PanOrbitCameraPlugin;
 
 mod accurate_execute;
+mod accurate_exterior_admission;
 mod accurate_prepare;
 mod accurate_recovery;
 mod accurate_scene_geometry;
