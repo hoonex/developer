@@ -375,8 +375,21 @@ fn segment_intersects_triangle(
 ) -> bool {
     let normal = cross(sub(triangle[1], triangle[0]), sub(triangle[2], triangle[0]));
     let normal_length = length(normal);
-    let d0 = dot(normal, sub(segment[0], triangle[0])) / normal_length;
-    let d1 = dot(normal, sub(segment[1], triangle[0])) / normal_length;
+    let mut d0 = dot(normal, sub(segment[0], triangle[0])) / normal_length;
+    let mut d1 = dot(normal, sub(segment[1], triangle[0])) / normal_length;
+
+    // `ignore_point` is supplied only for a topologically shared mesh vertex. If one endpoint is
+    // exactly that shared vertex, it is mathematically on the opposite triangle plane. Floating
+    // evaluation of the normalized plane equation can nevertheless produce a tiny non-zero signed
+    // distance, which shifts the reconstructed hit just beyond the caller's geometric epsilon and
+    // turns a legal vertex fan into a false self-intersection. Snap only the exact shared endpoint
+    // to zero plane distance; do not widen epsilon or suppress any other segment contact.
+    if ignore_point.is_some_and(|point| point == segment[0]) {
+        d0 = 0.0;
+    }
+    if ignore_point.is_some_and(|point| point == segment[1]) {
+        d1 = 0.0;
+    }
 
     if d0.abs() <= epsilon && d1.abs() <= epsilon {
         return coplanar_segment_intersects_triangle(
@@ -710,6 +723,36 @@ mod tests {
         assert_eq!(report.scene_object_ids, vec![42]);
         assert!(report.triangle_pair_tests > 0);
         assert!(report.skipped_shared_edge_pairs > 0);
+    }
+
+    #[test]
+    fn shared_vertex_endpoint_roundoff_is_not_a_false_intersection() {
+        // These coordinates are the exact f32->f64 desktop sphere vertices that previously made
+        // two legal vertex-fan triangles report a hit about 1.08e-10 m away from their shared
+        // endpoint under a 1e-10 m policy, solely because the shared endpoint's normalized plane
+        // distance rounded to a tiny non-zero value.
+        let shared = [0.2414814531803131, 3.433012694120407, 0.0647047609090805];
+        let first = [
+            [0.125, 3.482962906360626, 0.03349364921450615],
+            [0.1120719313621521, 3.482962906360626, 0.0647047609090805],
+            shared,
+        ];
+        let second = [
+            shared,
+            [0.21650634706020355, 3.433012694120407, 0.125],
+            [0.34150633215904236, 3.353553384542465, 0.09150634706020355],
+        ];
+
+        assert!(!triangles_intersect(first, second, 1.0e-10, Some(shared)));
+    }
+
+    #[test]
+    fn shared_vertex_does_not_hide_coplanar_overlap_away_from_shared_point() {
+        let shared = [0.0, 0.0, 0.0];
+        let first = [shared, [2.0, 0.0, 0.0], [0.0, 2.0, 0.0]];
+        let second = [shared, [1.5, 0.5, 0.0], [0.5, 1.5, 0.0]];
+
+        assert!(triangles_intersect(first, second, 1.0e-10, Some(shared)));
     }
 
     #[test]
