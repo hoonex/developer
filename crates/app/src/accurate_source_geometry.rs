@@ -111,19 +111,40 @@ fn imported_surface_world_mesh(object: &ImportedSurfaceObject) -> Result<Surface
         ));
     }
 
-    let rotation = rotation_from_degrees(object.rotation_deg);
+    // Preserve the pre-unification imported transform semantics: mesh coordinates, scaling,
+    // quaternion application, and translation are evaluated in f64 after the editor's f32
+    // transform state is captured. This avoids silently degrading imported CFD geometry precision
+    // just because staircase and exterior-source paths now share one adapter.
+    let q = rotation_from_degrees(object.rotation_deg)
+        .to_array()
+        .map(|value| value as f64);
+    let scale = [
+        object.scale.x as f64,
+        object.scale.y as f64,
+        object.scale.z as f64,
+    ];
+    let translation = [
+        object.position.x as f64,
+        object.position.y as f64,
+        object.position.z as f64,
+    ];
+
     let positions = object
         .mesh
         .positions
         .iter()
         .map(|&position| {
-            let local = Vec3::new(
-                position[0] as f32 * object.scale.x,
-                position[1] as f32 * object.scale.y,
-                position[2] as f32 * object.scale.z,
-            );
-            let world = object.position + rotation * local;
-            [world.x as f64, world.y as f64, world.z as f64]
+            let scaled = [
+                position[0] * scale[0],
+                position[1] * scale[1],
+                position[2] * scale[2],
+            ];
+            let rotated = rotate_vector_f64(q, scaled);
+            [
+                translation[0] + rotated[0],
+                translation[1] + rotated[1],
+                translation[2] + rotated[2],
+            ]
         })
         .collect();
 
@@ -131,6 +152,28 @@ fn imported_surface_world_mesh(object: &ImportedSurfaceObject) -> Result<Surface
         positions,
         triangles: object.mesh.triangles.clone(),
     })
+}
+
+fn rotate_vector_f64(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
+    let qv = [q[0], q[1], q[2]];
+    let t = scale3(cross3(qv, v), 2.0);
+    add3(add3(v, scale3(t, q[3])), cross3(qv, t))
+}
+
+fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn add3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn scale3(v: [f64; 3], factor: f64) -> [f64; 3] {
+    [v[0] * factor, v[1] * factor, v[2] * factor]
 }
 
 fn primitive_world_surface(object: &SceneObject) -> Result<SurfaceMesh, String> {
