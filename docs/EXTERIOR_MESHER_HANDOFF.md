@@ -8,10 +8,10 @@ AeroForge now has an explicit solver-bound handoff for a candidate exterior-flui
 
 - the candidate `VolumeMesh`;
 - its authoritative `Su2MarkerMap`;
-- the successful declared exterior-fluid provenance report;
-- the successful caller-defined local tetrahedron quality report;
-- the successful bounded source-surface intersection report; and
-- the successful bounded source-surface correspondence report.
+- the caller-selected local tetrahedron quality policy and successful report;
+- the caller-selected bounded source-surface intersection policy and successful report;
+- the caller-selected bounded source-surface correspondence policy and successful report; and
+- the successful declared exterior-fluid provenance report.
 
 The only public constructor is `validate_candidate_exterior_mesher_handoff`.
 
@@ -26,11 +26,28 @@ Failure of any contract rejects the handoff. There is no random sampling, silent
 
 ## What success means
 
-A successful handoff means the candidate has the topology/provenance evidence required by the declared exterior-fluid contract, satisfies the caller-selected local tetrahedron shape limits, passed the configured bounded source-shell intersection checks, and satisfies the configured bounded source-surface proximity check. It creates one owned object that downstream solver preparation can consume without separating the mesh from the evidence that admitted it.
+A successful handoff means the candidate has the topology/provenance evidence required by the declared exterior-fluid contract, satisfies the caller-selected local tetrahedron shape limits, passed the configured bounded source-shell intersection checks, and satisfies the configured bounded source-surface proximity check. It creates one owned object that downstream solver preparation can consume without separating the mesh, authoritative marker map, policies, and reports that admitted it.
 
 The regression fixture intentionally demonstrates that an exactly aligned staircase/voxel cavity can satisfy this handoff. Therefore possession of `ValidatedExteriorMesherHandoff` must **not** be interpreted as evidence of body-fitted geometry.
 
 The validated exterior SU2 adapter consumes the `VolumeMesh` and `Su2MarkerMap` directly from this owned handoff. It deliberately does not accept an independent replacement mesh or marker map. The generic generated-case API remains available as a compatibility path, but callers using the validated exterior path can keep the admitted geometry and authoritative marker provenance paired through SU2 bundle rendering.
+
+## Persisted handoff admission provenance
+
+`prepare_validated_exterior_su2_case_directory` and its explicit-global-reference variant persist a validated handoff through the ordinary generated-case contract and add one immutable sidecar:
+
+`aeroforge_exterior_handoff.tsv`
+
+The sidecar is format version 1 and records the stable SceneObject IDs plus the exact validation policies and bounded observations that admitted the handoff:
+
+- quality minimum mean-ratio policy and observed minimum;
+- quality maximum edge-length-ratio policy and observed maximum;
+- source-intersection geometric epsilon, triangle-pair budget, executed pair count, and skipped shared-edge count;
+- source-correspondence distance tolerance, point/triangle budget, and executed comparison count.
+
+The sidecar is created with create-new semantics and `sync_all()`. If that write fails, the just-created case directory is removed and the validated prepare call fails rather than returning a prepared case with missing admission evidence.
+
+This sidecar is evidence only for the implemented bounded handoff gates. It explicitly records `body_fitted_status=not_established` and `engineering_quality_status=not_established`. The existing `aeroforge_mesh_fidelity.tsv` remains authoritative for mesh-fidelity classification and still has no body-fitted state for this path.
 
 ## Local tetrahedron quality scope
 
@@ -62,4 +79,4 @@ This handoff does not establish:
 
 ## Next gate before a higher-fidelity state
 
-A distinct source-surface-driven exterior mesher may return a candidate `VolumeMesh + Su2MarkerMap`, but it must pass this owned handoff before using the validated exterior SU2 bundle path. Before any body-fitted fidelity state becomes representable, AeroForge still needs volumetric intersection/non-overlap evidence appropriate to that mesher, feature-preservation evidence, boundary-layer evidence where relevant, and pinned SU2 end-to-end reference evidence.
+A distinct source-surface-driven exterior mesher may return a candidate `VolumeMesh + Su2MarkerMap`, but it must pass this owned handoff before using the validated exterior SU2 bundle/prepare path. Before any body-fitted fidelity state becomes representable, AeroForge still needs volumetric intersection/non-overlap evidence appropriate to that mesher, feature-preservation evidence, boundary-layer evidence where relevant, and pinned SU2 end-to-end reference evidence.

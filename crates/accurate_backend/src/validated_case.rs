@@ -195,3 +195,139 @@ fn render_validated_exterior_handoff_provenance(
         handoff.correspondence.point_triangle_tests,
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use aeroforge_volume_core::{VolumeMesh, VolumeMeshReport};
+
+    use crate::exterior_mesh::DeclaredExteriorFluidMeshReport;
+    use crate::exterior_quality::{ExteriorMeshQualityPolicy, ExteriorMeshQualityReport};
+    use crate::source_intersection::{
+        SourceSurfaceIntersectionPolicy, SourceSurfaceIntersectionReport,
+    };
+    use crate::su2_mesh::Su2MarkerMap;
+    use crate::surface_correspondence::{
+        SourceSurfaceCorrespondencePolicy, SourceSurfaceCorrespondenceReport,
+    };
+
+    fn temp_root(label: &str) -> std::path::PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "aeroforge-validated-{label}-{}-{nonce}",
+            std::process::id()
+        ))
+    }
+
+    fn synthetic_handoff() -> ValidatedExteriorMesherHandoff {
+        ValidatedExteriorMesherHandoff {
+            mesh: VolumeMesh::default(),
+            marker_map: Su2MarkerMap::default(),
+            exterior: DeclaredExteriorFluidMeshReport {
+                volume: VolumeMeshReport {
+                    points: 4,
+                    cells: 1,
+                    boundary_triangles: 4,
+                    total_volume: 1.0 / 6.0,
+                    marker_triangle_counts: BTreeMap::new(),
+                },
+                scene_object_ids: vec![42, 77],
+                domain_boundary_count: 6,
+            },
+            quality_policy: ExteriorMeshQualityPolicy {
+                min_mean_ratio: 0.2,
+                max_edge_length_ratio: 4.0,
+            },
+            quality: ExteriorMeshQualityReport {
+                cells: 1,
+                min_mean_ratio: 0.35,
+                min_mean_ratio_cell: 0,
+                max_edge_length_ratio: 2.5,
+                max_edge_length_ratio_cell: 0,
+            },
+            source_intersection_policy: SourceSurfaceIntersectionPolicy {
+                geometric_epsilon: 1.0e-8,
+                max_triangle_pair_tests: 9_000,
+            },
+            source_intersections: SourceSurfaceIntersectionReport {
+                scene_object_ids: vec![42, 77],
+                triangle_pair_tests: 1_234,
+                skipped_shared_edge_pairs: 12,
+            },
+            correspondence_policy: SourceSurfaceCorrespondencePolicy {
+                distance_tolerance: 1.0e-5,
+                max_point_triangle_tests: 12_000,
+            },
+            correspondence: SourceSurfaceCorrespondenceReport {
+                bodies: Vec::new(),
+                point_triangle_tests: 480,
+            },
+        }
+    }
+
+    fn bundle() -> GeneratedSu2CaseBundle {
+        GeneratedSu2CaseBundle {
+            mesh_filename: "validated.su2".into(),
+            config_text: "SOLVER= INC_NAVIER_STOKES\nMESH_FILENAME= validated.su2\n".into(),
+            mesh_text: "NDIME= 3\nNELEM= 0\nNPOIN= 0\nNMARK= 0\n".into(),
+            marker_bindings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn validated_exterior_prepare_persists_admission_policy_and_bounded_reports() {
+        let root = temp_root("provenance");
+        let handoff = synthetic_handoff();
+        let prepared =
+            persist_validated_exterior_bundle(&root, "case_a", &bundle(), &handoff).unwrap();
+
+        let evidence = fs::read_to_string(
+            prepared
+                .working_directory
+                .join(EXTERIOR_HANDOFF_PROVENANCE_FILENAME),
+        )
+        .unwrap();
+        assert!(evidence.contains("format_version\t1"));
+        assert!(evidence.contains("contract\tvalidated_exterior_handoff"));
+        assert!(evidence.contains("scene_object_ids\t42,77"));
+        assert!(evidence.contains("body_fitted_status\tnot_established"));
+        assert!(evidence.contains("engineering_quality_status\tnot_established"));
+        assert!(evidence.contains("quality_min_mean_ratio_policy\t0.2"));
+        assert!(evidence.contains("quality_max_edge_length_ratio_policy\t4"));
+        assert!(evidence.contains("quality_min_mean_ratio_observed\t0.35"));
+        assert!(evidence.contains("quality_max_edge_length_ratio_observed\t2.5"));
+        assert!(evidence.contains("source_intersection_geometric_epsilon\t0.00000001"));
+        assert!(evidence.contains("source_intersection_max_triangle_pair_tests\t9000"));
+        assert!(evidence.contains("source_intersection_triangle_pair_tests\t1234"));
+        assert!(evidence.contains("source_intersection_skipped_shared_edge_pairs\t12"));
+        assert!(evidence.contains("correspondence_distance_tolerance\t0.00001"));
+        assert!(evidence.contains("correspondence_max_point_triangle_tests\t12000"));
+        assert!(evidence.contains("correspondence_point_triangle_tests\t480"));
+
+        let fidelity = fs::read_to_string(
+            prepared
+                .working_directory
+                .join("aeroforge_mesh_fidelity.tsv"),
+        )
+        .unwrap();
+        assert!(fidelity.contains("mesh_fidelity\tunclassified_audited_volume"));
+        assert!(fidelity.contains("body_fitted_status\tnot_established"));
+        assert!(fidelity.contains("engineering_quality_status\tnot_established"));
+
+        let second = persist_validated_exterior_bundle(&root, "case_a", &bundle(), &handoff);
+        assert!(matches!(
+            second,
+            Err(PrepareValidatedExteriorCaseError::Prepare(
+                PrepareGeneratedCaseError::Io(ref error)
+            )) if error.kind() == std::io::ErrorKind::AlreadyExists
+        ));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+}

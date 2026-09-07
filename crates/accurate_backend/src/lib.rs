@@ -89,6 +89,9 @@ pub use surface_correspondence::{
 pub use validated_case::{
     build_validated_exterior_su2_case_bundle,
     build_validated_exterior_su2_case_bundle_with_reference,
+    prepare_validated_exterior_su2_case_directory,
+    prepare_validated_exterior_su2_case_directory_with_reference,
+    PrepareValidatedExteriorCaseError,
 };
 pub use voxel_case::{
     build_voxel_generated_su2_case, build_voxel_generated_su2_case_with_reference,
