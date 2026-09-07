@@ -135,6 +135,13 @@ impl AccurateRuntime {
     }
 }
 
+/// Polls background accurate preparation independently of which solve-workspace tab is visible.
+/// A completed TetGen artifact is therefore promoted (or rejected) promptly even when the user
+/// navigates away from the Prepare tab while the external mesher is running.
+pub fn poll_accurate_prepare_completion(mut runtime: ResMut<AccurateRuntime>) {
+    collect_prepare_completion(&mut runtime);
+}
+
 pub fn draw_accurate_prepare_ui(
     mut contexts: EguiContexts,
     state: Res<ProjectState>,
@@ -143,8 +150,6 @@ pub fn draw_accurate_prepare_ui(
     if state.simulation.mode != SolverMode::Accurate {
         return Ok(());
     }
-
-    collect_prepare_completion(&mut runtime);
 
     let ctx = contexts.ctx_mut()?;
     egui::CentralPanel::default().show(ctx, |ui| {
@@ -249,7 +254,7 @@ pub fn draw_accurate_prepare_ui(
                             )
                             .range(1.0..=1000.0)
                             .speed(0.5),
-                    );
+                        );
                     });
                 }
                 ui.horizontal(|ui| {

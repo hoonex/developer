@@ -55,6 +55,10 @@ fn main() {
             gpu_preview::GpuPreviewPlugin,
         ))
         .add_systems(Startup, scene::setup)
+        .add_systems(
+            Update,
+            accurate_prepare::poll_accurate_prepare_completion,
+        )
         .add_systems(Update, (scene::sync_visuals, scene::sync_gizmo_focus).chain())
         .add_systems(
             Update,
