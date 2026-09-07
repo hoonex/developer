@@ -12,6 +12,7 @@ use crate::model::{ProjectState, SolverMode};
 
 const RUN_MANIFEST_FILENAME: &str = "aeroforge_run_manifest.tsv";
 const LIFECYCLE_PROVENANCE_FILENAME: &str = "aeroforge_lifecycle.tsv";
+const EXECUTION_ATTEMPT_FILENAME: &str = "aeroforge_execution_attempt.tsv";
 
 #[derive(Resource)]
 pub struct AccurateRecoveryUi {
@@ -106,12 +107,22 @@ pub fn draw_accurate_recovery_notice(
                     .file_name()
                     .and_then(|value| value.to_str())
                     .unwrap_or("unclassified case");
-                ui.monospace(name).on_hover_text(case.display().to_string());
+                let attempt = case.join(EXECUTION_ATTEMPT_FILENAME).is_file();
+                let attempt_text = if attempt {
+                    "immutable launch_requested marker present"
+                } else {
+                    "no execution-attempt marker (legacy or pre-marker case)"
+                };
+                ui.monospace(name)
+                    .on_hover_text(format!("{}\n{attempt_text}", case.display()));
             }
             if recovery.incomplete_cases.len() > 3 {
                 ui.weak(format!("+{} more", recovery.incomplete_cases.len() - 3));
             }
         });
+        ui.small(
+            "An execution-attempt marker proves only that launch was requested for that persisted case; it does not prove child creation, continued process liveness, or resumability.",
+        );
     });
 
     if rescan {
@@ -241,6 +252,11 @@ mod tests {
         }
         fs::write(completed.join(RUN_MANIFEST_FILENAME), "terminal").unwrap();
         fs::write(cancelled.join(LIFECYCLE_PROVENANCE_FILENAME), "cancelled").unwrap();
+        fs::write(
+            interrupted.join(EXECUTION_ATTEMPT_FILENAME),
+            "event\tlaunch_requested\n",
+        )
+        .unwrap();
 
         let cases = scan_unclassified_persisted_cases(&root, [active]).unwrap();
         assert_eq!(cases, vec![interrupted]);
