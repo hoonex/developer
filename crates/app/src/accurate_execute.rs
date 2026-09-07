@@ -7,9 +7,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use aeroforge_accurate_backend::{
     discover_su2, evaluate_su2_history_quality, extract_su2_surface_world_axis_diagnostics,
     extract_su2_world_axis_diagnostics, peek_su2_case_termination,
-    prepare_generated_su2_case_directory, probe_su2_banner, run_prepared_generated_su2_case,
-    summarize_su2_history_csv, BoundaryRole, BoundarySource, GeneratedSu2CaseBundle,
-    Su2HistoryGateStatus, Su2HistoryQuality, Su2RunTermination, Su2WorldAxisDiagnostics,
+    prepare_generated_su2_case_directory_with_fidelity, probe_su2_banner,
+    run_prepared_generated_su2_case, summarize_su2_history_csv, BoundaryRole, BoundarySource,
+    GeneratedSu2CaseBundle, Su2HistoryGateStatus, Su2HistoryQuality, Su2MeshFidelity,
+    Su2RunTermination, Su2WorldAxisDiagnostics,
 };
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
@@ -505,7 +506,12 @@ fn execute_case(
         };
     }
 
-    let prepared = match prepare_generated_su2_case_directory(&root, &case_name, &bundle) {
+    let prepared = match prepare_generated_su2_case_directory_with_fidelity(
+        &root,
+        &case_name,
+        &bundle,
+        Su2MeshFidelity::StaircaseVoxelDerived,
+    ) {
         Ok(prepared) => prepared,
         Err(error) => {
             return AccurateRunCompletion::Failed {
