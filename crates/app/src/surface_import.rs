@@ -32,21 +32,13 @@ pub fn draw_surface_import_ui(
     mut runtime: ResMut<SurfaceImportRuntime>,
 ) -> Result {
     let ctx = contexts.ctx_mut()?;
-    egui::Window::new("Surface geometry import")
-        .default_width(430.0)
+    egui::Window::new("Import surface")
+        .id(egui::Id::new("surface_geometry_import"))
+        .default_width(390.0)
         .resizable(true)
         .show(ctx, |ui| {
             ui.label("OBJ / STL / glTF / GLB file path");
             ui.text_edit_singleline(&mut runtime.path);
-            ui.small(
-                "Import parses static surface geometry only. Accurate preparation later applies the explicit repair/topology audit and fails closed if the surface is unsuitable.",
-            );
-            ui.small(
-                "glTF/GLB imports the selected static scene. Skins and morph targets are rejected; external buffers must be local relative files inside the document directory.",
-            );
-            ui.small(
-                "Imported surfaces feed the same audited cell-center staircase ownership used by native preview and generated SU2 preparation. Imported preview rasterization has an explicit cell budget; this remains voxel/staircase geometry, not body-fitted meshing.",
-            );
 
             if ui.button("Import surface").clicked() {
                 match load_surface_path(&runtime.path) {
@@ -82,44 +74,23 @@ pub fn draw_surface_import_ui(
 
             if let Some(status) = &runtime.last_status {
                 ui.colored_label(egui::Color32::LIGHT_GREEN, status);
+                ui.small("The imported SceneObject is selected in the main Scene/Inspector workspace.");
             }
             if let Some(error) = &runtime.last_error {
                 ui.colored_label(egui::Color32::RED, error);
             }
 
-            if state.imported_surfaces.is_empty() {
-                return;
-            }
-
-            ui.separator();
-            ui.heading("Imported surfaces");
-            let mut delete_id = None;
-            let mut dirty = false;
-            for object in &mut state.imported_surfaces {
-                let title = format!("{} · SceneObject {}", object.name, object.id);
-                ui.collapsing(title, |ui| {
-                    ui.monospace(format!(
-                        "{} vertices · {} triangles",
-                        object.mesh.positions.len(),
-                        object.mesh.triangles.len()
-                    ));
-                    dirty |= ui.text_edit_singleline(&mut object.name).changed();
-                    dirty |= vec3_editor(ui, "Position (m)", &mut object.position, 0.05);
-                    dirty |= vec3_editor(ui, "Rotation (deg)", &mut object.rotation_deg, 1.0);
-                    dirty |= vec3_editor(ui, "Scale factor", &mut object.scale, 0.05);
-                    if ui.button("Delete imported surface").clicked() {
-                        delete_id = Some(object.id);
-                    }
-                });
-            }
-
-            if let Some(id) = delete_id {
-                state.imported_surfaces.retain(|object| object.id != id);
-                dirty = true;
-            }
-            if dirty {
-                state.touch();
-            }
+            ui.collapsing("Import contract", |ui| {
+                ui.small(
+                    "Import parses static surface geometry only. Accurate preparation later applies the explicit repair/topology audit and fails closed if the surface is unsuitable.",
+                );
+                ui.small(
+                    "glTF/GLB imports the selected static scene. Skins and morph targets are rejected; external buffers must be local relative files inside the document directory.",
+                );
+                ui.small(
+                    "Imported preview and generated SU2 preparation share the audited cell-center staircase ownership path. This remains voxel/staircase geometry, not body-fitted meshing.",
+                );
+            });
         });
     Ok(())
 }
@@ -136,16 +107,31 @@ pub fn draw_imported_surface_wireframes(mut gizmos: Gizmos, state: Res<ProjectSt
         let scale = object.scale;
 
         for triangle in object.mesh.triangles.iter().step_by(stride) {
-            let Some(a) = display_position(&object.mesh, triangle[0], object.position, rotation, scale)
-            else {
+            let Some(a) = display_position(
+                &object.mesh,
+                triangle[0],
+                object.position,
+                rotation,
+                scale,
+            ) else {
                 continue;
             };
-            let Some(b) = display_position(&object.mesh, triangle[1], object.position, rotation, scale)
-            else {
+            let Some(b) = display_position(
+                &object.mesh,
+                triangle[1],
+                object.position,
+                rotation,
+                scale,
+            ) else {
                 continue;
             };
-            let Some(c) = display_position(&object.mesh, triangle[2], object.position, rotation, scale)
-            else {
+            let Some(c) = display_position(
+                &object.mesh,
+                triangle[2],
+                object.position,
+                rotation,
+                scale,
+            ) else {
                 continue;
             };
             gizmos.line(a, b, color);
@@ -163,7 +149,11 @@ fn display_position(
     scale: Vec3,
 ) -> Option<Vec3> {
     let position = mesh.positions.get(index as usize)?;
-    let local = Vec3::new(position[0] as f32, position[1] as f32, position[2] as f32);
+    let local = Vec3::new(
+        position[0] as f32,
+        position[1] as f32,
+        position[2] as f32,
+    );
     let world = translation + rotation * (local * scale);
     world.is_finite().then_some(world)
 }
@@ -321,12 +311,16 @@ fn percent_decode_uri_path(uri: &str) -> Result<String, String> {
     while index < bytes.len() {
         if bytes[index] == b'%' {
             if index + 2 >= bytes.len() {
-                return Err(format!("glTF external buffer URI `{uri}` has invalid percent encoding"));
+                return Err(format!(
+                    "glTF external buffer URI `{uri}` has invalid percent encoding"
+                ));
             }
             let high = hex_value(bytes[index + 1]);
             let low = hex_value(bytes[index + 2]);
             let (Some(high), Some(low)) = (high, low) else {
-                return Err(format!("glTF external buffer URI `{uri}` has invalid percent encoding"));
+                return Err(format!(
+                    "glTF external buffer URI `{uri}` has invalid percent encoding"
+                ));
             };
             decoded.push((high << 4) | low);
             index += 3;
@@ -361,17 +355,6 @@ fn has_uri_scheme(value: &str) -> bool {
         && chars.all(|character| {
             character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.')
         })
-}
-
-fn vec3_editor(ui: &mut egui::Ui, label: &str, value: &mut Vec3, speed: f64) -> bool {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.label(label);
-        changed |= ui.add(egui::DragValue::new(&mut value.x).speed(speed)).changed();
-        changed |= ui.add(egui::DragValue::new(&mut value.y).speed(speed)).changed();
-        changed |= ui.add(egui::DragValue::new(&mut value.z).speed(speed)).changed();
-    });
-    changed
 }
 
 #[cfg(test)]
@@ -418,9 +401,7 @@ f 1 2 3\n";
 
     #[test]
     fn embedded_gltf_parses_through_desktop_import_boundary() {
-        let uri = format!(
-            "data:application/octet-stream;base64,{TRIANGLE_BUFFER_BASE64}"
-        );
+        let uri = format!("data:application/octet-stream;base64,{TRIANGLE_BUFFER_BASE64}");
         let document = triangle_gltf(&uri);
         let imported = parse_surface_bytes("gltf", document.as_bytes()).unwrap();
         assert_eq!(imported.format_label, "glTF JSON");
@@ -447,10 +428,8 @@ f 1 2 3\n";
         let document_path = directory.join("triangle.gltf");
         let buffer_path = directory.join("triangle.bin");
         let buffer = [
-            0_u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 128, 63, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 128, 63, 0, 0, 0, 0,
-            0, 0, 1, 0, 2, 0,
+            0_u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 63, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 128, 63, 0, 0, 0, 0, 0, 0, 1, 0, 2, 0,
         ];
         std::fs::write(&buffer_path, buffer).unwrap();
         std::fs::write(&document_path, triangle_gltf("triangle.bin")).unwrap();
