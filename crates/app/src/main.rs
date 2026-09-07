@@ -10,6 +10,7 @@ mod accurate_prepared_case;
 mod accurate_recovery;
 mod accurate_scene_geometry;
 mod accurate_source_geometry;
+mod accurate_tetgen_prepare;
 mod accurate_workspace;
 mod editor_toolbar;
 mod gpu_preview;
