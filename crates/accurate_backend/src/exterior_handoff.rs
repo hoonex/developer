@@ -7,6 +7,10 @@ use crate::exterior_mesh::{
     validate_declared_exterior_fluid_mesh_input, DeclaredExteriorFluidMeshError,
     DeclaredExteriorFluidMeshReport,
 };
+use crate::exterior_quality::{
+    validate_exterior_mesh_quality, ExteriorMeshQualityError, ExteriorMeshQualityPolicy,
+    ExteriorMeshQualityReport,
+};
 use crate::imported_surface::AuditedImportedSurfaceBody;
 use crate::su2_mesh::Su2MarkerMap;
 use crate::surface_correspondence::{
@@ -17,20 +21,22 @@ use crate::surface_correspondence::{
 /// Owned solver-bound handoff for a candidate exterior-fluid mesh.
 ///
 /// Construction is intentionally restricted to [`validate_candidate_exterior_mesher_handoff`],
-/// which requires both stable exterior-boundary provenance and bounded source-surface
-/// correspondence. Holding this value proves only those two contracts. It is deliberately not a
-/// body-fitted, mesh-quality, non-intersection, or CFD-accuracy certificate.
+/// which requires stable exterior-boundary provenance, caller-selected local tetrahedron quality,
+/// and bounded source-surface correspondence. Holding this value proves only those contracts. It is
+/// deliberately not a body-fitted, non-intersection, or CFD-accuracy certificate.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValidatedExteriorMesherHandoff {
     pub mesh: VolumeMesh,
     pub marker_map: Su2MarkerMap,
     pub exterior: DeclaredExteriorFluidMeshReport,
+    pub quality: ExteriorMeshQualityReport,
     pub correspondence: SourceSurfaceCorrespondenceReport,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExteriorMesherHandoffError {
     Exterior(DeclaredExteriorFluidMeshError),
+    Quality(ExteriorMeshQualityError),
     Correspondence(SourceSurfaceCorrespondenceError),
 }
 
@@ -38,6 +44,7 @@ impl Display for ExteriorMesherHandoffError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Exterior(error) => write!(f, "candidate exterior mesher provenance failed: {error}"),
+            Self::Quality(error) => write!(f, "candidate exterior mesher local quality failed: {error}"),
             Self::Correspondence(error) => {
                 write!(f, "candidate exterior mesher source correspondence failed: {error}")
             }
@@ -49,6 +56,7 @@ impl Error for ExteriorMesherHandoffError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Exterior(error) => Some(error),
+            Self::Quality(error) => Some(error),
             Self::Correspondence(error) => Some(error),
         }
     }
@@ -57,6 +65,12 @@ impl Error for ExteriorMesherHandoffError {
 impl From<DeclaredExteriorFluidMeshError> for ExteriorMesherHandoffError {
     fn from(value: DeclaredExteriorFluidMeshError) -> Self {
         Self::Exterior(value)
+    }
+}
+
+impl From<ExteriorMeshQualityError> for ExteriorMesherHandoffError {
+    fn from(value: ExteriorMeshQualityError) -> Self {
+        Self::Quality(value)
     }
 }
 
@@ -69,22 +83,26 @@ impl From<SourceSurfaceCorrespondenceError> for ExteriorMesherHandoffError {
 /// Validates and takes ownership of one candidate exterior-fluid mesher result.
 ///
 /// A caller must provide the candidate tetrahedral mesh, its authoritative SU2 marker/source map,
-/// and the audited source surfaces keyed by stable `SceneObject.id`. The candidate is promoted to
-/// an owned handoff only after:
+/// audited source surfaces keyed by stable `SceneObject.id`, and explicit local-quality and
+/// correspondence policies. The candidate is promoted to an owned handoff only after:
 ///
-/// 1. the declared exterior-fluid topology/provenance contract succeeds; and
-/// 2. bounded bidirectional source-surface correspondence succeeds under the explicit policy.
+/// 1. the declared exterior-fluid topology/provenance contract succeeds;
+/// 2. caller-selected tetra mean-ratio and edge-ratio limits succeed; and
+/// 3. bounded bidirectional source-surface correspondence succeeds.
 ///
 /// This function does not assign or infer mesh fidelity. In particular, successful construction
-/// must not be translated into `body_fitted_status=true`; stronger geometric and mesh-quality
-/// evidence is required before such a fidelity state can become representable.
+/// must not be translated into `body_fitted_status=true`; source self-intersection checks,
+/// volumetric overlap checks, feature preservation, boundary-layer evidence, and solver validation
+/// remain separate obligations.
 pub fn validate_candidate_exterior_mesher_handoff(
     mesh: VolumeMesh,
     marker_map: Su2MarkerMap,
     audited_sources: &[AuditedImportedSurfaceBody],
+    quality_policy: ExteriorMeshQualityPolicy,
     correspondence_policy: SourceSurfaceCorrespondencePolicy,
 ) -> Result<ValidatedExteriorMesherHandoff, ExteriorMesherHandoffError> {
     let exterior = validate_declared_exterior_fluid_mesh_input(&mesh, &marker_map)?;
+    let quality = validate_exterior_mesh_quality(&mesh, quality_policy)?;
     let correspondence = validate_source_surface_correspondence(
         &mesh,
         &marker_map,
@@ -96,6 +114,7 @@ pub fn validate_candidate_exterior_mesher_handoff(
         mesh,
         marker_map,
         exterior,
+        quality,
         correspondence,
     })
 }
@@ -198,10 +217,17 @@ mod tests {
         (mesh, provenance.marker_map, source)
     }
 
-    fn policy() -> SourceSurfaceCorrespondencePolicy {
+    fn correspondence_policy() -> SourceSurfaceCorrespondencePolicy {
         SourceSurfaceCorrespondencePolicy {
             distance_tolerance: 1.0e-10,
             max_point_triangle_tests: 100_000,
+        }
+    }
+
+    fn quality_policy() -> ExteriorMeshQualityPolicy {
+        ExteriorMeshQualityPolicy {
+            min_mean_ratio: 1.0e-6,
+            max_edge_length_ratio: 10.0,
         }
     }
 
@@ -212,12 +238,15 @@ mod tests {
             mesh,
             marker_map,
             &[source],
-            policy(),
+            quality_policy(),
+            correspondence_policy(),
         )
         .unwrap();
 
         assert_eq!(handoff.exterior.scene_object_ids, vec![42]);
         assert_eq!(handoff.exterior.domain_boundary_count, 6);
+        assert!(handoff.quality.min_mean_ratio > 0.0);
+        assert!(handoff.quality.max_edge_length_ratio <= 10.0);
         assert_eq!(handoff.correspondence.bodies.len(), 1);
         assert_eq!(handoff.correspondence.bodies[0].scene_object_id, 42);
         assert_eq!(handoff.correspondence.point_triangle_tests, 480);
@@ -232,6 +261,29 @@ mod tests {
     }
 
     #[test]
+    fn strict_local_quality_policy_rejects_candidate_handoff() {
+        let (mesh, marker_map, source) = fixture();
+        let error = validate_candidate_exterior_mesher_handoff(
+            mesh,
+            marker_map,
+            &[source],
+            ExteriorMeshQualityPolicy {
+                min_mean_ratio: 1.0,
+                max_edge_length_ratio: 10.0,
+            },
+            correspondence_policy(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ExteriorMesherHandoffError::Quality(
+                ExteriorMeshQualityError::MeanRatioBelowLimit { .. }
+            )
+        ));
+    }
+
+    #[test]
     fn shifted_source_is_not_promoted_to_owned_handoff() {
         let (mesh, marker_map, mut source) = fixture();
         for point in &mut source.mesh.positions {
@@ -242,9 +294,10 @@ mod tests {
             mesh,
             marker_map,
             &[source],
+            quality_policy(),
             SourceSurfaceCorrespondencePolicy {
                 distance_tolerance: 1.0e-3,
-                ..policy()
+                ..correspondence_policy()
             },
         )
         .unwrap_err();
@@ -271,7 +324,8 @@ mod tests {
             mesh,
             marker_map,
             &[source],
-            policy(),
+            quality_policy(),
+            correspondence_policy(),
         )
         .unwrap_err();
 
