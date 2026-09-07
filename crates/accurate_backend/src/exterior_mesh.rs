@@ -241,7 +241,7 @@ mod tests {
         let body = marker_map
             .bindings
             .iter_mut()
-            .find(|binding| matches!(binding.source, BoundarySource::SceneObject { .. }))
+            .find(|binding| matches!(&binding.source, BoundarySource::SceneObject { .. }))
             .unwrap();
         body.role = BoundaryRole::Inlet;
         assert!(matches!(
@@ -260,7 +260,7 @@ mod tests {
         let body = marker_map
             .bindings
             .iter_mut()
-            .find(|binding| matches!(binding.source, BoundarySource::SceneObject { .. }))
+            .find(|binding| matches!(&binding.source, BoundarySource::SceneObject { .. }))
             .unwrap();
         body.source = BoundarySource::ImportedSurface {
             asset_key: "mesh.obj".into(),
