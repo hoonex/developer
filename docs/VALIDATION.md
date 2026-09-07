@@ -53,6 +53,8 @@ The native LBM backend remains an interactive preview solver. GREEN numerical re
 | Desktop mixed imported preparation into preview + accurate path | App + SU2 adapter | GREEN functional compile/unit evidence |
 | Explicit desktop SU2 execution orchestration | App + SU2 adapter | GREEN implementation regression |
 | Structured SU2 history quality gate + manifest v5 diagnostic provenance | App + SU2 adapter | GREEN implementation regression |
+| Live persisted-history iteration/RMS sampling | App + SU2 adapter | GREEN implementation regression |
+| Case-scoped direct `SU2_CFD` child cancellation | App + SU2 adapter | GREEN external lifecycle smoke |
 
 ## Boundary-policy contract
 
@@ -202,7 +204,7 @@ These geometry-denominator differences are too small to explain the observed D8�
 
 ## Accurate SU2 backend status
 
-`aeroforge-accurate-backend` provides dimensional incompressible laminar/RANS-SST config generation, marker/filename validation, inlet-direction normalization, explicit SU2 8.5-compatible flow numerical-method settings, explicit positive finite SI coefficient-reference validation/rendering, fixed zero-angle/zero-sideslip world-axis and zero-origin moment semantics for the current generated +X-flow path, `SU2_RUN`/PATH discovery, banner probing, generated-case persistence, prepared-case process execution, structured final-history quality evaluation, exact aggregate six-axis extraction, exact SU2 8.5.0 per-surface six-axis extraction for explicitly monitored marker tags, bounded imported-surface repair/audit, imported-surface cell-center rasterization, and deterministic mixed primitive/imported SceneObject ownership.
+`aeroforge-accurate-backend` provides dimensional incompressible laminar/RANS-SST config generation, marker/filename validation, inlet-direction normalization, explicit SU2 8.5-compatible flow numerical-method settings, explicit positive finite SI coefficient-reference validation/rendering, fixed zero-angle/zero-sideslip world-axis and zero-origin moment semantics for the current generated +X-flow path, `SU2_RUN`/PATH discovery, banner probing, generated-case persistence, prepared-case process execution, structured final-history quality evaluation, exact aggregate six-axis extraction, exact SU2 8.5.0 per-surface six-axis extraction for explicitly monitored marker tags, bounded imported-surface repair/audit, imported-surface cell-center rasterization, deterministic mixed primitive/imported SceneObject ownership, and a separate case-scoped cancellable direct-child runner that preserves the established blocking API.
 
 The pinned ignored upstream integration test mirrors the official SU2 8.5.0 incompressible laminar-cylinder regression contract: it runs through AeroForge's `discover_su2 → probe_su2_banner → run_su2_case` path, parses solver iteration 10, and compares the four upstream reference values with `1e-5` tolerance.
 
@@ -279,9 +281,13 @@ These generated-case tests establish **mesh/config/marker/provenance persistence
 
 The desktop accurate-mode integration supports an explicit scene-and-settings-gated execution path. A user prepares the current scene and accurate solver settings, then explicitly chooses `Persist + run with SU2 8.5.0`. AeroForge refuses stale prepared bundles if either the scene revision or tracked solver settings—including coefficient reference area/length—changed, discovers and probes `SU2_CFD`, rejects non-8.5.0 banners, persists a new non-overwriting case directory, launches SU2 on a worker thread, and ingests process status plus history/stdout/stderr evidence after completion. There is still **no automatic solver launch**.
 
-Structured history parsing reads quoted SU2 CSV, recognizes standard iteration columns and RMS fields, and reports a conservative final quality state: residual target met, iteration budget reached without target, incomplete evidence, no usable history rows, or unavailable parse/read evidence. Non-finite or missing RMS evidence cannot pass merely because the iteration budget was exhausted. Process success, residual quality, aggregate diagnostics, and per-body diagnostics remain separate signals.
+While a run is active, the lifecycle controller samples the persisted SU2 history with the same production parser and exposes the latest available iteration plus worst recognized RMS residual. It also supports an explicit case-scoped cancellation request for the registered direct `SU2_CFD` child. This does not change final history-quality semantics and does not claim process-tree/MPI cancellation, pause/resume, checkpoint restart, or crash recovery.
 
-Earlier run #393 remains GREEN evidence for solver-settings freshness, structured history parsing, conservative quality evaluation, UI integration, and manifest-v2 persistence. The current reference/frame/result implementation is superseded by the #449/#451, #465/#467, #489/#491/#493, and imported-surface #503→#513/#517/#555/#557/#561 evidence chains above. The operational contract and non-claims are detailed in `docs/ACCURATE_EXECUTION.md`.
+Run #589 completed routine `core-tests`, Windows `app-check`, and all three GPU parity smokes GREEN after the cancellable runner, live-history controller, and desktop lifecycle UI were integrated. Run #591 then used the pinned SU2 8.5.0 archive and observed a real generated case at `iteration=0`, worst RMS `-1.38245327`, before cancelling the registered direct child; the external test completed `1 passed; 0 failed`, with no numeric Linux exit code after the kill. The temporary one-shot job was removed immediately, and post-cleanup run #593 completed routine `core-tests`, `app-check`, and `gpu-smoke` GREEN while keeping the external cancellation test ignored in routine CI.
+
+Structured history parsing reads quoted SU2 CSV, recognizes standard iteration columns and RMS fields, and reports a conservative final quality state: residual target met, iteration budget reached without target, incomplete evidence, no usable history rows, or unavailable parse/read evidence. Non-finite or missing RMS evidence cannot pass merely because the iteration budget was exhausted. Process success, residual quality, aggregate diagnostics, per-body diagnostics, and user cancellation are distinct signals.
+
+Earlier run #393 remains GREEN evidence for solver-settings freshness, structured history parsing, conservative quality evaluation, UI integration, and manifest-v2 persistence. The current reference/frame/result implementation is superseded by the #449/#451, #465/#467, #489/#491/#493, imported-surface #503→#513/#517/#555/#557/#561, and lifecycle #589/#591/#593 evidence chains above. The operational contract and non-claims are detailed in `docs/ACCURATE_EXECUTION.md`.
 
 ## Claims policy
 
@@ -304,12 +310,13 @@ Earlier run #393 remains GREEN evidence for solver-settings freshness, structure
 - Desktop OBJ/STL/static-glTF/GLB import, viewport picking/gizmos, and imported preview solid consumption are editor/implementation capabilities, not CFD validation.
 - Imported preview support uses the same staircase ownership semantics and an explicit current 200,000-cell preparation limit; this is not an SDF/body-fitted geometry claim and the GPU path still lacks per-object force attribution.
 - The GREEN desktop execution/history-quality path establishes explicit launch/persistence/quality-reporting behavior only; neither a successful process exit nor `residual_target_met` is an aerodynamic accuracy claim.
+- GREEN live-history/cancellation evidence establishes persisted-history observation plus **direct-child** cancellation for the evidenced case only. It does not establish process-tree/MPI cancellation, pause/resume, checkpoint restart, crash recovery, or solver convergence.
 - Staircase voxel boundaries must not be described as body-fitted surfaces.
 - Accurate SU2 results must retain solver version, mesh/config provenance, convergence history, geometry revision, coefficient-reference values, coefficient-frame/origin provenance and source-translation decisions.
 
 ## Next validation milestones
 
-1. Add live iteration progress, cancellation and explicit external-process lifecycle/recovery handling while retaining immutable prepared-case provenance.
+1. Harden the lifecycle contract by promoting cancellation to first-class execution status/provenance, snapshotting active case identity/root for the run, and defining crash/restart recovery separately rather than conflating it with cancellation.
 2. Add a body-fitted or otherwise explicitly higher-fidelity **exterior-fluid** volume-meshing path that consumes audited imported surfaces directly; keep the current staircase path labeled as such.
 3. Preserve deterministic marker/source provenance through that higher-fidelity path and exercise that distinct imported-mesh path end to end with pinned SU2.
 4. Accelerate/cache imported-surface preview occupancy before raising its explicit cell budget, and add GPU per-object ownership/force attribution only with CPU/GPU provenance regressions.
