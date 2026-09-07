@@ -7,6 +7,7 @@ mod accurate_execute;
 mod accurate_lifecycle;
 mod accurate_prepare;
 mod accurate_scene_geometry;
+mod accurate_workspace;
 mod editor_toolbar;
 mod gpu_preview;
 mod model;
@@ -18,6 +19,7 @@ mod ui;
 use accurate_execute::AccurateExecutionRuntime;
 use accurate_lifecycle::AccurateLifecycleRuntime;
 use accurate_prepare::AccurateRuntime;
+use accurate_workspace::AccurateWorkspaceUi;
 use model::ProjectState;
 use simulation::SimulationRuntime;
 use surface_import::SurfaceImportRuntime;
@@ -30,6 +32,7 @@ fn main() {
         .init_resource::<AccurateRuntime>()
         .init_resource::<AccurateExecutionRuntime>()
         .init_resource::<AccurateLifecycleRuntime>()
+        .init_resource::<AccurateWorkspaceUi>()
         .init_resource::<SurfaceImportRuntime>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -69,8 +72,11 @@ fn main() {
                 ui::draw_ui,
                 surface_import::draw_surface_import_ui,
                 editor_toolbar::draw_transform_toolbar,
-                accurate_prepare::draw_accurate_prepare_ui,
-                accurate_execute::draw_accurate_execute_ui,
+                accurate_workspace::draw_accurate_workspace_selector,
+                accurate_prepare::draw_accurate_prepare_ui
+                    .run_if(accurate_workspace::prepare_tab_selected),
+                accurate_execute::draw_accurate_execute_ui
+                    .run_if(accurate_workspace::run_tab_selected),
                 accurate_lifecycle::draw_accurate_lifecycle_ui,
             )
                 .chain(),
