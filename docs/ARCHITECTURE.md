@@ -63,6 +63,21 @@ Packaging SU2 inside AeroForge is a separate distribution/licensing task. Initia
 
 A native pressure-based finite-volume backend may be added later behind the same project/result interface. It is not a prerequisite for delivering credible accurate results while the SU2 adapter is available.
 
+## Desktop workspace
+
+The desktop editor uses one persistent `Scene | Viewport | Inspector` workspace instead of accumulating independent floating control windows as features are added.
+
+- The default left Scene panel is 220 px wide and contains selectable primitive, imported-surface, and wind-source rows under one scene tree.
+- The default right Inspector is 335 px wide and owns three task-oriented tabs: `Object`, `Simulation`, and `Solve`. At the default 1600 px window width this leaves a nominal 1045 px horizontal center region before panel resizing, rather than permanently allocating space to multiple overlapping tool windows.
+- `Object` is the single edit owner for primitive, imported-surface, and wind-source properties. Imported geometry no longer has a second transform/delete inspector.
+- `Simulation` keeps domain, grid, boundary, backend, and common preview controls visible while physical-scaling and developer/GPU diagnostics are collapsed on demand.
+- `Solve` centralizes accurate-case freshness, preparation status, execution state, and result summary. The detailed Prepare and Execute controls are opened only on demand and are mutually exclusive, so they do not permanently cover the viewport.
+- Surface import is an import-only on-demand window. Once an OBJ/STL/glTF/GLB file is imported, its rename/transform/delete workflow belongs to Scene + Object Inspector.
+- The top bar places `Preview` / `Accurate` mode selection before the context action. `Run preview` / `Pause` / `Reset` exist only in Preview mode; Accurate mode exposes a `Solve` action instead of a misleading preview-run button.
+- The compact viewport transform toolbar remains the common W/E/R and world/local control surface.
+
+This workspace refactor changes editor ownership and spatial organization, not solver physics or numerical contracts. Routine compile/unit/GPU evidence can prove the code integration remains intact, but visual polish still requires rendered desktop inspection; screenshots are UI evidence only and are never CFD validation.
+
 ## Wind source model
 
 Every source owns:
@@ -88,7 +103,7 @@ Implemented geometry capabilities:
 1. analytic Box / Sphere / Cylinder creation, viewport picking, and transform gizmos;
 2. `geometry_core` parsers for STL, OBJ, and static glTF/GLB surface geometry;
 3. desktop OBJ/STL/glTF/GLB path import into object-local `SurfaceMesh` storage, including GLB BIN and base64-buffer support through `geometry_core` plus explicit local-relative external `.bin` resolution for `.gltf`; URI schemes, absolute paths, query/fragment references and parent-directory traversal fail closed;
-4. imported surfaces are promoted to finite indexed Bevy editor meshes for viewport picking and the common W/E/R transform gizmo path, while an imported-selection inspector exposes the same position/rotation/signed-scale transform and deletion contract;
+4. imported surfaces are promoted to finite indexed Bevy editor meshes for viewport picking and the common W/E/R transform gizmo path; the same stable Object selection resolves through the unified right-side Object inspector for name, position, rotation, signed scale, mesh counts, and deletion;
 5. topology reporting plus a deterministic bounded repair/audit contract for imported surfaces entering solver rasterization;
 6. one shared primitive/imported cell-center ownership raster feeds native CPU/GPU preview preparation and the generated staircase SU2 path, with deterministic lowest-stable-ID overlap ownership and duplicate cross-kind IDs failing closed;
 7. stable imported `SceneObject.id` provenance survives the current generated staircase tetrahedral SU2 mesh and marker bindings.
