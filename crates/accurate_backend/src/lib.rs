@@ -14,6 +14,7 @@ mod source_intersection;
 mod su2;
 mod su2_mesh;
 mod surface_correspondence;
+mod validated_case;
 mod voxel_case;
 mod voxel_mesh;
 
@@ -84,6 +85,10 @@ pub use surface_correspondence::{
     validate_source_surface_correspondence, SourceSurfaceBodyCorrespondence,
     SourceSurfaceCorrespondenceError, SourceSurfaceCorrespondencePolicy,
     SourceSurfaceCorrespondenceReport,
+};
+pub use validated_case::{
+    build_validated_exterior_su2_case_bundle,
+    build_validated_exterior_su2_case_bundle_with_reference,
 };
 pub use voxel_case::{
     build_voxel_generated_su2_case, build_voxel_generated_su2_case_with_reference,
