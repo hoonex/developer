@@ -66,20 +66,28 @@ The persistence layer refuses to overwrite an existing case directory.
 
 ## 4. Live lifecycle contract
 
-The Bevy/egui UI remains responsive while the worker thread owns external execution. The lifecycle controller has an explicit state model:
+The Bevy/egui UI remains responsive while the worker thread owns external execution. Lifecycle state has one authoritative owner: `AccurateExecutionStatus`.
+
+Its states are:
 
 - `Idle`;
 - `Running`;
 - `Cancelling`;
-- `Cancelled`.
+- `Cancelled`;
+- `Succeeded`;
+- `Failed`.
 
-This lifecycle status is currently owned by `AccurateLifecycleRuntime`. `AccurateExecutionStatus` still retains its older `Idle/Running/Succeeded/Failed` completion model; cancellation has not yet been fully folded into that enum.
+`AccurateLifecycleRuntime` no longer owns a second status enum. It only retains auxiliary live-run observations: the immutable root snapshot for the active execution, the registered active case path once available, the latest parsed live history quality, whether the cancellation request reached the registered child, and cancellation-sidecar persistence diagnostics.
 
-When a new run is observed, the lifecycle controller snapshots the active `(scene revision, run sequence)` and the **case-root path used for that run**. Subsequent edits to the editable Case root field therefore do not retarget live history discovery or cancellation for the already-running case.
+When a new run is observed, the lifecycle controller snapshots the active `(scene revision, run sequence)` and the **case-root path used for that run**. Subsequent edits to the editable Case root field therefore do not retarget live history or cancellation for the already-running execution.
 
-While the direct child is active, AeroForge discovers the persisted case under that root snapshot and reads `history.csv` or a deterministic sorted `history*.csv` fallback. It reuses the production SU2 history parser and quality evaluator to display the latest available iteration and worst recognized RMS residual. This is observational progress sampling only; it does not alter solver state and cannot promote final convergence by itself.
+The lifecycle controller does not scan the case root and guess which persisted directory is active. The accurate backend exposes a deterministic snapshot of case paths whose direct SU2 child is **currently registered as active**. AeroForge filters only those registered paths by the run-root snapshot plus revision/sequence identity. An old persisted directory that merely shares the same filename prefix is therefore not eligible for live progress or cancellation targeting. Multiple registered matches fail closed as ambiguous instead of selecting one heuristically.
 
-The lifecycle UI exposes explicit cancellation. Cancellation is case-scoped and targets only the registered direct `SU2_CFD` child. The backend requests termination, kills that child when cancellation is observed, and waits for it before returning `Su2RunTermination::Cancelled`.
+While the registered direct child is active, AeroForge reads `history.csv` or a deterministic sorted `history*.csv` fallback from that exact case and reuses the production SU2 history parser and quality evaluator to display the latest available iteration and worst recognized RMS residual. This is observational progress sampling only; it does not alter solver state and cannot promote final convergence by itself.
+
+Pressing Cancel changes the authoritative execution status from `Running` to `Cancelling`. The lifecycle controller then retries a case-scoped cancellation request until the exact registered child becomes available. Cancellation targets only that registered direct `SU2_CFD` child; the backend kills the child when cancellation is observed and waits for it before recording `Su2RunTermination::Cancelled`.
+
+The execution owner reads completed termination non-destructively to classify normal user cancellation as `Cancelled` rather than temporarily treating a killed process as generic `Failed`. The lifecycle owner then consumes the same recorded termination when persisting cancellation provenance. Genuine higher-level failures, such as failure to persist required run evidence, remain `Failed` and are not overwritten merely because the direct child was cancelled.
 
 This contract does **not** claim process-tree cancellation, launcher/MPI-worker cancellation, pause/resume, checkpoint restart, or crash recovery after the editor process disappears.
 
@@ -101,7 +109,7 @@ Manifest format version 5 retains solver/process/history/reference/frame and agg
 - exact per-body six-axis diagnostics mapped through authoritative `BoundarySource::SceneObject { scene_object_id }` provenance;
 - explicit unavailable/error fields when complete evidence cannot be promoted.
 
-The lifecycle hardening slice intentionally did **not** change manifest v5. A confirmed user cancellation now additionally writes a separate sidecar in the persisted case directory:
+Lifecycle hardening intentionally does **not** change manifest v5. A confirmed user cancellation additionally writes a separate sidecar in the persisted case directory:
 
 `aeroforge_lifecycle.tsv`
 
@@ -111,16 +119,17 @@ Lifecycle sidecar format version 1 records:
 - `cancellation_scope=direct_su2_child`;
 - scene revision;
 - run sequence;
+- cancellation-confirmation epoch milliseconds;
 - latest live-observed iteration when available;
 - latest live-observed worst RMS residual when available.
 
-The sidecar is written only after the backend confirms `Su2RunTermination::Cancelled`. A sidecar write error does not silently convert cancellation into success; the UI exposes the provenance write failure separately.
+The sidecar is written only after the backend confirms `Su2RunTermination::Cancelled`. It uses create-new semantics, so an existing lifecycle sidecar is not silently overwritten, and the new record is flushed with `sync_all()` before the write is considered successful. A sidecar write error is surfaced separately and does not silently convert cancellation into success.
 
 The sidecar is intentionally narrower than a recovery journal. It does not record or imply process-tree state, checkpointability, editor-crash recovery, or resumability.
 
 ## 6. Structured history quality
 
-After normal process completion AeroForge reads the persisted history CSV and evaluates the conservative final quality gate. Recognized iteration fields include `INNER_ITER`, `OUTER_ITER`, `TIME_ITER`, `ITER` and `ITERATION`; RMS fields are recognized from normalized headers containing `RMS`.
+After process completion AeroForge reads the persisted history CSV and evaluates the conservative final quality gate. Recognized iteration fields include `INNER_ITER`, `OUTER_ITER`, `TIME_ITER`, `ITER` and `ITERATION`; RMS fields are recognized from normalized headers containing `RMS`.
 
 Final quality states remain:
 
@@ -159,7 +168,11 @@ Relevant checkpoints include:
 - **#589** — cancellable runner, live-history lifecycle controller and desktop cancel UI, routine core/app/GPU GREEN;
 - **#591 / `su2-cancel-one-shot`** — pinned SU2 8.5.0 generated case produced live history at `iteration=0`, worst RMS `-1.38245327`, then the registered direct child was cancelled; `1 passed; 0 failed`, with no numeric Linux exit code after kill;
 - **#593** — temporary cancellation evidence job removed; routine core/app/GPU GREEN with the real-SU2 cancellation test retained as ignored evidence-only coverage;
-- **#599** — case-root snapshot, lifecycle `Running/Cancelling/Cancelled` state and cancellation-sidecar provenance compiled and unit-tested on Windows while routine core and all three GPU parity smokes remained GREEN.
+- **#599** — active root snapshot, lifecycle `Running/Cancelling/Cancelled` state and cancellation-sidecar provenance compiled and unit-tested on Windows while routine core and all three GPU parity smokes remained GREEN;
+- **#603** — immutable create-new + `sync_all()` cancellation sidecar behavior compiled/unit-tested while routine core/app/GPU stayed GREEN;
+- **#607** — non-consuming completed-termination lookup and later consuming lifecycle lookup passed routine core/app/GPU GREEN;
+- **#609** — cancellation was promoted into `AccurateExecutionStatus`/completion classification; routine core/app/GPU completed GREEN;
+- **#615** — duplicate lifecycle status ownership and filesystem case guessing were removed; live targeting now uses the backend active-case registry, with routine core, Windows app compile/unit tests and all GPU parity smokes GREEN.
 
 The external coefficient values above are smoke-fixture diagnostics, not trusted aerodynamic reference data. In particular, #513 starts from an in-memory `SurfaceMesh`; it is not filesystem OBJ/STL/glTF/GLB UI E2E evidence. #591 proves only live persisted-history observation plus registered **direct-child** cancellation for the evidenced run.
 
@@ -175,6 +188,6 @@ AeroForge does not currently claim:
 - process-tree/MPI cancellation;
 - pause/resume, checkpoint restart, or crash recovery.
 
-The lifecycle controller now has first-class `Idle/Running/Cancelling/Cancelled` state, snapshots the active run root, and persists bounded cancellation provenance in `aeroforge_lifecycle.tsv`. The remaining lifecycle integration work is to eliminate the split-brain status model by folding cancellation cleanly into the execution owner/completion contract without weakening existing manifest/result semantics, then design any crash/restart recovery protocol separately.
+Cancellation now uses one authoritative `AccurateExecutionStatus` state machine, exact backend-registered active-case targeting, and immutable bounded lifecycle-sidecar provenance. The remaining lifecycle work is explicit crash/restart recovery design; that must be treated separately from direct-child cancellation and must not imply checkpoint/resume semantics unless those are actually implemented and evidenced.
 
 The next geometry/accurate-path milestone remains a declared higher-fidelity/body-fitted **exterior-fluid** meshing path that consumes audited imported surfaces while preserving stable marker/source provenance. That distinct path will require its own real-SU2 E2E evidence and later independent grid/domain/model/reference validation before engineering claims are permitted.
