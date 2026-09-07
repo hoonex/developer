@@ -76,16 +76,19 @@ The desktop editor is organized around one viewport-first shell rather than inde
 - the right **Inspector** panel defaults to 350 px and is resizable;
 - analytic primitives and imported surfaces share one `Geometry` selection list;
 - the main Inspector is the single editor for selected analytic geometry, imported surfaces, and wind sources;
-- simulation controls remain in the Inspector, while preview-runtime and lower-level GPU diagnostics are collapsible rather than permanently consuming vertical space;
 - surface import is an on-demand, import-only dialog; imported-object transform/delete controls are not duplicated inside the import path;
-- successful import selects the new stable `SceneObject.id`, so subsequent editing happens through the common Scene/Inspector path.
+- successful import selects the new stable `SceneObject.id`, so subsequent editing happens through the common Scene/Inspector path;
+- preview-only top-bar actions, boundary controls, preview runtime, GPU diagnostics, LBM memory, and physical-scaling diagnostics are shown only in interactive-preview mode rather than leaking into Accurate mode.
 
-Accurate mode has a dedicated **Accurate solve** workspace strip. It owns the desktop solve lifecycle presentation and makes the heavy views mutually exclusive:
+Accurate mode has a dedicated **Accurate solve** workspace strip and one central content surface:
 
-- `Prepare` shows the generated-case preparation surface;
-- `Run / Results` shows explicit SU2 persistence/execution and final diagnostics;
-- while SU2 is running or cancelling, `Run / Results` remains selected so completion polling cannot be hidden by a tab switch;
-- live history, registered-case identity, direct-child cancellation state, and cancellation-provenance status are shown in the solve workspace strip;
+- `Viewport` is the default Accurate workspace view and keeps the normal 3D viewport plus viewport-specific import/transform overlays available;
+- `Prepare` replaces the central viewport area with a docked, scrollable generated-case preparation surface;
+- `Run / Results` uses that same central area for explicit SU2 persistence/execution, result diagnostics, history/output tails, and errors;
+- `Prepare` and `Run / Results` are mutually exclusive central surfaces rather than separate floating windows;
+- viewport-specific import and transform overlays are hidden while either solve surface owns the central area;
+- while SU2 is running or cancelling, `Run / Results` is forced active and `Viewport` / `Prepare` switching is disabled so completion polling and cancellation ownership cannot be hidden by a tab switch;
+- live history, registered-case identity, direct-child cancellation state, and cancellation-provenance status remain in the solve workspace strip;
 - the former standalone `SU2 live lifecycle` window and duplicate lifecycle resource were removed;
 - `AccurateExecutionStatus` remains the single execution lifecycle state owner: `Idle / Running / Cancelling / Cancelled / Succeeded / Failed`.
 
