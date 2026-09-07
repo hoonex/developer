@@ -5,6 +5,7 @@ on:
     branches: ["feat/aeroforge-foundation"]
     paths:
       - ".github/workflows/aeroforge-ui-screenshot.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -15,7 +16,7 @@ env:
 jobs:
   screenshot:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
