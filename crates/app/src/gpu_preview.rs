@@ -8,7 +8,7 @@ use bevy::{
         gpu_readback::{Readback, ReadbackComplete},
         render_asset::RenderAssets,
         render_resource::{
-            binding_types::{storage_buffer, uniform_buffer},
+            binding_types::{storage_buffer, storage_buffer_read_only, uniform_buffer},
             *,
         },
         renderer::{RenderContext, RenderDevice, RenderGraph, RenderQueue},
@@ -517,8 +517,8 @@ fn init_compute_pipeline(
             (
                 storage_buffer::<Vec<f32>>(false),
                 storage_buffer::<Vec<f32>>(false),
-                storage_buffer::<Vec<u32>>(true),
-                storage_buffer::<Vec<[f32; 4]>>(true),
+                storage_buffer_read_only::<Vec<u32>>(false),
+                storage_buffer_read_only::<Vec<[f32; 4]>>(false),
                 storage_buffer::<Vec<[f32; 4]>>(false),
                 uniform_buffer::<GpuParams>(false),
             ),
