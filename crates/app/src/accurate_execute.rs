@@ -6,16 +6,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use aeroforge_accurate_backend::{
     discover_su2, evaluate_su2_history_quality, extract_su2_surface_world_axis_diagnostics,
-    extract_su2_world_axis_diagnostics, peek_su2_case_termination,
-    prepare_generated_su2_case_directory_with_fidelity, probe_su2_banner,
+    extract_su2_world_axis_diagnostics, peek_su2_case_termination, probe_su2_banner,
     run_prepared_generated_su2_case, summarize_su2_history_csv, BoundaryRole, BoundarySource,
-    GeneratedSu2CaseBundle, Su2HistoryGateStatus, Su2HistoryQuality, Su2MeshFidelity,
-    Su2RunTermination, Su2WorldAxisDiagnostics,
+    GeneratedSu2CaseBundle, Su2HistoryGateStatus, Su2HistoryQuality, Su2RunTermination,
+    Su2WorldAxisDiagnostics,
 };
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::accurate_prepare::{AccurateRuntime, AccurateSettings};
+use crate::accurate_prepared_case::AccuratePreparedCase;
 use crate::model::{ProjectState, SolverMode};
 
 const SUPPORTED_SU2_BANNER_FRAGMENT: &str = "SU2 v8.5.0";
@@ -174,6 +174,14 @@ pub fn draw_accurate_execute_ui(
                         "Prepare the current scene revision and solver settings before execution.",
                     );
                 }
+                if let Some(prepared_case) = &prepared.prepared_case {
+                    ui.monospace(format!("Prepared mesh path: {}", prepared_case.mesh_kind_label()));
+                    if prepared_case.is_validated_tetgen() {
+                        ui.small(
+                            "Persistence will retain validated exterior + TetGen PLC/process/correspondence sidecars. Body-fitted and engineering-quality status remain not established.",
+                        );
+                    }
+                }
 
                 let active = execution_is_active(execution.status);
                 let root_ok = !execution.case_root.trim().is_empty();
@@ -185,16 +193,17 @@ pub fn draw_accurate_execute_ui(
                     .clicked();
 
                 if run_clicked {
-                    if let (Some(bundle), Some(settings)) =
-                        (prepared.bundle.clone(), prepared.prepared_settings.as_ref())
-                    {
+                    if let (Some(prepared_case), Some(settings)) = (
+                        prepared.prepared_case.clone(),
+                        prepared.prepared_settings.as_ref(),
+                    ) {
                         let root = PathBuf::from(execution.case_root.trim());
                         launch_run(
                             &mut execution,
                             root,
                             state.revision,
                             AccurateRunContract::from(settings),
-                            bundle,
+                            prepared_case,
                         );
                     }
                 }
@@ -356,7 +365,7 @@ pub fn draw_accurate_execute_ui(
                         });
                     }
                     ui.small(
-                        "Process success, residual quality, coefficient diagnostics and user cancellation are separate signals. Even a residual-target pass on the current staircase mesh is not an engineering-valid aerodynamic result.",
+                        "Process success, residual quality, coefficient diagnostics and user cancellation are separate signals. Passing them does not establish engineering-valid aerodynamic accuracy.",
                     );
                 }
                 if let Some(error) = &execution.last_error {
@@ -431,14 +440,14 @@ fn launch_run(
     root: PathBuf,
     revision: u64,
     contract: AccurateRunContract,
-    bundle: GeneratedSu2CaseBundle,
+    prepared_case: AccuratePreparedCase,
 ) {
     let sequence = execution.next_sequence;
     execution.next_sequence = execution.next_sequence.saturating_add(1);
     let nonce = run_nonce_millis();
     let case_name = case_directory_name(revision, sequence, nonce);
     let completion = Arc::clone(&execution.completion);
-    let monitored_scene_bodies = monitored_scene_bodies(&bundle);
+    let monitored_scene_bodies = monitored_scene_bodies(prepared_case.bundle());
 
     execution.status = AccurateExecutionStatus::Running;
     execution.running_revision = Some(revision);
@@ -451,7 +460,7 @@ fn launch_run(
             revision,
             contract,
             monitored_scene_bodies,
-            bundle,
+            prepared_case,
         );
         let mut slot = completion
             .lock()
@@ -466,7 +475,7 @@ fn execute_case(
     revision: u64,
     contract: AccurateRunContract,
     monitored_scene_bodies: Vec<MonitoredSceneBody>,
-    bundle: GeneratedSu2CaseBundle,
+    prepared_case: AccuratePreparedCase,
 ) -> AccurateRunCompletion {
     let monitored_scene_body_count = monitored_scene_bodies.len();
     let executable = match discover_su2() {
@@ -506,16 +515,11 @@ fn execute_case(
         };
     }
 
-    let prepared = match prepare_generated_su2_case_directory_with_fidelity(
-        &root,
-        &case_name,
-        &bundle,
-        Su2MeshFidelity::StaircaseVoxelDerived,
-    ) {
+    let prepared = match prepared_case.persist(&root, &case_name) {
         Ok(prepared) => prepared,
         Err(error) => {
             return AccurateRunCompletion::Failed {
-                message: format!("Failed to persist generated SU2 case: {error}"),
+                message: error,
                 summary: None,
             };
         }
