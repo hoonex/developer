@@ -4,6 +4,9 @@ use std::fmt::{Display, Formatter};
 
 use aeroforge_volume_core::VolumeMesh;
 
+use crate::exterior_mesh::{
+    validate_declared_exterior_fluid_mesh_input, DeclaredExteriorFluidMeshError,
+};
 use crate::generated_case::{
     build_generated_su2_case_bundle_with_reference, GeneratedSu2CaseBundle,
     GeneratedSu2CaseError,
@@ -27,6 +30,7 @@ pub struct GeneratedVoxelSu2Case {
 pub enum GeneratedVoxelSu2CaseError {
     SceneProvenance(SceneOwnerProvenanceError),
     VolumeMesh(VoxelMeshError),
+    ExteriorInput(DeclaredExteriorFluidMeshError),
     Bundle(GeneratedSu2CaseError),
 }
 
@@ -35,6 +39,9 @@ impl Display for GeneratedVoxelSu2CaseError {
         match self {
             Self::SceneProvenance(error) => write!(f, "scene provenance failed: {error}"),
             Self::VolumeMesh(error) => write!(f, "voxel volume meshing failed: {error}"),
+            Self::ExteriorInput(error) => {
+                write!(f, "declared exterior-fluid provenance failed: {error}")
+            }
             Self::Bundle(error) => write!(f, "generated SU2 bundle failed: {error}"),
         }
     }
@@ -51,6 +58,12 @@ impl From<SceneOwnerProvenanceError> for GeneratedVoxelSu2CaseError {
 impl From<VoxelMeshError> for GeneratedVoxelSu2CaseError {
     fn from(value: VoxelMeshError) -> Self {
         Self::VolumeMesh(value)
+    }
+}
+
+impl From<DeclaredExteriorFluidMeshError> for GeneratedVoxelSu2CaseError {
+    fn from(value: DeclaredExteriorFluidMeshError) -> Self {
+        Self::ExteriorInput(value)
     }
 }
 
@@ -112,6 +125,7 @@ pub fn build_voxel_generated_su2_case_with_reference(
         solid_owner,
         &provenance.owner_markers,
     )?;
+    validate_declared_exterior_fluid_mesh_input(&volume_mesh, &provenance.marker_map)?;
     let bundle = build_generated_su2_case_bundle_with_reference(
         case,
         &volume_mesh,
@@ -323,5 +337,27 @@ mod tests {
                 }
             )
         );
+    }
+
+    #[test]
+    fn generated_domain_source_fails_before_su2_bundle_rendering() {
+        let mut bindings = domain_bindings();
+        bindings[0].source = BoundarySource::Generated {
+            label: "ambiguous_inlet".into(),
+        };
+        let error = build_voxel_generated_su2_case(
+            &case(&["body_42"]),
+            domain(),
+            &center_owned_voxels(),
+            &[42],
+            bindings,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            GeneratedVoxelSu2CaseError::ExteriorInput(
+                DeclaredExteriorFluidMeshError::GeneratedBoundarySourceIsUnclassified { .. }
+            )
+        ));
     }
 }
