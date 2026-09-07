@@ -34,7 +34,8 @@ pub use exterior_mesh::{
     DeclaredExteriorFluidMeshReport,
 };
 pub use exterior_mesher_admission::{
-    validate_exterior_mesher_input_intersections, IntersectionValidatedExteriorMesherInput,
+    validate_exterior_mesher_input_intersections, ExteriorMesherAdmissionError,
+    IntersectionValidatedExteriorMesherInput,
 };
 pub use exterior_mesher_input::{
     build_validated_exterior_mesher_input, ExteriorMesherInputError,

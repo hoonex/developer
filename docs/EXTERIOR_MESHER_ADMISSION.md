@@ -10,7 +10,9 @@ ValidatedExteriorMesherInput
 
 The first state owns the finite six-face outer domain, audited source bodies, stable SceneObject identity, strict source-AABB containment, and deterministic domain/body marker provenance.
 
-The second state additionally stores the exact `SourceSurfaceIntersectionPolicy` and resulting `SourceSurfaceIntersectionReport`. Promotion fails closed on invalid tolerance, zero/exhausted triangle-pair budget, stale audited geometry, source-shell self-intersection, or contact/intersection between distinct source shells. Work is never randomly sampled or silently truncated.
+Admission now revalidates that base state instead of trusting the earlier promotion indefinitely. The current domain bindings and source set are run back through the canonical input builder; non-canonical post-validation mutation fails closed. Each source mesh also has its current bounds and topology recomputed and compared with the cached audit evidence before source-shell intersection work begins.
+
+The second state additionally stores the exact `SourceSurfaceIntersectionPolicy` and resulting `SourceSurfaceIntersectionReport`. Its owned base input is private after promotion; the mesher-facing API exposes read-only accessors for domain bounds, audited sources, marker provenance, and intersection evidence. Promotion fails closed on invalid base input, non-canonical mutation, stale audit metadata, invalid tolerance, zero/exhausted triangle-pair budget, source-shell self-intersection, or contact/intersection between distinct source shells. Work is never randomly sampled or silently truncated.
 
 This is intentionally still **not a mesher** and does not establish positive inter-body clearance, exclusion of one closed body entirely nested inside another without shell contact, constrained tetrahedralization, source-triangle preservation, body-fittedness, boundary-layer quality, or CFD accuracy.
 
@@ -20,7 +22,7 @@ The intended distinct path is therefore:
 raw imported surface
 → deterministic repair/audit
 → ValidatedExteriorMesherInput
-→ IntersectionValidatedExteriorMesherInput
+→ revalidated + sealed IntersectionValidatedExteriorMesherInput
 → [source-surface-driven exterior mesher: not implemented yet]
 → candidate VolumeMesh + authoritative marker map
 → ValidatedExteriorMesherHandoff
