@@ -1,6 +1,7 @@
 mod cancellable_su2;
 mod exterior_handoff;
 mod exterior_mesh;
+mod exterior_quality;
 mod generated_case;
 mod history;
 mod imported_surface;
@@ -27,6 +28,10 @@ pub use exterior_handoff::{
 pub use exterior_mesh::{
     validate_declared_exterior_fluid_mesh_input, DeclaredExteriorFluidMeshError,
     DeclaredExteriorFluidMeshReport,
+};
+pub use exterior_quality::{
+    validate_exterior_mesh_quality, ExteriorMeshQualityError, ExteriorMeshQualityPolicy,
+    ExteriorMeshQualityReport,
 };
 pub use generated_case::{
     build_generated_su2_case_bundle, build_generated_su2_case_bundle_with_reference,
