@@ -221,7 +221,7 @@ mod tests {
         assert_eq!(audited.len(), 1);
         assert_eq!(audited[0].scene_object_id, 1);
         assert_eq!(audited[0].mesh.triangles.len(), 12);
-        assert!(audited[0].topology.watertight);
+        assert!(audited[0].topology.watertight_two_manifold);
         assert!(audited[0].enclosed_volume > 0.0);
     }
 
@@ -243,7 +243,7 @@ mod tests {
         );
         assert_eq!(audited[0].mesh.triangles.len(), 528);
         assert_eq!(audited[1].mesh.triangles.len(), 96);
-        assert!(audited.iter().all(|body| body.topology.watertight));
+        assert!(audited.iter().all(|body| body.topology.watertight_two_manifold));
         assert!(audited.iter().all(|body| body.enclosed_volume > 0.0));
     }
 
