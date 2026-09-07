@@ -226,7 +226,7 @@ mod tests {
             .bindings
             .iter()
             .any(|binding| matches!(
-                binding.source,
+                &binding.source,
                 BoundarySource::SceneObject { scene_object_id: 42 }
             )));
     }
