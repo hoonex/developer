@@ -7,6 +7,7 @@ mod accurate_execute;
 mod accurate_prepare;
 mod accurate_recovery;
 mod accurate_scene_geometry;
+mod accurate_source_geometry;
 mod accurate_workspace;
 mod editor_toolbar;
 mod gpu_preview;
