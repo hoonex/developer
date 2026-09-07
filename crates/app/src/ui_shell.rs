@@ -137,16 +137,6 @@ fn draw_top_bar(
             }
 
             ui.separator();
-            let run_label = if state.running { "Pause" } else { "Run preview" };
-            if ui.button(run_label).clicked() {
-                state.running = !state.running;
-            }
-            if ui.button("Reset").clicked() {
-                state.running = false;
-                runtime.reset();
-            }
-
-            ui.separator();
             let preview_selected = state.simulation.mode == SolverMode::InteractivePreview;
             if ui.selectable_label(preview_selected, "Preview").clicked() && !preview_selected {
                 state.simulation.mode = SolverMode::InteractivePreview;
@@ -159,6 +149,26 @@ fn draw_top_bar(
                 state.running = false;
                 ui_state.inspector_tab = InspectorTab::Solve;
                 *dirty = true;
+            }
+
+            ui.separator();
+            match state.simulation.mode {
+                SolverMode::InteractivePreview => {
+                    let run_label = if state.running { "Pause" } else { "Run preview" };
+                    if ui.button(run_label).clicked() {
+                        state.running = !state.running;
+                    }
+                    if ui.button("Reset").clicked() {
+                        state.running = false;
+                        runtime.reset();
+                    }
+                }
+                SolverMode::Accurate => {
+                    if ui.button("Solve").clicked() {
+                        state.running = false;
+                        ui_state.inspector_tab = InspectorTab::Solve;
+                    }
+                }
             }
         });
     });
