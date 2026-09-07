@@ -1,0 +1,79 @@
+name: AeroForge CI
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  core-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Test numerical, geometry, volume and accurate-backend cores
+        run: cargo test -p aeroforge-flow-core -p aeroforge-geometry-core -p aeroforge-volume-core -p aeroforge-accurate-backend -- --nocapture
+
+  app-check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Check desktop editor and test targets
+        run: cargo check -p aeroforge-app --all-targets
+      - name: Run desktop editor unit tests
+        run: cargo test -p aeroforge-app -- --nocapture
+
+  gpu-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache GPU smoke Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-gpu-smoke-cargo-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-gpu-smoke-cargo-
+            ${{ runner.os }}-cargo-
+      - name: Validate moving-wall GPU parity
+        run: cargo run -p aeroforge-gpu-smoke --bin aeroforge-gpu-smoke
+      - name: Validate NEQ open-boundary GPU parity
+        run: cargo run -p aeroforge-gpu-smoke --bin open_boundary
+      - name: Validate free-stream far-field GPU parity
+        run: cargo run -p aeroforge-gpu-smoke --bin far_field
