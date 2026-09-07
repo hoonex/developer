@@ -17,6 +17,7 @@ mod source_intersection;
 mod su2;
 mod su2_mesh;
 mod surface_correspondence;
+mod tetgen_plc;
 mod validated_case;
 mod voxel_case;
 mod voxel_mesh;
@@ -100,6 +101,10 @@ pub use surface_correspondence::{
     validate_source_surface_correspondence, SourceSurfaceBodyCorrespondence,
     SourceSurfaceCorrespondenceError, SourceSurfaceCorrespondencePolicy,
     SourceSurfaceCorrespondenceReport,
+};
+pub use tetgen_plc::{
+    prepare_tetgen_plc, PreparedTetgenPlc, TetgenHoleSeed, TetgenHoleSeedPolicy,
+    TetgenPlcError, TETGEN_BASELINE_SWITCHES,
 };
 pub use validated_case::{
     build_validated_exterior_su2_case_bundle,
