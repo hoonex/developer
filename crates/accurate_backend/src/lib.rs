@@ -19,6 +19,7 @@ mod su2_mesh;
 mod surface_correspondence;
 mod tetgen_output;
 mod tetgen_plc;
+mod tetgen_runner;
 mod validated_case;
 mod voxel_case;
 mod voxel_mesh;
@@ -109,6 +110,10 @@ pub use tetgen_output::{
 pub use tetgen_plc::{
     prepare_tetgen_plc, PreparedTetgenPlc, TetgenHoleSeed, TetgenHoleSeedPolicy,
     TetgenPlcError, TETGEN_BASELINE_SWITCHES,
+};
+pub use tetgen_runner::{
+    discover_tetgen, run_prepared_tetgen_plc, TetgenExternalRunError,
+    TetgenExternalRunResult,
 };
 pub use validated_case::{
     build_validated_exterior_su2_case_bundle,
