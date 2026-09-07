@@ -1,4 +1,5 @@
 mod cancellable_su2;
+mod exterior_mesh;
 mod generated_case;
 mod history;
 mod imported_surface;
@@ -16,6 +17,10 @@ pub use cancellable_su2::{
     active_su2_case_paths, peek_su2_case_termination, request_su2_case_cancellation,
     run_su2_case_cancellable, run_su2_case_registered, take_su2_case_termination,
     CancellableSu2RunResult, Su2RunTermination,
+};
+pub use exterior_mesh::{
+    validate_declared_exterior_fluid_mesh_input, DeclaredExteriorFluidMeshError,
+    DeclaredExteriorFluidMeshReport,
 };
 pub use generated_case::{
     build_generated_su2_case_bundle, build_generated_su2_case_bundle_with_reference,
