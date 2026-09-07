@@ -109,193 +109,196 @@ pub fn draw_accurate_prepare_ui(
     }
 
     let ctx = contexts.ctx_mut()?;
-    egui::Window::new("Accurate solve — generated SU2 case")
-        .default_width(430.0)
-        .resizable(true)
-        .show(ctx, |ui| {
-            ui.label(
-                "Generate a closed wind-tunnel SU2 case (X inlet/outlet, Y/Z walls) with scene bodies as wall markers.",
-            );
-            ui.small(
-                "The current generated mesh is a Cartesian staircase tetra mesh. It preserves boundary/object provenance but is not yet a body-fitted engineering-quality mesh.",
-            );
-            ui.small(
-                "Imported surfaces must pass the closed-surface accurate audit before they are rasterized into the same staircase ownership field as analytic primitives.",
-            );
-            ui.small(
-                "Local WindSource volumes/nozzles are not translated to SU2 boundary conditions yet; this case uses the dedicated inlet setting below.",
-            );
-            ui.separator();
+    egui::CentralPanel::default().show(ctx, |ui| {
+        ui.heading("Prepare generated SU2 case");
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .id_salt("accurate_prepare_scroll")
+            .show(ui, |ui| {
+                ui.label(
+                    "Generate a closed wind-tunnel SU2 case (X inlet/outlet, Y/Z walls) with scene bodies as wall markers.",
+                );
+                ui.small(
+                    "The current generated mesh is a Cartesian staircase tetra mesh. It preserves boundary/object provenance but is not yet a body-fitted engineering-quality mesh.",
+                );
+                ui.small(
+                    "Imported surfaces must pass the closed-surface accurate audit before they are rasterized into the same staircase ownership field as analytic primitives.",
+                );
+                ui.small(
+                    "Local WindSource volumes/nozzles are not translated to SU2 boundary conditions yet; this case uses the dedicated inlet setting below.",
+                );
+                ui.separator();
 
-            egui::ComboBox::from_label("Flow model")
-                .selected_text(match runtime.settings.flow_model {
-                    FlowModel::Laminar => "Laminar",
-                    FlowModel::RansSst => "RANS SST",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut runtime.settings.flow_model,
-                        FlowModel::Laminar,
-                        "Laminar",
-                    );
-                    ui.selectable_value(
-                        &mut runtime.settings.flow_model,
-                        FlowModel::RansSst,
-                        "RANS SST",
-                    );
-                });
-            ui.horizontal(|ui| {
-                ui.label("Inlet speed (m/s)");
-                ui.add(
-                    egui::DragValue::new(&mut runtime.settings.inlet_speed_mps)
-                        .range(0.1..=300.0)
-                        .speed(0.1),
-                );
-            });
-            ui.horizontal(|ui| {
-                ui.label("Temperature (K)");
-                ui.add(
-                    egui::DragValue::new(&mut runtime.settings.temperature_k)
-                        .range(100.0..=1000.0)
-                        .speed(0.5),
-                );
-            });
-            if runtime.settings.flow_model == FlowModel::RansSst {
+                egui::ComboBox::from_label("Flow model")
+                    .selected_text(match runtime.settings.flow_model {
+                        FlowModel::Laminar => "Laminar",
+                        FlowModel::RansSst => "RANS SST",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut runtime.settings.flow_model,
+                            FlowModel::Laminar,
+                            "Laminar",
+                        );
+                        ui.selectable_value(
+                            &mut runtime.settings.flow_model,
+                            FlowModel::RansSst,
+                            "RANS SST",
+                        );
+                    });
                 ui.horizontal(|ui| {
-                    ui.label("Turbulence intensity");
+                    ui.label("Inlet speed (m/s)");
                     ui.add(
-                        egui::DragValue::new(&mut runtime.settings.turbulence_intensity)
-                            .range(0.0001..=0.5)
-                            .speed(0.001),
+                        egui::DragValue::new(&mut runtime.settings.inlet_speed_mps)
+                            .range(0.1..=300.0)
+                            .speed(0.1),
                     );
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Turbulent / laminar μ ratio");
+                    ui.label("Temperature (K)");
                     ui.add(
-                        egui::DragValue::new(
-                            &mut runtime.settings.turbulent_to_laminar_viscosity_ratio,
-                        )
-                        .range(1.0..=1000.0)
-                        .speed(0.5),
+                        egui::DragValue::new(&mut runtime.settings.temperature_k)
+                            .range(100.0..=1000.0)
+                            .speed(0.5),
                     );
                 });
-            }
-            ui.horizontal(|ui| {
-                ui.label("Max iterations");
-                ui.add(
-                    egui::DragValue::new(&mut runtime.settings.max_iterations)
-                        .range(1..=1_000_000)
-                        .speed(10.0),
-                );
-            });
-            ui.horizontal(|ui| {
-                ui.label("log10 residual target");
-                ui.add(
-                    egui::DragValue::new(&mut runtime.settings.convergence_log10)
-                        .range(-14.0..=-2.0)
-                        .speed(0.1),
-                );
-            });
-
-            ui.separator();
-            ui.label("Coefficient normalization reference (explicit SI)");
-            ui.horizontal(|ui| {
-                ui.label("Reference area (m²)");
-                ui.add(
-                    egui::DragValue::new(&mut runtime.settings.reference_area_m2)
-                        .range(1.0e-9..=1.0e9)
-                        .speed(0.01),
-                );
-            });
-            ui.horizontal(|ui| {
-                ui.label("Reference length (m)");
-                ui.add(
-                    egui::DragValue::new(&mut runtime.settings.reference_length_m)
-                        .range(1.0e-9..=1.0e9)
-                        .speed(0.01),
-                );
-            });
-            ui.small(
-                "These values explicitly set SU2 REF_AREA / REF_LENGTH. AeroForge does not infer them from the voxel mesh, and they do not make CD/CL engineering-valid.",
-            );
-
-            ui.separator();
-            let cells = state.simulation.cell_count();
-            ui.monospace(format!("Voxel cells: {cells}"));
-            ui.monospace(format!("Worst-case tetrahedra: {}", cells.saturating_mul(6)));
-            let within_budget = cells <= ACCURATE_PREPARE_CELL_LIMIT;
-            if !within_budget {
-                ui.colored_label(
-                    egui::Color32::YELLOW,
-                    format!(
-                        "Preparation blocked above {ACCURATE_PREPARE_CELL_LIMIT} cells. Grid is never silently reduced."
-                    ),
-                );
-            }
-
-            let prepare = ui
-                .add_enabled(within_budget, egui::Button::new("Prepare generated SU2 case"))
-                .clicked();
-            if prepare {
-                let settings_snapshot = runtime.settings.clone();
-                match prepare_from_state(&state, &settings_snapshot) {
-                    Ok((bundle, summary)) => {
-                        runtime.bundle = Some(bundle);
-                        runtime.summary = Some(summary);
-                        runtime.prepared_revision = Some(state.revision);
-                        runtime.prepared_settings = Some(settings_snapshot);
-                        runtime.last_error = None;
-                        runtime.status = AccuratePrepareStatus::Prepared;
-                    }
-                    Err(error) => {
-                        runtime.bundle = None;
-                        runtime.summary = None;
-                        runtime.prepared_revision = None;
-                        runtime.prepared_settings = None;
-                        runtime.last_error = Some(error);
-                        runtime.status = AccuratePrepareStatus::Failed;
-                    }
+                if runtime.settings.flow_model == FlowModel::RansSst {
+                    ui.horizontal(|ui| {
+                        ui.label("Turbulence intensity");
+                        ui.add(
+                            egui::DragValue::new(&mut runtime.settings.turbulence_intensity)
+                                .range(0.0001..=0.5)
+                                .speed(0.001),
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Turbulent / laminar μ ratio");
+                        ui.add(
+                            egui::DragValue::new(
+                                &mut runtime.settings.turbulent_to_laminar_viscosity_ratio,
+                            )
+                            .range(1.0..=1000.0)
+                            .speed(0.5),
+                        );
+                    });
                 }
-            }
+                ui.horizontal(|ui| {
+                    ui.label("Max iterations");
+                    ui.add(
+                        egui::DragValue::new(&mut runtime.settings.max_iterations)
+                            .range(1..=1_000_000)
+                            .speed(10.0),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label("log10 residual target");
+                    ui.add(
+                        egui::DragValue::new(&mut runtime.settings.convergence_log10)
+                            .range(-14.0..=-2.0)
+                            .speed(0.1),
+                    );
+                });
 
-            if let Some(prepared_revision) = runtime.prepared_revision {
-                if prepared_revision != state.revision {
+                ui.separator();
+                ui.label("Coefficient normalization reference (explicit SI)");
+                ui.horizontal(|ui| {
+                    ui.label("Reference area (m²)");
+                    ui.add(
+                        egui::DragValue::new(&mut runtime.settings.reference_area_m2)
+                            .range(1.0e-9..=1.0e9)
+                            .speed(0.01),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Reference length (m)");
+                    ui.add(
+                        egui::DragValue::new(&mut runtime.settings.reference_length_m)
+                            .range(1.0e-9..=1.0e9)
+                            .speed(0.01),
+                    );
+                });
+                ui.small(
+                    "These values explicitly set SU2 REF_AREA / REF_LENGTH. AeroForge does not infer them from the voxel mesh, and they do not make CD/CL engineering-valid.",
+                );
+
+                ui.separator();
+                let cells = state.simulation.cell_count();
+                ui.monospace(format!("Voxel cells: {cells}"));
+                ui.monospace(format!("Worst-case tetrahedra: {}", cells.saturating_mul(6)));
+                let within_budget = cells <= ACCURATE_PREPARE_CELL_LIMIT;
+                if !within_budget {
                     ui.colored_label(
                         egui::Color32::YELLOW,
                         format!(
-                            "Prepared case is stale: scene revision {prepared_revision}, current revision {}.",
-                            state.revision
+                            "Preparation blocked above {ACCURATE_PREPARE_CELL_LIMIT} cells. Grid is never silently reduced."
                         ),
                     );
                 }
-            }
-            if runtime.prepared_settings.is_some()
-                && runtime.prepared_settings.as_ref() != Some(&runtime.settings)
-            {
-                ui.colored_label(
-                    egui::Color32::YELLOW,
-                    "Prepared case is stale: accurate solver settings changed after preparation.",
-                );
-            }
 
-            if let Some(summary) = &runtime.summary {
-                ui.separator();
-                ui.monospace(format!("Solid cells: {}", summary.solid_cells));
-                ui.monospace(format!("Active body markers: {}", summary.active_body_markers));
-                ui.monospace(format!("Points: {}", summary.points));
-                ui.monospace(format!("Tetrahedra: {}", summary.tetrahedra));
-                ui.monospace(format!("Boundary triangles: {}", summary.boundary_triangles));
-                ui.monospace(format!("SU2 markers: {}", summary.marker_count));
-                ui.monospace(format!("Mesh text: {:.2} MiB", summary.mesh_bytes as f64 / 1_048_576.0));
-                ui.monospace(format!("Config text: {} bytes", summary.config_bytes));
-                ui.small(
-                    "Prepared in memory. Persisting and launching SU2 remains a separate explicit action.",
-                );
-            }
-            if let Some(error) = &runtime.last_error {
-                ui.colored_label(egui::Color32::RED, format!("Preparation failed: {error}"));
-            }
-        });
+                let prepare = ui
+                    .add_enabled(within_budget, egui::Button::new("Prepare generated SU2 case"))
+                    .clicked();
+                if prepare {
+                    let settings_snapshot = runtime.settings.clone();
+                    match prepare_from_state(&state, &settings_snapshot) {
+                        Ok((bundle, summary)) => {
+                            runtime.bundle = Some(bundle);
+                            runtime.summary = Some(summary);
+                            runtime.prepared_revision = Some(state.revision);
+                            runtime.prepared_settings = Some(settings_snapshot);
+                            runtime.last_error = None;
+                            runtime.status = AccuratePrepareStatus::Prepared;
+                        }
+                        Err(error) => {
+                            runtime.bundle = None;
+                            runtime.summary = None;
+                            runtime.prepared_revision = None;
+                            runtime.prepared_settings = None;
+                            runtime.last_error = Some(error);
+                            runtime.status = AccuratePrepareStatus::Failed;
+                        }
+                    }
+                }
+
+                if let Some(prepared_revision) = runtime.prepared_revision {
+                    if prepared_revision != state.revision {
+                        ui.colored_label(
+                            egui::Color32::YELLOW,
+                            format!(
+                                "Prepared case is stale: scene revision {prepared_revision}, current revision {}.",
+                                state.revision
+                            ),
+                        );
+                    }
+                }
+                if runtime.prepared_settings.is_some()
+                    && runtime.prepared_settings.as_ref() != Some(&runtime.settings)
+                {
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        "Prepared case is stale: accurate solver settings changed after preparation.",
+                    );
+                }
+
+                if let Some(summary) = &runtime.summary {
+                    ui.separator();
+                    ui.monospace(format!("Solid cells: {}", summary.solid_cells));
+                    ui.monospace(format!("Active body markers: {}", summary.active_body_markers));
+                    ui.monospace(format!("Points: {}", summary.points));
+                    ui.monospace(format!("Tetrahedra: {}", summary.tetrahedra));
+                    ui.monospace(format!("Boundary triangles: {}", summary.boundary_triangles));
+                    ui.monospace(format!("SU2 markers: {}", summary.marker_count));
+                    ui.monospace(format!("Mesh text: {:.2} MiB", summary.mesh_bytes as f64 / 1_048_576.0));
+                    ui.monospace(format!("Config text: {} bytes", summary.config_bytes));
+                    ui.small(
+                        "Prepared in memory. Persisting and launching SU2 remains a separate explicit action.",
+                    );
+                }
+                if let Some(error) = &runtime.last_error {
+                    ui.colored_label(egui::Color32::RED, format!("Preparation failed: {error}"));
+                }
+            });
+    });
 
     Ok(())
 }
