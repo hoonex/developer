@@ -21,6 +21,7 @@ mod tetgen_handoff;
 mod tetgen_output;
 mod tetgen_plc;
 mod tetgen_runner;
+mod tetgen_validated_case;
 mod validated_case;
 mod voxel_case;
 mod voxel_mesh;
@@ -119,6 +120,11 @@ pub use tetgen_plc::{
 pub use tetgen_runner::{
     discover_tetgen, run_prepared_tetgen_plc, TetgenExternalRunError,
     TetgenExternalRunResult,
+};
+pub use tetgen_validated_case::{
+    prepare_tetgen_validated_exterior_su2_case_directory,
+    prepare_tetgen_validated_exterior_su2_case_directory_with_reference,
+    PrepareTetgenValidatedExteriorCaseError,
 };
 pub use validated_case::{
     build_validated_exterior_su2_case_bundle,
