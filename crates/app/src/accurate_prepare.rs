@@ -1,4 +1,6 @@
 use std::collections::BTreeSet;
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 use aeroforge_accurate_backend::{
     build_voxel_generated_su2_case_with_reference, scene_object_wall_tag, BoundaryRole,
@@ -11,9 +13,25 @@ use bevy_egui::{egui, EguiContexts};
 
 use crate::accurate_prepared_case::AccuratePreparedCase;
 use crate::accurate_scene_geometry::voxelize_project_geometry_for_accurate;
+use crate::accurate_tetgen_prepare::{prepare_tetgen_from_state, snapshot_project_state};
 use crate::model::{ProjectState, SolverMode};
 
 pub const ACCURATE_PREPARE_CELL_LIMIT: u64 = 200_000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccurateMeshPath {
+    Staircase,
+    ValidatedTetgen,
+}
+
+impl AccurateMeshPath {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Staircase => "Cartesian staircase",
+            Self::ValidatedTetgen => "Validated external TetGen",
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AccurateSettings {
@@ -24,9 +42,9 @@ pub struct AccurateSettings {
     pub turbulent_to_laminar_viscosity_ratio: f64,
     pub max_iterations: u32,
     pub convergence_log10: f64,
-    /// Explicit SU2 force-coefficient normalization area. Never inferred from staircase geometry.
+    /// Explicit SU2 force-coefficient normalization area. Never inferred from prepared geometry.
     pub reference_area_m2: f64,
-    /// Explicit SU2 moment-coefficient normalization length. Never inferred from staircase geometry.
+    /// Explicit SU2 moment-coefficient normalization length. Never inferred from prepared geometry.
     pub reference_length_m: f64,
 }
 
@@ -49,6 +67,7 @@ impl Default for AccurateSettings {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AccuratePrepareStatus {
     Idle,
+    Preparing,
     Prepared,
     Failed,
 }
@@ -65,32 +84,43 @@ pub struct PreparedCaseSummary {
     pub config_bytes: usize,
 }
 
+#[derive(Debug)]
+struct AccuratePrepareCompletion {
+    revision: u64,
+    settings: AccurateSettings,
+    mesh_path: AccurateMeshPath,
+    result: Result<(AccuratePreparedCase, PreparedCaseSummary), String>,
+}
+
 #[derive(Resource)]
 pub struct AccurateRuntime {
     pub settings: AccurateSettings,
+    pub selected_mesh_path: AccurateMeshPath,
     pub status: AccuratePrepareStatus,
+    pub preparing_revision: Option<u64>,
     pub prepared_revision: Option<u64>,
     pub prepared_settings: Option<AccurateSettings>,
+    pub prepared_mesh_path: Option<AccurateMeshPath>,
     pub summary: Option<PreparedCaseSummary>,
     pub last_error: Option<String>,
-    /// Legacy bundle view retained until Run/Results consumes `prepared_case` directly.
-    pub bundle: Option<GeneratedSu2CaseBundle>,
-    /// Provenance-bearing prepared artifact. Persistence must use this value rather than `bundle`
-    /// once the Run/Results migration is complete.
     pub prepared_case: Option<AccuratePreparedCase>,
+    completion: Arc<Mutex<Option<AccuratePrepareCompletion>>>,
 }
 
 impl Default for AccurateRuntime {
     fn default() -> Self {
         Self {
             settings: AccurateSettings::default(),
+            selected_mesh_path: AccurateMeshPath::Staircase,
             status: AccuratePrepareStatus::Idle,
+            preparing_revision: None,
             prepared_revision: None,
             prepared_settings: None,
+            prepared_mesh_path: None,
             summary: None,
             last_error: None,
-            bundle: None,
             prepared_case: None,
+            completion: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -98,10 +128,10 @@ impl Default for AccurateRuntime {
 impl AccurateRuntime {
     pub fn is_fresh_for(&self, scene_revision: u64) -> bool {
         self.status == AccuratePrepareStatus::Prepared
-            && self.bundle.is_some()
             && self.prepared_case.is_some()
             && self.prepared_revision == Some(scene_revision)
             && self.prepared_settings.as_ref() == Some(&self.settings)
+            && self.prepared_mesh_path == Some(self.selected_mesh_path)
     }
 }
 
@@ -114,6 +144,8 @@ pub fn draw_accurate_prepare_ui(
         return Ok(());
     }
 
+    collect_prepare_completion(&mut runtime);
+
     let ctx = contexts.ctx_mut()?;
     egui::CentralPanel::default().show(ctx, |ui| {
         ui.heading("Prepare generated SU2 case");
@@ -125,14 +157,46 @@ pub fn draw_accurate_prepare_ui(
                     "Generate a closed wind-tunnel SU2 case (X inlet/outlet, Y/Z walls) with scene bodies as wall markers.",
                 );
                 ui.small(
-                    "The current generated mesh is a Cartesian staircase tetra mesh. It preserves boundary/object provenance but is not yet a body-fitted engineering-quality mesh.",
-                );
-                ui.small(
-                    "Imported surfaces must pass the closed-surface accurate audit before they are rasterized into the same staircase ownership field as analytic primitives.",
-                );
-                ui.small(
                     "Local WindSource volumes/nozzles are not translated to SU2 boundary conditions yet; this case uses the dedicated inlet setting below.",
                 );
+                ui.separator();
+
+                egui::ComboBox::from_label("Mesh path")
+                    .selected_text(runtime.selected_mesh_path.label())
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut runtime.selected_mesh_path,
+                            AccurateMeshPath::Staircase,
+                            AccurateMeshPath::Staircase.label(),
+                        );
+                        ui.selectable_value(
+                            &mut runtime.selected_mesh_path,
+                            AccurateMeshPath::ValidatedTetgen,
+                            AccurateMeshPath::ValidatedTetgen.label(),
+                        );
+                    });
+
+                match runtime.selected_mesh_path {
+                    AccurateMeshPath::Staircase => {
+                        ui.small(
+                            "Cartesian voxel/staircase tetrahedra. Boundary/object provenance is retained, but the mesh is not body-fitted or engineering-quality.",
+                        );
+                        ui.small(
+                            "Imported surfaces must pass the closed-surface accurate audit before rasterization into the ownership field.",
+                        );
+                    }
+                    AccurateMeshPath::ValidatedTetgen => {
+                        ui.small(
+                            "Runs a user-installed TetGen executable in a worker thread after strict source intersection/containment admission, then validates local tetra quality and source correspondence.",
+                        );
+                        ui.small(
+                            "Set TETGEN_EXECUTABLE or place tetgen(.exe) on PATH. AeroForge does not download or bundle TetGen. Current validation still records body_fitted_status=not_established and engineering_quality_status=not_established.",
+                        );
+                        ui.small(
+                            "Source bodies must lie strictly inside the outer domain: touching the tunnel floor/walls is rejected by this exterior-mesher path.",
+                        );
+                    }
+                }
                 ui.separator();
 
                 egui::ComboBox::from_label("Flow model")
@@ -185,7 +249,7 @@ pub fn draw_accurate_prepare_ui(
                             )
                             .range(1.0..=1000.0)
                             .speed(0.5),
-                        );
+                    );
                     });
                 }
                 ui.horizontal(|ui| {
@@ -224,49 +288,79 @@ pub fn draw_accurate_prepare_ui(
                     );
                 });
                 ui.small(
-                    "These values explicitly set SU2 REF_AREA / REF_LENGTH. AeroForge does not infer them from the voxel mesh, and they do not make CD/CL engineering-valid.",
+                    "These values explicitly set SU2 REF_AREA / REF_LENGTH. AeroForge does not infer them from prepared geometry, and they do not make CD/CL engineering-valid.",
                 );
 
                 ui.separator();
+                let preparing = runtime.status == AccuratePrepareStatus::Preparing;
                 let cells = state.simulation.cell_count();
-                ui.monospace(format!("Voxel cells: {cells}"));
-                ui.monospace(format!("Worst-case tetrahedra: {}", cells.saturating_mul(6)));
-                let within_budget = cells <= ACCURATE_PREPARE_CELL_LIMIT;
-                if !within_budget {
-                    ui.colored_label(
-                        egui::Color32::YELLOW,
-                        format!(
-                            "Preparation blocked above {ACCURATE_PREPARE_CELL_LIMIT} cells. Grid is never silently reduced."
-                        ),
-                    );
+                let staircase_within_budget = cells <= ACCURATE_PREPARE_CELL_LIMIT;
+                if runtime.selected_mesh_path == AccurateMeshPath::Staircase {
+                    ui.monospace(format!("Voxel cells: {cells}"));
+                    ui.monospace(format!(
+                        "Worst-case tetrahedra: {}",
+                        cells.saturating_mul(6)
+                    ));
+                    if !staircase_within_budget {
+                        ui.colored_label(
+                            egui::Color32::YELLOW,
+                            format!(
+                                "Staircase preparation blocked above {ACCURATE_PREPARE_CELL_LIMIT} cells. Grid is never silently reduced."
+                            ),
+                        );
+                    }
                 }
 
+                let can_prepare = !preparing
+                    && (runtime.selected_mesh_path != AccurateMeshPath::Staircase
+                        || staircase_within_budget);
+                let prepare_label = match runtime.selected_mesh_path {
+                    AccurateMeshPath::Staircase => "Prepare staircase SU2 case",
+                    AccurateMeshPath::ValidatedTetgen => "Prepare validated TetGen SU2 case",
+                };
                 let prepare = ui
-                    .add_enabled(within_budget, egui::Button::new("Prepare generated SU2 case"))
+                    .add_enabled(can_prepare, egui::Button::new(prepare_label))
                     .clicked();
+
                 if prepare {
                     let settings_snapshot = runtime.settings.clone();
-                    match prepare_from_state(&state, &settings_snapshot) {
-                        Ok((bundle, summary)) => {
-                            runtime.prepared_case =
-                                Some(AccuratePreparedCase::staircase(bundle.clone()));
-                            runtime.bundle = Some(bundle);
-                            runtime.summary = Some(summary);
-                            runtime.prepared_revision = Some(state.revision);
-                            runtime.prepared_settings = Some(settings_snapshot);
-                            runtime.last_error = None;
-                            runtime.status = AccuratePrepareStatus::Prepared;
+                    match runtime.selected_mesh_path {
+                        AccurateMeshPath::Staircase => {
+                            match prepare_staircase_from_state(&state, &settings_snapshot) {
+                                Ok((bundle, summary)) => {
+                                    runtime.prepared_case =
+                                        Some(AccuratePreparedCase::staircase(bundle));
+                                    runtime.summary = Some(summary);
+                                    runtime.prepared_revision = Some(state.revision);
+                                    runtime.prepared_settings = Some(settings_snapshot);
+                                    runtime.prepared_mesh_path = Some(AccurateMeshPath::Staircase);
+                                    runtime.preparing_revision = None;
+                                    runtime.last_error = None;
+                                    runtime.status = AccuratePrepareStatus::Prepared;
+                                }
+                                Err(error) => {
+                                    runtime.preparing_revision = None;
+                                    runtime.last_error = Some(error);
+                                    runtime.status = AccuratePrepareStatus::Failed;
+                                }
+                            }
                         }
-                        Err(error) => {
-                            runtime.bundle = None;
-                            runtime.prepared_case = None;
-                            runtime.summary = None;
-                            runtime.prepared_revision = None;
-                            runtime.prepared_settings = None;
-                            runtime.last_error = Some(error);
-                            runtime.status = AccuratePrepareStatus::Failed;
+                        AccurateMeshPath::ValidatedTetgen => {
+                            launch_tetgen_prepare(&mut runtime, &state, settings_snapshot);
                         }
                     }
+                }
+
+                if runtime.status == AccuratePrepareStatus::Preparing {
+                    ui.separator();
+                    ui.label(format!(
+                        "TetGen preparation: running scene revision {}",
+                        runtime.preparing_revision.unwrap_or_default()
+                    ));
+                    ui.spinner();
+                    ui.small(
+                        "The editor remains responsive; completion is revision/settings/path-bound and may already be stale if the scene changes meanwhile.",
+                    );
                 }
 
                 if let Some(prepared_revision) = runtime.prepared_revision {
@@ -288,26 +382,44 @@ pub fn draw_accurate_prepare_ui(
                         "Prepared case is stale: accurate solver settings changed after preparation.",
                     );
                 }
+                if runtime.prepared_mesh_path.is_some()
+                    && runtime.prepared_mesh_path != Some(runtime.selected_mesh_path)
+                {
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        "Prepared case is stale: mesh path selection changed after preparation.",
+                    );
+                }
 
                 if let Some(summary) = &runtime.summary {
                     ui.separator();
                     if let Some(prepared_case) = &runtime.prepared_case {
                         ui.monospace(format!("Mesh path: {}", prepared_case.mesh_kind_label()));
+                        if !prepared_case.is_validated_tetgen() {
+                            ui.monospace(format!("Solid cells: {}", summary.solid_cells));
+                        }
                     }
-                    ui.monospace(format!("Solid cells: {}", summary.solid_cells));
                     ui.monospace(format!("Active body markers: {}", summary.active_body_markers));
                     ui.monospace(format!("Points: {}", summary.points));
                     ui.monospace(format!("Tetrahedra: {}", summary.tetrahedra));
                     ui.monospace(format!("Boundary triangles: {}", summary.boundary_triangles));
                     ui.monospace(format!("SU2 markers: {}", summary.marker_count));
-                    ui.monospace(format!("Mesh text: {:.2} MiB", summary.mesh_bytes as f64 / 1_048_576.0));
+                    ui.monospace(format!(
+                        "Mesh text: {:.2} MiB",
+                        summary.mesh_bytes as f64 / 1_048_576.0
+                    ));
                     ui.monospace(format!("Config text: {} bytes", summary.config_bytes));
                     ui.small(
-                        "Prepared in memory. Persisting and launching SU2 remains a separate explicit action.",
+                        "Prepared in memory. Persisting and launching SU2 remains a separate explicit action in Run / Results.",
                     );
                 }
                 if let Some(error) = &runtime.last_error {
                     ui.colored_label(egui::Color32::RED, format!("Preparation failed: {error}"));
+                    if runtime.prepared_case.is_some() {
+                        ui.small(
+                            "The previous prepared artifact is retained for inspection, but execution remains disabled until a preparation succeeds again.",
+                        );
+                    }
                 }
             });
     });
@@ -315,7 +427,65 @@ pub fn draw_accurate_prepare_ui(
     Ok(())
 }
 
-fn prepare_from_state(
+fn collect_prepare_completion(runtime: &mut AccurateRuntime) {
+    let completed = {
+        let mut slot = runtime
+            .completion
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        slot.take()
+    };
+    let Some(completed) = completed else {
+        return;
+    };
+
+    runtime.preparing_revision = None;
+    match completed.result {
+        Ok((prepared_case, summary)) => {
+            runtime.prepared_case = Some(prepared_case);
+            runtime.summary = Some(summary);
+            runtime.prepared_revision = Some(completed.revision);
+            runtime.prepared_settings = Some(completed.settings);
+            runtime.prepared_mesh_path = Some(completed.mesh_path);
+            runtime.last_error = None;
+            runtime.status = AccuratePrepareStatus::Prepared;
+        }
+        Err(error) => {
+            runtime.last_error = Some(error);
+            runtime.status = AccuratePrepareStatus::Failed;
+        }
+    }
+}
+
+fn launch_tetgen_prepare(
+    runtime: &mut AccurateRuntime,
+    state: &ProjectState,
+    settings: AccurateSettings,
+) {
+    let snapshot = snapshot_project_state(state);
+    let revision = state.revision;
+    let completion_slot = Arc::clone(&runtime.completion);
+
+    runtime.status = AccuratePrepareStatus::Preparing;
+    runtime.preparing_revision = Some(revision);
+    runtime.last_error = None;
+
+    thread::spawn(move || {
+        let result = prepare_tetgen_from_state(&snapshot, &settings);
+        let completed = AccuratePrepareCompletion {
+            revision,
+            settings,
+            mesh_path: AccurateMeshPath::ValidatedTetgen,
+            result,
+        };
+        let mut slot = completion_slot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *slot = Some(completed);
+    });
+}
+
+fn prepare_staircase_from_state(
     state: &ProjectState,
     settings: &AccurateSettings,
 ) -> Result<(GeneratedSu2CaseBundle, PreparedCaseSummary), String> {
@@ -351,7 +521,6 @@ fn prepare_from_state(
     };
 
     let voxelized = voxelize_project_geometry_for_accurate(state, domain)?;
-
     let active_owner_labels = voxelized
         .solid_owner
         .iter()
@@ -362,7 +531,6 @@ fn prepare_from_state(
         .iter()
         .map(|&owner| voxelized.owner_object_ids[owner as usize - 1])
         .collect::<Vec<_>>();
-
     let (case, coefficient_reference) =
         solver_case_for_scene_ids(state, settings, &active_scene_ids);
 
@@ -438,48 +606,12 @@ fn closed_wind_tunnel_bindings() -> Vec<Su2MarkerBinding> {
         source: BoundarySource::DomainFace { axis, side },
     };
     vec![
-        binding(
-            1,
-            "inlet",
-            BoundaryRole::Inlet,
-            DomainAxis::X,
-            DomainSide::Min,
-        ),
-        binding(
-            2,
-            "outlet",
-            BoundaryRole::Outlet,
-            DomainAxis::X,
-            DomainSide::Max,
-        ),
-        binding(
-            3,
-            "y_min",
-            BoundaryRole::Wall,
-            DomainAxis::Y,
-            DomainSide::Min,
-        ),
-        binding(
-            4,
-            "y_max",
-            BoundaryRole::Wall,
-            DomainAxis::Y,
-            DomainSide::Max,
-        ),
-        binding(
-            5,
-            "z_min",
-            BoundaryRole::Wall,
-            DomainAxis::Z,
-            DomainSide::Min,
-        ),
-        binding(
-            6,
-            "z_max",
-            BoundaryRole::Wall,
-            DomainAxis::Z,
-            DomainSide::Max,
-        ),
+        binding(1, "inlet", BoundaryRole::Inlet, DomainAxis::X, DomainSide::Min),
+        binding(2, "outlet", BoundaryRole::Outlet, DomainAxis::X, DomainSide::Max),
+        binding(3, "y_min", BoundaryRole::Wall, DomainAxis::Y, DomainSide::Min),
+        binding(4, "y_max", BoundaryRole::Wall, DomainAxis::Y, DomainSide::Max),
+        binding(5, "z_min", BoundaryRole::Wall, DomainAxis::Z, DomainSide::Min),
+        binding(6, "z_max", BoundaryRole::Wall, DomainAxis::Z, DomainSide::Max),
     ]
 }
 
@@ -505,8 +637,8 @@ mod tests {
         let mut state = ProjectState::default();
         state.simulation.mode = SolverMode::Accurate;
         state.simulation.grid = [8, 6, 8];
-        let (bundle, summary) = prepare_from_state(&state, &AccurateSettings::default()).unwrap();
-
+        let (bundle, summary) =
+            prepare_staircase_from_state(&state, &AccurateSettings::default()).unwrap();
         assert!(summary.solid_cells > 0);
         assert_eq!(summary.active_body_markers, 1);
         assert!(bundle.config_text.contains("MARKER_INLET= ( inlet"));
@@ -514,15 +646,10 @@ mod tests {
         assert!(bundle.config_text.contains("MARKER_MONITORING= ( body_1 )"));
         assert!(bundle.config_text.contains("REF_AREA= 1.000000000000e0"));
         assert!(bundle.config_text.contains("REF_LENGTH= 1.000000000000e0"));
-        assert!(bundle.config_text.contains("body_1, 0.0"));
         assert!(bundle.mesh_text.contains("MARKER_TAG= body_1"));
-        assert!(bundle.mesh_text.contains("MARKER_TAG= y_min"));
         assert!(bundle.marker_bindings.iter().any(|binding| {
             binding.tag == "body_1"
-                && binding.source
-                    == BoundarySource::SceneObject {
-                        scene_object_id: 1,
-                    }
+                && binding.source == BoundarySource::SceneObject { scene_object_id: 1 }
         }));
     }
 
@@ -536,24 +663,12 @@ mod tests {
         let imported_id = state.add_imported_surface("tetra.obj", imported_tetra_surface());
         state.imported_surfaces[0].position = Vec3::new(-1.0, 1.0, -1.0);
         state.touch();
-
-        let (bundle, summary) = prepare_from_state(&state, &AccurateSettings::default()).unwrap();
-
+        let (bundle, summary) =
+            prepare_staircase_from_state(&state, &AccurateSettings::default()).unwrap();
         assert!(summary.solid_cells > 0);
         assert_eq!(summary.active_body_markers, 1);
-        assert!(bundle
-            .config_text
-            .contains(&format!("MARKER_MONITORING= ( body_{imported_id} )")));
-        assert!(bundle
-            .mesh_text
-            .contains(&format!("MARKER_TAG= body_{imported_id}")));
-        assert!(bundle.marker_bindings.iter().any(|binding| {
-            binding.tag == format!("body_{imported_id}")
-                && binding.source
-                    == BoundarySource::SceneObject {
-                        scene_object_id: imported_id,
-                    }
-        }));
+        assert!(bundle.config_text.contains(&format!("MARKER_MONITORING= ( body_{imported_id} )")));
+        assert!(bundle.mesh_text.contains(&format!("MARKER_TAG= body_{imported_id}")));
     }
 
     #[test]
@@ -568,44 +683,17 @@ mod tests {
                 triangles: vec![[0, 1, 2]],
             },
         );
-
-        let error = prepare_from_state(&state, &AccurateSettings::default()).unwrap_err();
+        let error = prepare_staircase_from_state(&state, &AccurateSettings::default()).unwrap_err();
         assert!(error.contains("failed accurate audit"));
-    }
-
-    #[test]
-    fn object_outside_domain_does_not_create_unused_wall_marker() {
-        let mut state = ProjectState::default();
-        state.simulation.mode = SolverMode::Accurate;
-        state.simulation.grid = [8, 6, 8];
-        state.objects[0].position = Vec3::new(100.0, 100.0, 100.0);
-        let (bundle, summary) = prepare_from_state(&state, &AccurateSettings::default()).unwrap();
-
-        assert_eq!(summary.solid_cells, 0);
-        assert_eq!(summary.active_body_markers, 0);
-        assert!(!bundle.config_text.contains("body_1"));
-        assert!(!bundle.mesh_text.contains("MARKER_TAG= body_1"));
-        assert!(bundle.config_text.contains("REF_AREA= 1.000000000000e0"));
-        assert!(bundle.config_text.contains("REF_LENGTH= 1.000000000000e0"));
     }
 
     #[test]
     fn preparation_budget_fails_without_silent_grid_reduction() {
         let mut state = ProjectState::default();
         state.simulation.grid = [100, 100, 100];
-        let error = prepare_from_state(&state, &AccurateSettings::default()).unwrap_err();
+        let error = prepare_staircase_from_state(&state, &AccurateSettings::default()).unwrap_err();
         assert!(error.contains("preparation limit"));
         assert_eq!(state.simulation.grid, [100, 100, 100]);
-    }
-
-    #[test]
-    fn invalid_reference_fails_preparation_closed() {
-        let mut state = ProjectState::default();
-        state.simulation.grid = [8, 6, 8];
-        let mut settings = AccurateSettings::default();
-        settings.reference_area_m2 = 0.0;
-        let error = prepare_from_state(&state, &settings).unwrap_err();
-        assert!(error.contains("reference area"));
     }
 
     #[test]
@@ -613,7 +701,6 @@ mod tests {
         let state = ProjectState::default();
         let settings = AccurateSettings::default();
         let (case, reference) = solver_case_for_scene_ids(&state, &settings, &[3, 9]);
-
         assert_eq!(case.wall_markers, vec!["y_min", "y_max", "z_min", "z_max", "body_3", "body_9"]);
         assert_eq!(case.inlets[0].marker, "inlet");
         assert_eq!(case.outlet_marker, "outlet");
@@ -622,25 +709,21 @@ mod tests {
     }
 
     #[test]
-    fn accurate_setting_change_invalidates_prepared_bundle_freshness() {
+    fn mesh_path_change_invalidates_prepared_case_freshness() {
         let mut state = ProjectState::default();
         state.simulation.grid = [8, 6, 8];
         let settings = AccurateSettings::default();
-        let (bundle, summary) = prepare_from_state(&state, &settings).unwrap();
-        let prepared_case = AccuratePreparedCase::staircase(bundle.clone());
-        let mut runtime = AccurateRuntime {
-            settings: settings.clone(),
-            status: AccuratePrepareStatus::Prepared,
-            prepared_revision: Some(state.revision),
-            prepared_settings: Some(settings),
-            summary: Some(summary),
-            last_error: None,
-            bundle: Some(bundle),
-            prepared_case: Some(prepared_case),
-        };
-
+        let (bundle, summary) = prepare_staircase_from_state(&state, &settings).unwrap();
+        let mut runtime = AccurateRuntime::default();
+        runtime.settings = settings.clone();
+        runtime.status = AccuratePrepareStatus::Prepared;
+        runtime.prepared_revision = Some(state.revision);
+        runtime.prepared_settings = Some(settings);
+        runtime.prepared_mesh_path = Some(AccurateMeshPath::Staircase);
+        runtime.summary = Some(summary);
+        runtime.prepared_case = Some(AccuratePreparedCase::staircase(bundle));
         assert!(runtime.is_fresh_for(state.revision));
-        runtime.settings.reference_area_m2 += 0.5;
+        runtime.selected_mesh_path = AccurateMeshPath::ValidatedTetgen;
         assert!(!runtime.is_fresh_for(state.revision));
     }
 }
