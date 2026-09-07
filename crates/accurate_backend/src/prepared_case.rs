@@ -1,7 +1,9 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::cancellable_su2::run_su2_case_registered;
 use crate::generated_case::GeneratedSu2CaseBundle;
@@ -10,6 +12,7 @@ use crate::su2_mesh::{BoundarySource, Su2MarkerBinding};
 
 const CONFIG_FILENAME: &str = "case.cfg";
 const PROVENANCE_FILENAME: &str = "marker_provenance.tsv";
+const EXECUTION_ATTEMPT_FILENAME: &str = "aeroforge_execution_attempt.tsv";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreparedGeneratedSu2Case {
@@ -117,10 +120,15 @@ pub fn prepare_generated_su2_case_directory(
 /// Runs the persisted case through the case-registered direct-child runner. The public result
 /// contract stays unchanged; the registration only makes this direct child cancellable by its
 /// exact working directory and records its termination kind for the desktop lifecycle controller.
+///
+/// Before process creation AeroForge persists an immutable launch-request marker. That marker
+/// proves only that this persisted case reached the execution boundary; it does not prove that
+/// process creation succeeded, that SU2 remained alive, or that the case is resumable.
 pub fn run_prepared_generated_su2_case(
     executable: &Path,
     prepared: &PreparedGeneratedSu2Case,
 ) -> std::io::Result<Su2RunResult> {
+    write_execution_attempt_marker(&prepared.working_directory)?;
     run_su2_case_registered(
         executable,
         &prepared.working_directory,
@@ -128,6 +136,23 @@ pub fn run_prepared_generated_su2_case(
         || {},
     )
     .map(|result| result.run)
+}
+
+fn write_execution_attempt_marker(case_directory: &Path) -> std::io::Result<()> {
+    let requested_epoch_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let text = format!(
+        "key\tvalue\nformat_version\t1\nevent\tlaunch_requested\nscope\tdirect_su2_child\nrequested_epoch_ms\t{requested_epoch_ms}\n"
+    );
+    let path = case_directory.join(EXECUTION_ATTEMPT_FILENAME);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(text.as_bytes())?;
+    file.sync_all()
 }
 
 fn render_marker_provenance(bindings: &[Su2MarkerBinding]) -> String {
@@ -243,6 +268,28 @@ mod tests {
             Err(PrepareGeneratedCaseError::Io(ref error))
                 if error.kind() == std::io::ErrorKind::AlreadyExists
         ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn execution_attempt_marker_is_immutable_and_bounded() {
+        let root = temp_root("attempt-marker");
+        let prepared = prepare_generated_su2_case_directory(&root, "case_a", &bundle()).unwrap();
+        write_execution_attempt_marker(&prepared.working_directory).unwrap();
+
+        let text = fs::read_to_string(
+            prepared
+                .working_directory
+                .join(EXECUTION_ATTEMPT_FILENAME),
+        )
+        .unwrap();
+        assert!(text.contains("format_version\t1"));
+        assert!(text.contains("event\tlaunch_requested"));
+        assert!(text.contains("scope\tdirect_su2_child"));
+        assert!(text.contains("requested_epoch_ms\t"));
+
+        let error = write_execution_attempt_marker(&prepared.working_directory).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
         fs::remove_dir_all(root).unwrap();
     }
 
