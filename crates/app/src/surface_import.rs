@@ -14,6 +14,7 @@ const MAX_WIREFRAME_TRIANGLES: usize = 5_000;
 
 #[derive(Resource, Default)]
 pub struct SurfaceImportRuntime {
+    pub open: bool,
     pub path: String,
     pub last_status: Option<String>,
     pub last_error: Option<String>,
@@ -32,8 +33,23 @@ pub fn draw_surface_import_ui(
     mut runtime: ResMut<SurfaceImportRuntime>,
 ) -> Result {
     let ctx = contexts.ctx_mut()?;
+
+    if !runtime.open {
+        let launcher_pos = ctx.available_rect().left_top() + egui::vec2(8.0, 8.0);
+        egui::Area::new(egui::Id::new("surface_import_launcher"))
+            .fixed_pos(launcher_pos)
+            .show(ctx, |ui| {
+                if ui.small_button("+ Import").clicked() {
+                    runtime.open = true;
+                }
+            });
+        return Ok(());
+    }
+
+    let mut open = runtime.open;
     egui::Window::new("Import surface")
         .id(egui::Id::new("surface_geometry_import"))
+        .open(&mut open)
         .default_width(390.0)
         .resizable(true)
         .show(ctx, |ui| {
@@ -92,6 +108,7 @@ pub fn draw_surface_import_ui(
                 );
             });
         });
+    runtime.open = open;
     Ok(())
 }
 
