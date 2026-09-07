@@ -1,0 +1,134 @@
+name: AeroForge UI Screenshot
+
+on:
+  push:
+    branches: ["feat/aeroforge-foundation"]
+    paths:
+      - ".github/workflows/aeroforge-ui-screenshot.yml"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  screenshot:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Build AeroForge desktop app
+        run: cargo build -p aeroforge-app
+      - name: Launch AeroForge and capture real window
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Add-Type -AssemblyName System.Drawing
+          Add-Type @"
+          using System;
+          using System.Runtime.InteropServices;
+          public static class AeroForgeCaptureWin32 {
+              [StructLayout(LayoutKind.Sequential)]
+              public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+              [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+              [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+              [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+              [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
+          }
+          "@
+
+          $exe = (Resolve-Path ".\target\debug\aeroforge-app.exe").Path
+          $stdout = Join-Path $PWD "aeroforge-stdout.log"
+          $stderr = Join-Path $PWD "aeroforge-stderr.log"
+          $process = Start-Process -FilePath $exe -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+
+          try {
+              $handle = [IntPtr]::Zero
+              for ($i = 0; $i -lt 30; $i++) {
+                  Start-Sleep -Seconds 1
+                  $process.Refresh()
+                  if ($process.HasExited) {
+                      throw "AeroForge exited before a window became available. Exit code: $($process.ExitCode)"
+                  }
+                  if ($process.MainWindowHandle -ne [IntPtr]::Zero) {
+                      $handle = $process.MainWindowHandle
+                      break
+                  }
+              }
+              if ($handle -eq [IntPtr]::Zero) {
+                  throw "AeroForge did not expose a native window handle within 30 seconds."
+              }
+
+              [AeroForgeCaptureWin32]::ShowWindow($handle, 9) | Out-Null
+              [AeroForgeCaptureWin32]::SetForegroundWindow($handle) | Out-Null
+              Start-Sleep -Seconds 4
+
+              $rect = [AeroForgeCaptureWin32+RECT]::new()
+              if (-not [AeroForgeCaptureWin32]::GetWindowRect($handle, [ref]$rect)) {
+                  throw "GetWindowRect failed for AeroForge window."
+              }
+              $width = $rect.Right - $rect.Left
+              $height = $rect.Bottom - $rect.Top
+              if ($width -le 0 -or $height -le 0) {
+                  throw "AeroForge window has invalid dimensions ${width}x${height}."
+              }
+
+              $screenPath = Join-Path $PWD "aeroforge-current-screen.png"
+              $bitmap = [System.Drawing.Bitmap]::new($width, $height)
+              $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+              try {
+                  $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bitmap.Size)
+                  $bitmap.Save($screenPath, [System.Drawing.Imaging.ImageFormat]::Png)
+              } finally {
+                  $graphics.Dispose()
+                  $bitmap.Dispose()
+              }
+
+              $printPath = Join-Path $PWD "aeroforge-current-printwindow.png"
+              $printBitmap = [System.Drawing.Bitmap]::new($width, $height)
+              $printGraphics = [System.Drawing.Graphics]::FromImage($printBitmap)
+              try {
+                  $hdc = $printGraphics.GetHdc()
+                  try {
+                      $printed = [AeroForgeCaptureWin32]::PrintWindow($handle, $hdc, 2)
+                  } finally {
+                      $printGraphics.ReleaseHdc($hdc)
+                  }
+                  if ($printed) {
+                      $printBitmap.Save($printPath, [System.Drawing.Imaging.ImageFormat]::Png)
+                  }
+              } finally {
+                  $printGraphics.Dispose()
+                  $printBitmap.Dispose()
+              }
+
+              "Captured AeroForge window ${width}x${height} from handle $handle" | Set-Content -Path "aeroforge-capture.txt"
+          } finally {
+              if (-not $process.HasExited) {
+                  Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+              }
+          }
+      - name: Upload AeroForge screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: aeroforge-ui-screenshot
+          path: |
+            aeroforge-current-screen.png
+            aeroforge-current-printwindow.png
+            aeroforge-capture.txt
+            aeroforge-stdout.log
+            aeroforge-stderr.log
+          if-no-files-found: error
+          retention-days: 7
