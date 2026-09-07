@@ -107,7 +107,7 @@ pub use surface_correspondence::{
 };
 pub use tetgen_handoff::{
     run_tetgen_for_handoff, validate_tetgen_external_handoff, BoundTetgenExternalRun,
-    TetgenExteriorHandoffError, ValidatedTetgenExteriorHandoff,
+    TetgenBoundRunError, TetgenExteriorHandoffError, ValidatedTetgenExteriorHandoff,
 };
 pub use tetgen_output::{
     parse_tetgen_volume_mesh, ParsedTetgenVolumeMesh, TetgenOutputError,

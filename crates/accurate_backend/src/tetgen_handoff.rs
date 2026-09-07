@@ -19,20 +19,35 @@ use crate::tetgen_runner::{
     run_prepared_tetgen_plc, TetgenExternalRunError, TetgenExternalRunResult,
 };
 
-/// External TetGen result cryptographically-unrelated but structurally bound to the exact
-/// `PreparedTetgenPlc` value that was supplied to the process runner.
+/// Successful external TetGen execution bound to the exact admitted source state, explicit
+/// hole-seed policy, and deterministic PLC used for process invocation.
 ///
-/// Fields are private so downstream code cannot pair arbitrary parsed output with a different PLC.
-/// Construction is restricted to [`run_tetgen_for_handoff`]. This still does not prove that the
-/// prepared PLC came from the source geometry later supplied to the handoff validator; that binding
-/// is re-established there by deterministic PLC regeneration and exact equality.
+/// All fields are private and construction is restricted to [`run_tetgen_for_handoff`]. This is
+/// important because two different policies can legitimately render the same `.poly` bytes (for
+/// example, two work budgets that both exceed the deterministic reservation). Keeping the policy
+/// and admitted input as separately owned state prevents those values from being reconstructed or
+/// substituted after the external process has succeeded.
+///
+/// This value still does not establish body-fitted fidelity, engineering mesh quality, or solver
+/// accuracy; it only closes the provenance gap between source admission, PLC preparation and the
+/// external process result.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BoundTetgenExternalRun {
+    input: ContainmentValidatedExteriorMesherInput,
+    hole_seed_policy: TetgenHoleSeedPolicy,
     prepared: PreparedTetgenPlc,
     run: TetgenExternalRunResult,
 }
 
 impl BoundTetgenExternalRun {
+    pub fn input(&self) -> &ContainmentValidatedExteriorMesherInput {
+        &self.input
+    }
+
+    pub fn hole_seed_policy(&self) -> TetgenHoleSeedPolicy {
+        self.hole_seed_policy
+    }
+
     pub fn prepared(&self) -> &PreparedTetgenPlc {
         &self.prepared
     }
@@ -42,23 +57,69 @@ impl BoundTetgenExternalRun {
     }
 }
 
-/// Runs a prepared PLC and retains the exact prepared value beside the successful parsed output.
+#[derive(Debug)]
+pub enum TetgenBoundRunError {
+    Prepare(TetgenPlcError),
+    Run(TetgenExternalRunError),
+}
+
+impl Display for TetgenBoundRunError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Prepare(error) => write!(f, "TetGen bound-run PLC preparation failed: {error}"),
+            Self::Run(error) => write!(f, "TetGen bound-run external execution failed: {error}"),
+        }
+    }
+}
+
+impl Error for TetgenBoundRunError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Prepare(error) => Some(error),
+            Self::Run(error) => Some(error),
+        }
+    }
+}
+
+impl From<TetgenPlcError> for TetgenBoundRunError {
+    fn from(value: TetgenPlcError) -> Self {
+        Self::Prepare(value)
+    }
+}
+
+impl From<TetgenExternalRunError> for TetgenBoundRunError {
+    fn from(value: TetgenExternalRunError) -> Self {
+        Self::Run(value)
+    }
+}
+
+/// Prepares and runs TetGen from one containment-admitted source state while retaining exact input
+/// ownership for the later solver-bound handoff.
 ///
-/// The underlying runner still performs fresh-private-directory execution, exact baseline switch
-/// enforcement, required-output checks, parsing and `VolumeMesh::audit`. This wrapper only prevents
-/// that successful output from becoming detached from the PLC value that produced it.
+/// The caller keeps its borrowed admitted input on failure and may decide whether retry is
+/// appropriate. On success this function stores a clone of that immutable promoted state, the
+/// exact explicit hole-seed policy, the deterministic prepared PLC and the runner result in one
+/// private construction. Downstream code therefore cannot pair successful output with a different
+/// scene/domain/marker/containment state or silently replace the policy after execution.
 pub fn run_tetgen_for_handoff(
     executable: &Path,
-    prepared: PreparedTetgenPlc,
-) -> Result<BoundTetgenExternalRun, TetgenExternalRunError> {
+    input: &ContainmentValidatedExteriorMesherInput,
+    hole_seed_policy: TetgenHoleSeedPolicy,
+) -> Result<BoundTetgenExternalRun, TetgenBoundRunError> {
+    let prepared = prepare_tetgen_plc(input, hole_seed_policy)?;
     let run = run_prepared_tetgen_plc(executable, &prepared)?;
-    Ok(BoundTetgenExternalRun { prepared, run })
+    Ok(BoundTetgenExternalRun {
+        input: input.clone(),
+        hole_seed_policy,
+        prepared,
+        run,
+    })
 }
 
 /// Solver-bound exterior handoff admitted from one externally executed TetGen PLC.
 ///
-/// The retained evidence binds together the deterministic prepared PLC, its explicit hole-seed
-/// policy, the already-admitted source-containment evidence, TetGen process diagnostics, parser IDs
+/// The retained evidence binds together the deterministic prepared PLC, its exact explicit
+/// hole-seed policy, the source-containment policy/report, TetGen process diagnostics, parser IDs
 /// and tetrahedron reorientation count, plus the generic exterior provenance/quality/intersection/
 /// correspondence handoff. Holding this value is deliberately **not** a body-fitted or engineering
 /// CFD certificate.
@@ -82,7 +143,7 @@ pub struct ValidatedTetgenExteriorHandoff {
 #[derive(Clone, Debug, PartialEq)]
 pub enum TetgenExteriorHandoffError {
     Prepare(TetgenPlcError),
-    PreparedInputMismatch,
+    BoundStateMismatch,
     Handoff(ExteriorMesherHandoffError),
 }
 
@@ -91,11 +152,11 @@ impl Display for TetgenExteriorHandoffError {
         match self {
             Self::Prepare(error) => write!(
                 f,
-                "TetGen handoff could not deterministically regenerate the admitted PLC: {error}"
+                "TetGen handoff could not deterministically regenerate its retained PLC: {error}"
             ),
-            Self::PreparedInputMismatch => write!(
+            Self::BoundStateMismatch => write!(
                 f,
-                "TetGen external result was produced from a different prepared PLC than the supplied admitted source input and hole-seed policy"
+                "TetGen bound-run state is internally inconsistent: retained admitted input/policy no longer regenerates the retained PLC"
             ),
             Self::Handoff(error) => write!(f, "TetGen exterior handoff validation failed: {error}"),
         }
@@ -107,7 +168,7 @@ impl Error for TetgenExteriorHandoffError {
         match self {
             Self::Prepare(error) => Some(error),
             Self::Handoff(error) => Some(error),
-            Self::PreparedInputMismatch => None,
+            Self::BoundStateMismatch => None,
         }
     }
 }
@@ -124,33 +185,35 @@ impl From<ExteriorMesherHandoffError> for TetgenExteriorHandoffError {
     }
 }
 
-/// Promotes one bound external TetGen result only after re-binding it to the authoritative source
-/// input and passing the existing solver-bound exterior handoff gates.
+/// Promotes one bound external TetGen result through the existing solver-bound exterior handoff
+/// gates without accepting any independent source input or marker map from the caller.
 ///
-/// The PLC is regenerated from `input` using the caller-supplied `hole_seed_policy` and must match
-/// the exact prepared value retained beside the external result. This prevents a successful TetGen
-/// output from one scene/domain/policy from being paired with a different source state. The parsed
-/// boundary markers are then checked against the marker map owned by the admitted input, and the
-/// candidate must pass explicit local tetrahedron quality plus the admitted source-intersection
-/// policy and caller-selected bidirectional source correspondence policy.
+/// The retained admitted input and exact hole-seed policy are first used to regenerate the PLC as
+/// an internal consistency check. The parsed boundary markers are then validated against the
+/// authoritative marker map owned by that same admitted input, and the candidate must pass explicit
+/// local tetrahedron quality plus the already-admitted source-intersection policy and the
+/// caller-selected bidirectional source correspondence policy.
 ///
-/// Source containment is not rerun here because `ContainmentValidatedExteriorMesherInput` is an
-/// owned promoted state whose private input was already intersection-admitted and containment-
-/// validated. Its exact policy/report are retained in the returned value. No fidelity promotion is
-/// performed: success must not be translated to `body_fitted_status=true`.
+/// Source containment is not rerun because the retained `ContainmentValidatedExteriorMesherInput`
+/// is an owned promoted state whose private base input already passed source intersection and
+/// containment validation. Its exact policy/report are retained in the returned value. No fidelity
+/// promotion is performed: success must not be translated to `body_fitted_status=true`.
 pub fn validate_tetgen_external_handoff(
-    input: &ContainmentValidatedExteriorMesherInput,
     bound: BoundTetgenExternalRun,
-    hole_seed_policy: TetgenHoleSeedPolicy,
     quality_policy: ExteriorMeshQualityPolicy,
     correspondence_policy: SourceSurfaceCorrespondencePolicy,
 ) -> Result<ValidatedTetgenExteriorHandoff, TetgenExteriorHandoffError> {
-    let expected = prepare_tetgen_plc(input, hole_seed_policy)?;
+    let expected = prepare_tetgen_plc(&bound.input, bound.hole_seed_policy)?;
     if expected != bound.prepared {
-        return Err(TetgenExteriorHandoffError::PreparedInputMismatch);
+        return Err(TetgenExteriorHandoffError::BoundStateMismatch);
     }
 
-    let BoundTetgenExternalRun { prepared, run } = bound;
+    let BoundTetgenExternalRun {
+        input,
+        hole_seed_policy,
+        prepared,
+        run,
+    } = bound;
     let TetgenExternalRunResult {
         parsed,
         stdout,
@@ -166,6 +229,8 @@ pub fn validate_tetgen_external_handoff(
         reoriented_tetrahedra,
     } = parsed;
 
+    let containment_policy = input.containment_policy();
+    let containment = input.containment_report().clone();
     let admission = input.admission();
     let handoff = validate_candidate_exterior_mesher_handoff(
         mesh,
@@ -180,8 +245,8 @@ pub fn validate_tetgen_external_handoff(
         handoff,
         prepared,
         hole_seed_policy,
-        containment_policy: input.containment_policy(),
-        containment: input.containment_report().clone(),
+        containment_policy,
+        containment,
         tetgen_stdout: stdout,
         tetgen_stderr: stderr,
         tetgen_exit_code: exit_code,
@@ -201,20 +266,16 @@ mod tests {
 
     use crate::exterior_mesher_admission::validate_exterior_mesher_input_intersections;
     use crate::exterior_mesher_input::build_validated_exterior_mesher_input;
-    use crate::exterior_quality::ExteriorMeshQualityPolicy;
     use crate::imported_surface::{
         audit_imported_surface_for_accurate_meshing, AccurateImportedSurfacePolicy,
     };
     use crate::scene_provenance::build_scene_owner_marker_provenance;
-    use crate::source_containment::{
-        validate_exterior_mesher_source_containment, SourceContainmentPolicy,
-    };
+    use crate::source_containment::validate_exterior_mesher_source_containment;
     use crate::source_intersection::SourceSurfaceIntersectionPolicy;
     use crate::su2_mesh::{
         BoundaryRole, BoundarySource, DomainAxis, DomainSide, Su2MarkerBinding,
     };
     use crate::tetgen_plc::TETGEN_BASELINE_SWITCHES;
-    use crate::tetgen_runner::TetgenExternalRunResult;
     use crate::voxel_mesh::{tetrahedralize_voxel_fluid_domain, VoxelFluidDomainSpec};
 
     fn domain() -> VoxelFluidDomainSpec {
@@ -265,23 +326,17 @@ mod tests {
                 [x0, y1, z1],
             ],
             triangles: vec![
-                [0, 2, 1],
-                [0, 3, 2],
-                [4, 5, 6],
-                [4, 6, 7],
-                [0, 1, 5],
-                [0, 5, 4],
-                [3, 7, 6],
-                [3, 6, 2],
-                [0, 4, 7],
-                [0, 7, 3],
-                [1, 2, 6],
-                [1, 6, 5],
+                [0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7],
+                [0, 1, 5], [0, 5, 4], [3, 7, 6], [3, 6, 2],
+                [0, 4, 7], [0, 7, 3], [1, 2, 6], [1, 6, 5],
             ],
         }
     }
 
-    fn admitted_fixture() -> (ContainmentValidatedExteriorMesherInput, aeroforge_volume_core::VolumeMesh) {
+    fn admitted_fixture() -> (
+        ContainmentValidatedExteriorMesherInput,
+        aeroforge_volume_core::VolumeMesh,
+    ) {
         let source = audit_imported_surface_for_accurate_meshing(
             42,
             &cube_surface([1.0, 1.0, 1.0], [2.0, 2.0, 2.0]),
@@ -354,6 +409,8 @@ mod tests {
     ) -> BoundTetgenExternalRun {
         let prepared = prepare_tetgen_plc(input, policy).unwrap();
         BoundTetgenExternalRun {
+            input: input.clone(),
+            hole_seed_policy: policy,
             prepared,
             run: TetgenExternalRunResult {
                 parsed: ParsedTetgenVolumeMesh {
@@ -376,9 +433,7 @@ mod tests {
         let (input, mesh) = admitted_fixture();
         let bound = synthetic_bound_run(&input, mesh, hole_policy());
         let result = validate_tetgen_external_handoff(
-            &input,
             bound,
-            hole_policy(),
             quality_policy(),
             correspondence_policy(),
         )
@@ -386,7 +441,7 @@ mod tests {
 
         assert_eq!(result.hole_seed_policy, hole_policy());
         assert_eq!(result.containment_policy, input.containment_policy());
-        assert_eq!(result.containment, *input.containment_report());
+        assert_eq!(&result.containment, input.containment_report());
         assert_eq!(result.tetgen_exit_code, Some(0));
         assert_eq!(result.tetgen_switches, TETGEN_BASELINE_SWITCHES);
         assert_eq!(result.input_node_ids, vec![0, 1, 2, 3]);
@@ -399,23 +454,27 @@ mod tests {
     }
 
     #[test]
-    fn different_hole_seed_policy_cannot_rebind_successful_output_to_another_plc() {
+    fn policy_budget_is_retained_even_when_it_does_not_change_prepared_plc() {
         let (input, mesh) = admitted_fixture();
-        let bound = synthetic_bound_run(&input, mesh, hole_policy());
-        let different_policy = TetgenHoleSeedPolicy {
-            initial_inward_edge_fraction: 0.04,
-            ..hole_policy()
+        let original_policy = hole_policy();
+        let larger_budget = TetgenHoleSeedPolicy {
+            max_point_triangle_tests: 200_000,
+            ..original_policy
         };
+        let original_prepared = prepare_tetgen_plc(&input, original_policy).unwrap();
+        let larger_prepared = prepare_tetgen_plc(&input, larger_budget).unwrap();
+        assert_eq!(original_prepared, larger_prepared);
+        assert_ne!(original_policy, larger_budget);
 
-        let error = validate_tetgen_external_handoff(
-            &input,
+        let bound = synthetic_bound_run(&input, mesh, original_policy);
+        assert_eq!(bound.hole_seed_policy(), original_policy);
+        let result = validate_tetgen_external_handoff(
             bound,
-            different_policy,
             quality_policy(),
             correspondence_policy(),
         )
-        .unwrap_err();
-        assert_eq!(error, TetgenExteriorHandoffError::PreparedInputMismatch);
+        .unwrap();
+        assert_eq!(result.hole_seed_policy.max_point_triangle_tests, 100_000);
     }
 
     #[test]
@@ -425,13 +484,26 @@ mod tests {
         let bound = synthetic_bound_run(&input, mesh, hole_policy());
 
         let error = validate_tetgen_external_handoff(
-            &input,
             bound,
-            hole_policy(),
             quality_policy(),
             correspondence_policy(),
         )
         .unwrap_err();
         assert!(matches!(error, TetgenExteriorHandoffError::Handoff(_)));
+    }
+
+    #[test]
+    fn internally_inconsistent_bound_state_fails_closed_before_mesh_handoff() {
+        let (input, mesh) = admitted_fixture();
+        let mut bound = synthetic_bound_run(&input, mesh, hole_policy());
+        bound.hole_seed_policy.initial_inward_edge_fraction = 0.04;
+
+        let error = validate_tetgen_external_handoff(
+            bound,
+            quality_policy(),
+            correspondence_policy(),
+        )
+        .unwrap_err();
+        assert_eq!(error, TetgenExteriorHandoffError::BoundStateMismatch);
     }
 }
