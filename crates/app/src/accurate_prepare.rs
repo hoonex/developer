@@ -9,6 +9,7 @@ use aeroforge_volume_core::{BlockBoundaryMarkers, BoundaryMarkerId};
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
+use crate::accurate_prepared_case::AccuratePreparedCase;
 use crate::accurate_scene_geometry::voxelize_project_geometry_for_accurate;
 use crate::model::{ProjectState, SolverMode};
 
@@ -72,8 +73,11 @@ pub struct AccurateRuntime {
     pub prepared_settings: Option<AccurateSettings>,
     pub summary: Option<PreparedCaseSummary>,
     pub last_error: Option<String>,
-    /// Prepared in-memory mesh/config/provenance bundle. It is not executed automatically.
+    /// Legacy bundle view retained until Run/Results consumes `prepared_case` directly.
     pub bundle: Option<GeneratedSu2CaseBundle>,
+    /// Provenance-bearing prepared artifact. Persistence must use this value rather than `bundle`
+    /// once the Run/Results migration is complete.
+    pub prepared_case: Option<AccuratePreparedCase>,
 }
 
 impl Default for AccurateRuntime {
@@ -86,6 +90,7 @@ impl Default for AccurateRuntime {
             summary: None,
             last_error: None,
             bundle: None,
+            prepared_case: None,
         }
     }
 }
@@ -94,6 +99,7 @@ impl AccurateRuntime {
     pub fn is_fresh_for(&self, scene_revision: u64) -> bool {
         self.status == AccuratePrepareStatus::Prepared
             && self.bundle.is_some()
+            && self.prepared_case.is_some()
             && self.prepared_revision == Some(scene_revision)
             && self.prepared_settings.as_ref() == Some(&self.settings)
     }
@@ -242,6 +248,8 @@ pub fn draw_accurate_prepare_ui(
                     let settings_snapshot = runtime.settings.clone();
                     match prepare_from_state(&state, &settings_snapshot) {
                         Ok((bundle, summary)) => {
+                            runtime.prepared_case =
+                                Some(AccuratePreparedCase::staircase(bundle.clone()));
                             runtime.bundle = Some(bundle);
                             runtime.summary = Some(summary);
                             runtime.prepared_revision = Some(state.revision);
@@ -251,6 +259,7 @@ pub fn draw_accurate_prepare_ui(
                         }
                         Err(error) => {
                             runtime.bundle = None;
+                            runtime.prepared_case = None;
                             runtime.summary = None;
                             runtime.prepared_revision = None;
                             runtime.prepared_settings = None;
@@ -282,6 +291,9 @@ pub fn draw_accurate_prepare_ui(
 
                 if let Some(summary) = &runtime.summary {
                     ui.separator();
+                    if let Some(prepared_case) = &runtime.prepared_case {
+                        ui.monospace(format!("Mesh path: {}", prepared_case.mesh_kind_label()));
+                    }
                     ui.monospace(format!("Solid cells: {}", summary.solid_cells));
                     ui.monospace(format!("Active body markers: {}", summary.active_body_markers));
                     ui.monospace(format!("Points: {}", summary.points));
@@ -351,6 +363,37 @@ fn prepare_from_state(
         .map(|&owner| voxelized.owner_object_ids[owner as usize - 1])
         .collect::<Vec<_>>();
 
+    let (case, coefficient_reference) =
+        solver_case_for_scene_ids(state, settings, &active_scene_ids);
+
+    let generated = build_voxel_generated_su2_case_with_reference(
+        &case,
+        domain,
+        &voxelized.solid_owner,
+        &voxelized.owner_object_ids,
+        closed_wind_tunnel_bindings(),
+        Some(&coefficient_reference),
+    )
+    .map_err(|error| error.to_string())?;
+
+    let summary = PreparedCaseSummary {
+        solid_cells: voxelized.solid_cells,
+        active_body_markers: active_scene_ids.len(),
+        points: generated.volume_mesh.points.len(),
+        tetrahedra: generated.volume_mesh.cells.len(),
+        boundary_triangles: generated.volume_mesh.boundary.len(),
+        marker_count: generated.bundle.marker_bindings.len(),
+        mesh_bytes: generated.bundle.mesh_text.len(),
+        config_bytes: generated.bundle.config_text.len(),
+    };
+    Ok((generated.bundle, summary))
+}
+
+pub(crate) fn solver_case_for_scene_ids(
+    state: &ProjectState,
+    settings: &AccurateSettings,
+    active_scene_ids: &[u64],
+) -> (Su2Case, Su2CoefficientReference) {
     let mut wall_markers = vec![
         "y_min".to_owned(),
         "y_max".to_owned(),
@@ -384,28 +427,7 @@ fn prepare_from_state(
         area_m2: settings.reference_area_m2,
         length_m: settings.reference_length_m,
     };
-
-    let generated = build_voxel_generated_su2_case_with_reference(
-        &case,
-        domain,
-        &voxelized.solid_owner,
-        &voxelized.owner_object_ids,
-        closed_wind_tunnel_bindings(),
-        Some(&coefficient_reference),
-    )
-    .map_err(|error| error.to_string())?;
-
-    let summary = PreparedCaseSummary {
-        solid_cells: voxelized.solid_cells,
-        active_body_markers: active_scene_ids.len(),
-        points: generated.volume_mesh.points.len(),
-        tetrahedra: generated.volume_mesh.cells.len(),
-        boundary_triangles: generated.volume_mesh.boundary.len(),
-        marker_count: generated.bundle.marker_bindings.len(),
-        mesh_bytes: generated.bundle.mesh_text.len(),
-        config_bytes: generated.bundle.config_text.len(),
-    };
-    Ok((generated.bundle, summary))
+    (case, coefficient_reference)
 }
 
 fn closed_wind_tunnel_bindings() -> Vec<Su2MarkerBinding> {
@@ -587,11 +609,25 @@ mod tests {
     }
 
     #[test]
+    fn solver_case_contract_is_shared_by_scene_id_list() {
+        let state = ProjectState::default();
+        let settings = AccurateSettings::default();
+        let (case, reference) = solver_case_for_scene_ids(&state, &settings, &[3, 9]);
+
+        assert_eq!(case.wall_markers, vec!["y_min", "y_max", "z_min", "z_max", "body_3", "body_9"]);
+        assert_eq!(case.inlets[0].marker, "inlet");
+        assert_eq!(case.outlet_marker, "outlet");
+        assert_eq!(reference.area_m2, settings.reference_area_m2);
+        assert_eq!(reference.length_m, settings.reference_length_m);
+    }
+
+    #[test]
     fn accurate_setting_change_invalidates_prepared_bundle_freshness() {
         let mut state = ProjectState::default();
         state.simulation.grid = [8, 6, 8];
         let settings = AccurateSettings::default();
         let (bundle, summary) = prepare_from_state(&state, &settings).unwrap();
+        let prepared_case = AccuratePreparedCase::staircase(bundle.clone());
         let mut runtime = AccurateRuntime {
             settings: settings.clone(),
             status: AccuratePrepareStatus::Prepared,
@@ -600,6 +636,7 @@ mod tests {
             summary: Some(summary),
             last_error: None,
             bundle: Some(bundle),
+            prepared_case: Some(prepared_case),
         };
 
         assert!(runtime.is_fresh_for(state.revision));
