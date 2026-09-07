@@ -13,7 +13,8 @@ mod voxel_case;
 mod voxel_mesh;
 
 pub use cancellable_su2::{
-    run_su2_case_cancellable, CancellableSu2RunResult, Su2RunTermination,
+    request_su2_case_cancellation, run_su2_case_cancellable, run_su2_case_registered,
+    take_su2_case_termination, CancellableSu2RunResult, Su2RunTermination,
 };
 pub use generated_case::{
     build_generated_su2_case_bundle, build_generated_su2_case_bundle_with_reference,

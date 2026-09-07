@@ -3,8 +3,9 @@ use std::fmt::{Display, Formatter};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::cancellable_su2::run_su2_case_registered;
 use crate::generated_case::GeneratedSu2CaseBundle;
-use crate::su2::{run_su2_case, Su2RunResult};
+use crate::su2::Su2RunResult;
 use crate::su2_mesh::{BoundarySource, Su2MarkerBinding};
 
 const CONFIG_FILENAME: &str = "case.cfg";
@@ -113,15 +114,20 @@ pub fn prepare_generated_su2_case_directory(
     })
 }
 
+/// Runs the persisted case through the case-registered direct-child runner. The public result
+/// contract stays unchanged; the registration only makes this direct child cancellable by its
+/// exact working directory and records its termination kind for the desktop lifecycle controller.
 pub fn run_prepared_generated_su2_case(
     executable: &Path,
     prepared: &PreparedGeneratedSu2Case,
 ) -> std::io::Result<Su2RunResult> {
-    run_su2_case(
+    run_su2_case_registered(
         executable,
         &prepared.working_directory,
         &prepared.config_filename,
+        || {},
     )
+    .map(|result| result.run)
 }
 
 fn render_marker_provenance(bindings: &[Su2MarkerBinding]) -> String {
