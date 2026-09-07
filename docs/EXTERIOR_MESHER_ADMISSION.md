@@ -1,0 +1,30 @@
+# Exterior mesher source-shell admission
+
+A future source-surface-driven exterior mesher must not consume merely owned geometry. AeroForge now separates two input states:
+
+```text
+ValidatedExteriorMesherInput
+→ validate_exterior_mesher_input_intersections(...)
+→ IntersectionValidatedExteriorMesherInput
+```
+
+The first state owns the finite six-face outer domain, audited source bodies, stable SceneObject identity, strict source-AABB containment, and deterministic domain/body marker provenance.
+
+The second state additionally stores the exact `SourceSurfaceIntersectionPolicy` and resulting `SourceSurfaceIntersectionReport`. Promotion fails closed on invalid tolerance, zero/exhausted triangle-pair budget, stale audited geometry, source-shell self-intersection, or contact/intersection between distinct source shells. Work is never randomly sampled or silently truncated.
+
+This is intentionally still **not a mesher** and does not establish positive inter-body clearance, exclusion of one closed body entirely nested inside another without shell contact, constrained tetrahedralization, source-triangle preservation, body-fittedness, boundary-layer quality, or CFD accuracy.
+
+The intended distinct path is therefore:
+
+```text
+raw imported surface
+→ deterministic repair/audit
+→ ValidatedExteriorMesherInput
+→ IntersectionValidatedExteriorMesherInput
+→ [source-surface-driven exterior mesher: not implemented yet]
+→ candidate VolumeMesh + authoritative marker map
+→ ValidatedExteriorMesherHandoff
+→ validated SU2 bundle / persisted case
+```
+
+The candidate output still must pass declared exterior provenance, local tetrahedron quality, source intersection revalidation, and bounded bidirectional source correspondence in `validate_candidate_exterior_mesher_handoff`. Revalidating source intersections at handoff is deliberate defense in depth against stale or substituted geometry between mesher admission and output validation.

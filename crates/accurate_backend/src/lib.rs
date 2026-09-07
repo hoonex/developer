@@ -1,6 +1,7 @@
 mod cancellable_su2;
 mod exterior_handoff;
 mod exterior_mesh;
+mod exterior_mesher_admission;
 mod exterior_mesher_input;
 mod exterior_quality;
 mod generated_case;
@@ -31,6 +32,9 @@ pub use exterior_handoff::{
 pub use exterior_mesh::{
     validate_declared_exterior_fluid_mesh_input, DeclaredExteriorFluidMeshError,
     DeclaredExteriorFluidMeshReport,
+};
+pub use exterior_mesher_admission::{
+    validate_exterior_mesher_input_intersections, IntersectionValidatedExteriorMesherInput,
 };
 pub use exterior_mesher_input::{
     build_validated_exterior_mesher_input, ExteriorMesherInputError,
