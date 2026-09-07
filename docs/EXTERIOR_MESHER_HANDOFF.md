@@ -9,24 +9,28 @@ AeroForge now has an explicit solver-bound handoff for a candidate exterior-flui
 - the candidate `VolumeMesh`;
 - its authoritative `Su2MarkerMap`;
 - the successful declared exterior-fluid provenance report;
-- the successful caller-defined local tetrahedron quality report; and
+- the successful caller-defined local tetrahedron quality report;
+- the successful bounded source-surface intersection report; and
 - the successful bounded source-surface correspondence report.
 
 The only public constructor is `validate_candidate_exterior_mesher_handoff`.
 
-A candidate is accepted only after all three contracts succeed:
+A candidate is accepted only after all four contracts succeed:
 
 1. `validate_declared_exterior_fluid_mesh_input` verifies tetrahedral volume audit, complete boundary marker binding, explicit outer `DomainFace` provenance, and stable `SceneObject.id` wall provenance.
 2. `validate_exterior_mesh_quality` applies caller-supplied local shape limits. It checks tetrahedral mean-ratio quality `12 * (3V)^(2/3) / sum(edge_length^2)` and longest-edge / shortest-edge ratio. AeroForge does not embed a default engineering threshold.
-3. `validate_source_surface_correspondence` verifies bounded bidirectional proximity between every used source/body-boundary vertex plus every triangle centroid and the opposite triangle surface, under an explicit distance tolerance and comparison budget.
+3. `validate_source_surface_intersections` checks each audited source shell for non-adjacent triangle self-intersection and checks distinct source bodies for triangle contact/intersection. It uses an explicit geometric epsilon and explicit triangle-pair budget; exceeding that budget fails closed before geometric testing.
+4. `validate_source_surface_correspondence` verifies bounded bidirectional proximity between every used source/body-boundary vertex plus every triangle centroid and the opposite triangle surface, under an explicit distance tolerance and comparison budget.
 
 Failure of any contract rejects the handoff. There is no random sampling, silent budget reduction, marker-name identity recovery, implicit local-quality threshold, or fidelity inference at this boundary.
 
 ## What success means
 
-A successful handoff means the candidate has the topology/provenance evidence required by the declared exterior-fluid contract, satisfies the caller-selected local tetrahedron shape limits, and satisfies the configured bounded source-surface proximity check. It creates one owned object that downstream solver preparation can consume without separating the mesh from the evidence that admitted it.
+A successful handoff means the candidate has the topology/provenance evidence required by the declared exterior-fluid contract, satisfies the caller-selected local tetrahedron shape limits, passed the configured bounded source-shell intersection checks, and satisfies the configured bounded source-surface proximity check. It creates one owned object that downstream solver preparation can consume without separating the mesh from the evidence that admitted it.
 
 The regression fixture intentionally demonstrates that an exactly aligned staircase/voxel cavity can satisfy this handoff. Therefore possession of `ValidatedExteriorMesherHandoff` must **not** be interpreted as evidence of body-fitted geometry.
+
+The validated exterior SU2 adapter consumes the `VolumeMesh` and `Su2MarkerMap` directly from this owned handoff. It deliberately does not accept an independent replacement mesh or marker map. The generic generated-case API remains available as a compatibility path, but callers using the validated exterior path can keep the admitted geometry and authoritative marker provenance paired through SU2 bundle rendering.
 
 ## Local tetrahedron quality scope
 
@@ -34,13 +38,19 @@ The mean-ratio metric is normalized so a regular tetrahedron is 1 and sliver-lik
 
 The quality gate is local to individual tetrahedra. It does not detect overlap between otherwise locally valid tetrahedra and does not measure wall-normal spacing or boundary-layer suitability.
 
+## Source-intersection scope
+
+The source-intersection gate is a bounded precondition on the audited input surfaces. For a single source shell, triangle pairs sharing a complete topological edge are skipped because that adjacency is already required by the watertight two-manifold audit; non-edge-adjacent pairs are checked. For distinct SceneObjects, every source triangle pair is checked within the explicit work budget, and contact/intersection fails closed.
+
+Passing this gate establishes only the implemented bounded triangle-level source-shell intersection contract. It does **not** establish a positive minimum separation between bodies, volumetric tetrahedron non-overlap, CAD feature quality, curvature preservation, or suitability for a particular CFD discretization.
+
 ## Explicit non-claims
 
 This handoff does not establish:
 
 - exact triangle-to-triangle coincidence;
 - source normal, sharp-feature, or curvature preservation;
-- triangle self-intersection freedom beyond existing source audit scope;
+- positive minimum body separation beyond rejecting detected source-shell contact/intersection;
 - tetrahedron overlap freedom beyond the existing `VolumeMesh` audit;
 - boundary-layer quality or wall-normal spacing;
 - globally validated skewness, orthogonality, or solver-quality thresholds;
@@ -52,4 +62,4 @@ This handoff does not establish:
 
 ## Next gate before a higher-fidelity state
 
-A distinct source-surface-driven exterior mesher may return a candidate `VolumeMesh + Su2MarkerMap`, but it must pass this owned handoff before solver preparation. Before any body-fitted fidelity state becomes representable, AeroForge still needs stronger source self-intersection checks, volumetric intersection checks, feature-preservation evidence, boundary-layer evidence where relevant, and pinned SU2 end-to-end reference evidence.
+A distinct source-surface-driven exterior mesher may return a candidate `VolumeMesh + Su2MarkerMap`, but it must pass this owned handoff before using the validated exterior SU2 bundle path. Before any body-fitted fidelity state becomes representable, AeroForge still needs volumetric intersection/non-overlap evidence appropriate to that mesher, feature-preservation evidence, boundary-layer evidence where relevant, and pinned SU2 end-to-end reference evidence.
