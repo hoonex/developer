@@ -1,8 +1,12 @@
+use std::path::Path;
+
 use aeroforge_accurate_backend::{
-    build_validated_exterior_mesher_input, validate_exterior_mesher_input_intersections,
-    validate_exterior_mesher_source_containment, BoundaryRole, BoundarySource,
-    ContainmentValidatedExteriorMesherInput, DomainAxis, DomainSide, SourceContainmentPolicy,
-    SourceSurfaceIntersectionPolicy, Su2MarkerBinding,
+    build_validated_exterior_mesher_input, run_tetgen_for_handoff,
+    validate_exterior_mesher_input_intersections, validate_exterior_mesher_source_containment,
+    validate_tetgen_external_handoff, BoundaryRole, BoundarySource,
+    ContainmentValidatedExteriorMesherInput, DomainAxis, DomainSide, ExteriorMeshQualityPolicy,
+    SourceContainmentPolicy, SourceSurfaceCorrespondencePolicy, SourceSurfaceIntersectionPolicy,
+    Su2MarkerBinding, TetgenHoleSeedPolicy, ValidatedTetgenExteriorHandoff,
 };
 use aeroforge_volume_core::BoundaryMarkerId;
 
@@ -18,6 +22,21 @@ const DESKTOP_SOURCE_CONTAINMENT_POLICY: SourceContainmentPolicy = SourceContain
     geometric_epsilon: 1.0e-10,
     max_point_triangle_tests: 5_000_000,
 };
+const DESKTOP_TETGEN_HOLE_SEED_POLICY: TetgenHoleSeedPolicy = TetgenHoleSeedPolicy {
+    geometric_epsilon: 1.0e-10,
+    initial_inward_edge_fraction: 0.05,
+    max_attempts: 8,
+    max_point_triangle_tests: 5_000_000,
+};
+const DESKTOP_TETGEN_SANITY_QUALITY_POLICY: ExteriorMeshQualityPolicy = ExteriorMeshQualityPolicy {
+    min_mean_ratio: 1.0e-12,
+    max_edge_length_ratio: 1.0e6,
+};
+const DESKTOP_SOURCE_CORRESPONDENCE_POLICY: SourceSurfaceCorrespondencePolicy =
+    SourceSurfaceCorrespondencePolicy {
+        distance_tolerance: 1.0e-9,
+        max_point_triangle_tests: 20_000_000,
+    };
 
 /// Promotes the current desktop scene to the source-surface admission state required before an
 /// external TetGen run can be attempted.
@@ -67,7 +86,31 @@ pub fn admit_project_geometry_for_tetgen(
     .map_err(|error| format!("desktop exterior containment admission rejected: {error}"))
 }
 
-fn closed_wind_tunnel_bindings() -> Vec<Su2MarkerBinding> {
+/// Executes the configured external TetGen binary for one already-auditable desktop project and
+/// promotes its output through AeroForge's solver-bound quality/provenance/correspondence gates.
+///
+/// The quality limits here are deliberately permissive numerical sanity checks matching the real
+/// TetGen CI smoke; they are not engineering mesh-quality thresholds. The returned handoff retains
+/// the exact PLC, policies, source/domain ownership, process evidence, parsed IDs, local quality,
+/// and bounded source correspondence. It still records body-fitted and engineering-quality status
+/// as not established.
+pub fn run_project_tetgen_handoff(
+    state: &ProjectState,
+    executable: &Path,
+) -> Result<ValidatedTetgenExteriorHandoff, String> {
+    let admitted = admit_project_geometry_for_tetgen(state)?;
+    let bound = run_tetgen_for_handoff(executable, &admitted, DESKTOP_TETGEN_HOLE_SEED_POLICY)
+        .map_err(|error| format!("desktop external TetGen run failed: {error}"))?;
+
+    validate_tetgen_external_handoff(
+        bound,
+        DESKTOP_TETGEN_SANITY_QUALITY_POLICY,
+        DESKTOP_SOURCE_CORRESPONDENCE_POLICY,
+    )
+    .map_err(|error| format!("desktop TetGen exterior handoff rejected: {error}"))
+}
+
+pub(crate) fn closed_wind_tunnel_bindings() -> Vec<Su2MarkerBinding> {
     let binding = |marker, tag: &str, role, axis, side| Su2MarkerBinding {
         marker: BoundaryMarkerId(marker),
         tag: tag.into(),
@@ -179,5 +222,15 @@ mod tests {
         assert!(error.contains("containment admission rejected"));
         assert!(error.contains(&format!("SceneObject {inner_id}")));
         assert!(error.contains("lies inside"));
+    }
+
+    #[test]
+    fn tetgen_process_failure_is_reported_after_geometry_admission() {
+        let mut state = ProjectState::default();
+        state.objects[0].position.y = 2.0;
+        let missing = Path::new("aeroforge-definitely-missing-tetgen-binary-for-test");
+
+        let error = run_project_tetgen_handoff(&state, missing).unwrap_err();
+        assert!(error.contains("desktop external TetGen run failed"));
     }
 }
