@@ -39,8 +39,9 @@ pub use mixed_scene_voxel::{
     voxelize_mixed_scene_bodies, MixedSceneVoxelizationError, VoxelizedMixedScene,
 };
 pub use prepared_case::{
-    prepare_generated_su2_case_directory, run_prepared_generated_su2_case,
-    PrepareGeneratedCaseError, PreparedGeneratedSu2Case,
+    prepare_generated_su2_case_directory, prepare_generated_su2_case_directory_with_fidelity,
+    run_prepared_generated_su2_case, PrepareGeneratedCaseError, PreparedGeneratedSu2Case,
+    Su2MeshFidelity,
 };
 pub use primitive_voxel::{
     voxelize_scene_primitives, PrimitiveVoxelizationError, VoxelPrimitiveKind,
