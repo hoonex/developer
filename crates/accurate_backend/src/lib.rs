@@ -12,6 +12,7 @@ mod mixed_scene_voxel;
 mod prepared_case;
 mod primitive_voxel;
 mod scene_provenance;
+mod source_containment;
 mod source_intersection;
 mod su2;
 mod su2_mesh;
@@ -78,6 +79,10 @@ pub use primitive_voxel::{
 pub use scene_provenance::{
     build_active_scene_owner_marker_provenance, build_scene_owner_marker_provenance,
     scene_object_wall_tag, SceneOwnerMarkerProvenance, SceneOwnerProvenanceError,
+};
+pub use source_containment::{
+    validate_exterior_mesher_source_containment, ContainmentValidatedExteriorMesherInput,
+    SourceContainmentError, SourceContainmentPolicy, SourceContainmentReport,
 };
 pub use source_intersection::{
     validate_source_surface_intersections, SourceSurfaceIntersectionError,
