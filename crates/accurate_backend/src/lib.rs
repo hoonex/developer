@@ -17,6 +17,7 @@ mod source_intersection;
 mod su2;
 mod su2_mesh;
 mod surface_correspondence;
+mod tetgen_handoff;
 mod tetgen_output;
 mod tetgen_plc;
 mod tetgen_runner;
@@ -103,6 +104,10 @@ pub use surface_correspondence::{
     validate_source_surface_correspondence, SourceSurfaceBodyCorrespondence,
     SourceSurfaceCorrespondenceError, SourceSurfaceCorrespondencePolicy,
     SourceSurfaceCorrespondenceReport,
+};
+pub use tetgen_handoff::{
+    run_tetgen_for_handoff, validate_tetgen_external_handoff, BoundTetgenExternalRun,
+    TetgenExteriorHandoffError, ValidatedTetgenExteriorHandoff,
 };
 pub use tetgen_output::{
     parse_tetgen_volume_mesh, ParsedTetgenVolumeMesh, TetgenOutputError,
