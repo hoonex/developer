@@ -180,6 +180,22 @@ where
     result
 }
 
+/// Returns a deterministic snapshot of case directories whose direct SU2 child is currently
+/// registered as active.
+///
+/// Higher layers use this registry snapshot instead of scanning persisted case directories, so an
+/// old case that merely shares a revision/sequence-like filename cannot be mistaken for the child
+/// that is actually running now.
+pub fn active_su2_case_paths() -> Vec<PathBuf> {
+    registered_runs()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .active
+        .keys()
+        .cloned()
+        .collect()
+}
+
 /// Requests cancellation for the direct SU2 child associated with exactly this case directory.
 /// Returns false when that case is not currently registered as active.
 pub fn request_su2_case_cancellation(working_directory: &Path) -> bool {
@@ -346,6 +362,41 @@ mod tests {
         let result = worker.join().unwrap().unwrap();
         assert_eq!(result.termination, Su2RunTermination::Cancelled);
         assert!(!result.run.success);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn registered_case_is_visible_only_while_direct_child_is_active() {
+        let root = temp_root("registered-active");
+        std::fs::create_dir_all(&root).unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let worker_root = root.clone();
+        let worker = thread::spawn(move || {
+            run_su2_case_registered(
+                &executable,
+                &worker_root,
+                "cancellable_runner_child_fixture",
+                || {},
+            )
+        });
+
+        let mut observed_active = false;
+        for _ in 0..20 {
+            if active_su2_case_paths().contains(&root) {
+                observed_active = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(observed_active);
+
+        let result = worker.join().unwrap().unwrap();
+        assert_eq!(result.termination, Su2RunTermination::Completed);
+        assert!(!active_su2_case_paths().contains(&root));
+        assert_eq!(
+            take_su2_case_termination(&root),
+            Some(Su2RunTermination::Completed)
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
