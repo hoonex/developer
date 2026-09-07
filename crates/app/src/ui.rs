@@ -53,13 +53,22 @@ fn draw_top_bar(
             ui.separator();
             ui.label("3D aerodynamic workbench");
             ui.separator();
-            let label = if state.running { "Pause" } else { "Run preview" };
-            if ui.button(label).clicked() {
-                state.running = !state.running;
-            }
-            if ui.button("Reset").clicked() {
-                state.running = false;
-                runtime.reset();
+
+            match state.simulation.mode {
+                SolverMode::InteractivePreview => {
+                    let label = if state.running { "Pause" } else { "Run preview" };
+                    if ui.button(label).clicked() {
+                        state.running = !state.running;
+                    }
+                    if ui.button("Reset").clicked() {
+                        state.running = false;
+                        runtime.reset();
+                    }
+                }
+                SolverMode::Accurate => {
+                    ui.strong("Accurate solve");
+                    ui.weak("Prepare / Run controls are in the solve workspace below");
+                }
             }
         });
     });
@@ -177,11 +186,13 @@ fn draw_inspector_panel(
                     .default_open(true)
                     .show(ui, |ui| draw_simulation_controls(ui, state, runtime, dirty));
 
-                egui::CollapsingHeader::new("Preview runtime")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        draw_preview_runtime(ui, state, runtime, gpu_request, gpu_snapshot)
-                    });
+                if state.simulation.mode == SolverMode::InteractivePreview {
+                    egui::CollapsingHeader::new("Preview runtime")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            draw_preview_runtime(ui, state, runtime, gpu_request, gpu_snapshot)
+                        });
+                }
             });
         });
 }
@@ -376,6 +387,19 @@ fn draw_simulation_controls(
                 .changed();
         });
 
+    let cells = state.simulation.cell_count();
+    if state.simulation.mode == SolverMode::Accurate {
+        ui.horizontal(|ui| {
+            ui.monospace(format!("{cells} requested voxel cells"));
+            ui.separator();
+            ui.monospace(format!("≤ {} tetrahedra", cells.saturating_mul(6)));
+        });
+        ui.small(
+            "Accurate flow model, inlet, convergence, coefficient references, execution, live progress and cancellation are configured in the Accurate solve workspace.",
+        );
+        return;
+    }
+
     egui::ComboBox::from_label("Preview boundary")
         .selected_text(preview_boundary_name(state.simulation.preview_boundary))
         .show_ui(ui, |ui| {
@@ -431,7 +455,6 @@ fn draw_simulation_controls(
         PreviewBoundaryPreset::Periodic | PreviewBoundaryPreset::ChannelYNoSlip => {}
     }
 
-    let cells = state.simulation.cell_count();
     let gib = state.simulation.lbm_distribution_memory_bytes() as f64 / 1024.0_f64.powi(3);
     ui.horizontal(|ui| {
         ui.monospace(format!("{cells} cells"));
@@ -616,7 +639,14 @@ fn draw_preview_runtime(
 fn draw_status_bar(ctx: &egui::Context, state: &ProjectState, runtime: &SimulationRuntime) {
     egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
         ui.horizontal(|ui| {
-            ui.label(if state.running { "● Solving" } else { "○ Idle" });
+            match state.simulation.mode {
+                SolverMode::InteractivePreview => {
+                    ui.label(if state.running { "● Preview solving" } else { "○ Preview idle" });
+                }
+                SolverMode::Accurate => {
+                    ui.label("◆ Accurate solve mode");
+                }
+            }
             ui.separator();
             ui.label(format!(
                 "{} geometry",
@@ -624,10 +654,13 @@ fn draw_status_bar(ctx: &egui::Context, state: &ProjectState, runtime: &Simulati
             ));
             ui.separator();
             ui.label(format!("{} wind", state.wind_sources.len()));
-            ui.separator();
-            ui.label(format!("{:?}", runtime.backend));
-            ui.separator();
-            ui.label(format!("{:?}", runtime.status));
+
+            if state.simulation.mode == SolverMode::InteractivePreview {
+                ui.separator();
+                ui.label(format!("{:?}", runtime.backend));
+                ui.separator();
+                ui.label(format!("{:?}", runtime.status));
+            }
         });
     });
 }
