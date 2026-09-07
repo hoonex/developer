@@ -1,3 +1,4 @@
+mod cancellable_su2;
 mod generated_case;
 mod history;
 mod imported_surface;
@@ -11,6 +12,9 @@ mod su2_mesh;
 mod voxel_case;
 mod voxel_mesh;
 
+pub use cancellable_su2::{
+    run_su2_case_cancellable, CancellableSu2RunResult, Su2RunTermination,
+};
 pub use generated_case::{
     build_generated_su2_case_bundle, build_generated_su2_case_bundle_with_reference,
     GeneratedSu2CaseBundle, GeneratedSu2CaseError,
