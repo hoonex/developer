@@ -43,6 +43,7 @@ jobs:
           public static class AeroForgeCaptureWin32 {
               [StructLayout(LayoutKind.Sequential)]
               public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+              [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
               [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
               [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
               [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
@@ -76,10 +77,29 @@ jobs:
               [AeroForgeCaptureWin32]::SetForegroundWindow($handle) | Out-Null
               Start-Sleep -Seconds 4
 
+              $rectReady = $false
               $rect = [AeroForgeCaptureWin32+RECT]::new()
-              if (-not [AeroForgeCaptureWin32]::GetWindowRect($handle, [ref]$rect)) {
-                  throw "GetWindowRect failed for AeroForge window."
+              for ($i = 0; $i -lt 10; $i++) {
+                  $process.Refresh()
+                  if ($process.HasExited) {
+                      throw "AeroForge exited while reacquiring its native window. Exit code: $($process.ExitCode)"
+                  }
+                  $candidate = $process.MainWindowHandle
+                  if ($candidate -ne [IntPtr]::Zero -and [AeroForgeCaptureWin32]::IsWindow($candidate)) {
+                      $candidateRect = [AeroForgeCaptureWin32+RECT]::new()
+                      if ([AeroForgeCaptureWin32]::GetWindowRect($candidate, [ref]$candidateRect)) {
+                          $handle = $candidate
+                          $rect = $candidateRect
+                          $rectReady = $true
+                          break
+                      }
+                  }
+                  Start-Sleep -Seconds 1
               }
+              if (-not $rectReady) {
+                  throw "AeroForge did not expose a valid retrievable window rectangle within 10 seconds."
+              }
+
               $width = $rect.Right - $rect.Left
               $height = $rect.Bottom - $rect.Top
               if ($width -le 0 -or $height -le 0) {
@@ -115,13 +135,20 @@ jobs:
                   $printBitmap.Dispose()
               }
 
-              "Captured AeroForge window ${width}x${height} from handle $handle" | Set-Content -Path "aeroforge-capture.txt"
+              $screenFile = Get-Item $screenPath
+              if ($screenFile.Length -le 0) {
+                  throw "AeroForge screen capture was empty."
+              }
+              $screenHash = (Get-FileHash $screenPath -Algorithm SHA256).Hash
+              "Captured AeroForge window ${width}x${height} from handle $handle; screen-bytes=$($screenFile.Length); screen-sha256=$screenHash" | Set-Content -Path "aeroforge-capture.txt"
+              Get-Content "aeroforge-capture.txt"
           } finally {
               if (-not $process.HasExited) {
                   Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
               }
           }
       - name: Upload AeroForge screenshots
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: aeroforge-ui-screenshot
