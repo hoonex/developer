@@ -32,23 +32,20 @@ pub fn draw_surface_import_ui(
     mut runtime: ResMut<SurfaceImportRuntime>,
 ) -> Result {
     let ctx = contexts.ctx_mut()?;
-    egui::Window::new("Surface geometry import")
-        .default_width(430.0)
+    egui::Window::new("Import surface")
+        .default_width(400.0)
         .resizable(true)
         .show(ctx, |ui| {
             ui.label("OBJ / STL / glTF / GLB file path");
             ui.text_edit_singleline(&mut runtime.path);
             ui.small(
-                "Import parses static surface geometry only. Accurate preparation later applies the explicit repair/topology audit and fails closed if the surface is unsuitable.",
+                "Static surface geometry only. glTF/GLB external buffers must be local relative files inside the document directory.",
             );
             ui.small(
-                "glTF/GLB imports the selected static scene. Skins and morph targets are rejected; external buffers must be local relative files inside the document directory.",
-            );
-            ui.small(
-                "Imported surfaces feed the same audited cell-center staircase ownership used by native preview and generated SU2 preparation. Imported preview rasterization has an explicit cell budget; this remains voxel/staircase geometry, not body-fitted meshing.",
+                "Accurate preparation re-audits imported surfaces before the current staircase/voxel path; import itself is not a body-fitted mesh-quality claim.",
             );
 
-            if ui.button("Import surface").clicked() {
+            if ui.button("Import").clicked() {
                 match load_surface_path(&runtime.path) {
                     Ok((name, imported)) => {
                         let topology = imported.mesh.topology_report();
@@ -62,14 +59,14 @@ pub fn draw_surface_import_ui(
                         runtime.last_error = None;
                         runtime.last_status = Some(match topology {
                             Ok(report) => format!(
-                                "Imported {name} as SceneObject {id}: {format_label}{source_detail}, {} vertices, {} triangles, watertight={}, consistently_oriented={}",
+                                "Imported {name} · SceneObject {id} · {format_label}{source_detail} · {} vertices / {} triangles · watertight={} · oriented={}",
                                 report.vertices,
                                 report.triangles,
                                 report.watertight_two_manifold,
                                 report.consistently_oriented,
                             ),
                             Err(error) => format!(
-                                "Imported {name} as SceneObject {id}: {format_label}{source_detail}; topology report unavailable: {error}",
+                                "Imported {name} · SceneObject {id} · {format_label}{source_detail}; topology report unavailable: {error}",
                             ),
                         });
                     }
@@ -87,39 +84,8 @@ pub fn draw_surface_import_ui(
                 ui.colored_label(egui::Color32::RED, error);
             }
 
-            if state.imported_surfaces.is_empty() {
-                return;
-            }
-
             ui.separator();
-            ui.heading("Imported surfaces");
-            let mut delete_id = None;
-            let mut dirty = false;
-            for object in &mut state.imported_surfaces {
-                let title = format!("{} · SceneObject {}", object.name, object.id);
-                ui.collapsing(title, |ui| {
-                    ui.monospace(format!(
-                        "{} vertices · {} triangles",
-                        object.mesh.positions.len(),
-                        object.mesh.triangles.len()
-                    ));
-                    dirty |= ui.text_edit_singleline(&mut object.name).changed();
-                    dirty |= vec3_editor(ui, "Position (m)", &mut object.position, 0.05);
-                    dirty |= vec3_editor(ui, "Rotation (deg)", &mut object.rotation_deg, 1.0);
-                    dirty |= vec3_editor(ui, "Scale factor", &mut object.scale, 0.05);
-                    if ui.button("Delete imported surface").clicked() {
-                        delete_id = Some(object.id);
-                    }
-                });
-            }
-
-            if let Some(id) = delete_id {
-                state.imported_surfaces.retain(|object| object.id != id);
-                dirty = true;
-            }
-            if dirty {
-                state.touch();
-            }
+            ui.small("After import, select the object in Scene or the viewport. Rename, transform, inspect, and delete it from the main Object inspector.");
         });
     Ok(())
 }
@@ -361,17 +327,6 @@ fn has_uri_scheme(value: &str) -> bool {
         && chars.all(|character| {
             character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.')
         })
-}
-
-fn vec3_editor(ui: &mut egui::Ui, label: &str, value: &mut Vec3, speed: f64) -> bool {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.label(label);
-        changed |= ui.add(egui::DragValue::new(&mut value.x).speed(speed)).changed();
-        changed |= ui.add(egui::DragValue::new(&mut value.y).speed(speed)).changed();
-        changed |= ui.add(egui::DragValue::new(&mut value.z).speed(speed)).changed();
-    });
-    changed
 }
 
 #[cfg(test)]
