@@ -1,12 +1,11 @@
 use aeroforge_accurate_backend::{
-    audit_imported_surface_for_accurate_meshing, voxelize_mixed_scene_bodies,
-    AccurateImportedSurfacePolicy, VoxelFluidDomainSpec, VoxelPrimitiveKind,
-    VoxelSolidPrimitive, VoxelizedMixedScene,
+    voxelize_mixed_scene_bodies, VoxelFluidDomainSpec, VoxelPrimitiveKind, VoxelSolidPrimitive,
+    VoxelizedMixedScene,
 };
-use aeroforge_geometry_core::SurfaceMesh;
 use aeroforge_volume_core::{BlockBoundaryMarkers, BoundaryMarkerId};
 
-use crate::model::{rotation_from_degrees, ImportedSurfaceObject, PrimitiveKind, ProjectState};
+use crate::accurate_source_geometry::audit_imported_surfaces_for_exterior_meshing;
+use crate::model::{rotation_from_degrees, PrimitiveKind, ProjectState};
 
 /// Builds the project-aligned Cartesian domain used by both interactive preview rasterization and
 /// the generated staircase SU2 path. X/Z are centered around zero while Y spans ground-to-ceiling,
@@ -42,9 +41,9 @@ pub fn project_voxel_domain(
 /// Converts current project geometry into one deterministic cell-center ownership field shared by
 /// preview solid masks and the generated staircase SU2 path.
 ///
-/// Imported surfaces are transformed into world space, passed through the same explicit closed-
-/// surface audit used by accurate preparation, and then rasterized alongside analytic primitives.
-/// Cross-kind overlap ownership therefore remains stable and independent of scene vector order.
+/// Imported surfaces use the same world-transform + fail-closed audit helper as the distinct
+/// source-surface-driven exterior path. Cross-kind overlap ownership remains stable and independent
+/// of scene vector order.
 ///
 /// This is still a Cartesian staircase representation. It does not create a body-fitted surface or
 /// higher-fidelity exterior-fluid volume mesh.
@@ -79,24 +78,7 @@ pub fn voxelize_project_geometry_for_staircase(
         })
         .collect::<Vec<_>>();
 
-    let imported = state
-        .imported_surfaces
-        .iter()
-        .map(|object| {
-            let world_mesh = imported_surface_world_mesh(object)?;
-            audit_imported_surface_for_accurate_meshing(
-                object.id,
-                &world_mesh,
-                AccurateImportedSurfacePolicy::default(),
-            )
-            .map_err(|error| {
-                format!(
-                    "imported surface {} ({}) failed accurate audit (failed closed-surface audit): {error}",
-                    object.id, object.name
-                )
-            })
-        })
-        .collect::<Result<Vec<_>, String>>()?;
+    let imported = audit_imported_surfaces_for_exterior_meshing(state)?;
 
     voxelize_mixed_scene_bodies(domain, &primitives, &imported)
         .map_err(|error| error.to_string())
@@ -111,81 +93,10 @@ pub fn voxelize_project_geometry_for_accurate(
     voxelize_project_geometry_for_staircase(state, domain)
 }
 
-fn imported_surface_world_mesh(object: &ImportedSurfaceObject) -> Result<SurfaceMesh, String> {
-    if !object.position.is_finite()
-        || !object.rotation_deg.is_finite()
-        || !object.scale.is_finite()
-    {
-        return Err(format!(
-            "imported surface {} ({}) has a non-finite transform",
-            object.id, object.name
-        ));
-    }
-
-    let q = rotation_from_degrees(object.rotation_deg)
-        .to_array()
-        .map(|value| value as f64);
-    let scale = [
-        object.scale.x as f64,
-        object.scale.y as f64,
-        object.scale.z as f64,
-    ];
-    let translation = [
-        object.position.x as f64,
-        object.position.y as f64,
-        object.position.z as f64,
-    ];
-
-    let positions = object
-        .mesh
-        .positions
-        .iter()
-        .map(|&position| {
-            let scaled = [
-                position[0] * scale[0],
-                position[1] * scale[1],
-                position[2] * scale[2],
-            ];
-            let rotated = rotate_vector(q, scaled);
-            [
-                translation[0] + rotated[0],
-                translation[1] + rotated[1],
-                translation[2] + rotated[2],
-            ]
-        })
-        .collect();
-
-    Ok(SurfaceMesh {
-        positions,
-        triangles: object.mesh.triangles.clone(),
-    })
-}
-
-fn rotate_vector(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
-    let qv = [q[0], q[1], q[2]];
-    let t = scale(cross(qv, v), 2.0);
-    add(add(v, scale(t, q[3])), cross(qv, t))
-}
-
-fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-
-fn add(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-
-fn scale(v: [f64; 3], factor: f64) -> [f64; 3] {
-    [v[0] * factor, v[1] * factor, v[2] * factor]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aeroforge_geometry_core::SurfaceMesh;
     use bevy::prelude::Vec3;
 
     fn domain() -> VoxelFluidDomainSpec {

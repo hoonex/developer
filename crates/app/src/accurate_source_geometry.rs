@@ -5,12 +5,66 @@ use aeroforge_accurate_backend::{
 use aeroforge_geometry_core::SurfaceMesh;
 use bevy::prelude::Vec3;
 
-use crate::model::{rotation_from_degrees, PrimitiveKind, ProjectState, SceneObject};
+use crate::model::{
+    rotation_from_degrees, ImportedSurfaceObject, PrimitiveKind, ProjectState, SceneObject,
+};
 
 const SPHERE_LONGITUDE_SEGMENTS: usize = 24;
 const SPHERE_LATITUDE_SEGMENTS: usize = 12;
 const CYLINDER_SEGMENTS: usize = 24;
 const MIN_FULL_SIZE_M: f32 = 0.002;
+
+/// Converts every source-bearing project object into one stable, audited source-shell set.
+///
+/// Analytic and imported objects share the same `SceneObject.id` namespace. The returned set is
+/// sorted by that stable ID, and any duplicate cross-kind identity fails closed before exterior
+/// mesher input construction. This function establishes source geometry/audit only; exterior-domain
+/// containment and all subsequent mesher gates remain separate obligations.
+pub fn audit_project_sources_for_exterior_meshing(
+    state: &ProjectState,
+) -> Result<Vec<AuditedImportedSurfaceBody>, String> {
+    let mut audited = audit_analytic_primitives_for_exterior_meshing(state)?;
+    audited.extend(audit_imported_surfaces_for_exterior_meshing(state)?);
+    audited.sort_by_key(|body| body.scene_object_id);
+
+    if let Some(pair) = audited
+        .windows(2)
+        .find(|pair| pair[0].scene_object_id == pair[1].scene_object_id)
+    {
+        return Err(format!(
+            "duplicate cross-kind SceneObject id {} in exterior source geometry",
+            pair[0].scene_object_id
+        ));
+    }
+    Ok(audited)
+}
+
+/// Transforms imported project surfaces into world space and runs the authoritative accurate audit.
+///
+/// The staircase raster path and source-surface-driven exterior path both consume this helper so
+/// imported transforms and repair/audit policy cannot silently drift between the two paths.
+pub fn audit_imported_surfaces_for_exterior_meshing(
+    state: &ProjectState,
+) -> Result<Vec<AuditedImportedSurfaceBody>, String> {
+    state
+        .imported_surfaces
+        .iter()
+        .map(|object| {
+            let world_mesh = imported_surface_world_mesh(object)?;
+            audit_imported_surface_for_accurate_meshing(
+                object.id,
+                &world_mesh,
+                AccurateImportedSurfacePolicy::default(),
+            )
+            .map_err(|error| {
+                format!(
+                    "imported surface {} ({}) failed accurate audit (failed closed-surface audit): {error}",
+                    object.id, object.name
+                )
+            })
+        })
+        .collect()
+}
 
 /// Converts analytic desktop primitives into deterministic closed triangle shells and runs the
 /// same fail-closed accurate surface audit used by imported geometry.
@@ -44,6 +98,39 @@ pub fn audit_analytic_primitives_for_exterior_meshing(
 
     audited.sort_by_key(|body| body.scene_object_id);
     Ok(audited)
+}
+
+fn imported_surface_world_mesh(object: &ImportedSurfaceObject) -> Result<SurfaceMesh, String> {
+    if !object.position.is_finite()
+        || !object.rotation_deg.is_finite()
+        || !object.scale.is_finite()
+    {
+        return Err(format!(
+            "imported surface {} ({}) has a non-finite transform",
+            object.id, object.name
+        ));
+    }
+
+    let rotation = rotation_from_degrees(object.rotation_deg);
+    let positions = object
+        .mesh
+        .positions
+        .iter()
+        .map(|&position| {
+            let local = Vec3::new(
+                position[0] as f32 * object.scale.x,
+                position[1] as f32 * object.scale.y,
+                position[2] as f32 * object.scale.z,
+            );
+            let world = object.position + rotation * local;
+            [world.x as f64, world.y as f64, world.z as f64]
+        })
+        .collect();
+
+    Ok(SurfaceMesh {
+        positions,
+        triangles: object.mesh.triangles.clone(),
+    })
 }
 
 fn primitive_world_surface(object: &SceneObject) -> Result<SurfaceMesh, String> {
@@ -141,7 +228,9 @@ fn sphere_surface(half: Vec3) -> (Vec<Vec3>, Vec<[u32; 3]>) {
             .expect("fixed sphere tessellation fits u32")
     };
 
-    let mut triangles = Vec::with_capacity(2 * SPHERE_LONGITUDE_SEGMENTS * (SPHERE_LATITUDE_SEGMENTS - 1));
+    let mut triangles = Vec::with_capacity(
+        2 * SPHERE_LONGITUDE_SEGMENTS * (SPHERE_LATITUDE_SEGMENTS - 1),
+    );
     for longitude in 0..SPHERE_LONGITUDE_SEGMENTS {
         triangles.push([
             0,
@@ -188,9 +277,11 @@ fn cylinder_surface(half: Vec3) -> (Vec<Vec3>, Vec<[u32; 3]>) {
             half.z * phi.sin(),
         ));
     }
-    let bottom_center = u32::try_from(positions.len()).expect("fixed cylinder tessellation fits u32");
+    let bottom_center =
+        u32::try_from(positions.len()).expect("fixed cylinder tessellation fits u32");
     positions.push(Vec3::new(0.0, -half.y, 0.0));
-    let top_center = u32::try_from(positions.len()).expect("fixed cylinder tessellation fits u32");
+    let top_center =
+        u32::try_from(positions.len()).expect("fixed cylinder tessellation fits u32");
     positions.push(Vec3::new(0.0, half.y, 0.0));
 
     let mut triangles = Vec::with_capacity(CYLINDER_SEGMENTS * 4);
@@ -212,6 +303,18 @@ fn cylinder_surface(half: Vec3) -> (Vec<Vec3>, Vec<[u32; 3]>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tetra_surface() -> SurfaceMesh {
+        SurfaceMesh {
+            positions: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            triangles: vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
+        }
+    }
 
     #[test]
     fn default_box_promotes_to_positive_closed_source_shell() {
@@ -238,13 +341,48 @@ mod tests {
 
         let audited = audit_analytic_primitives_for_exterior_meshing(&state).unwrap();
         assert_eq!(
-            audited.iter().map(|body| body.scene_object_id).collect::<Vec<_>>(),
+            audited
+                .iter()
+                .map(|body| body.scene_object_id)
+                .collect::<Vec<_>>(),
             vec![sphere_id, cylinder_id]
         );
         assert_eq!(audited[0].mesh.triangles.len(), 528);
         assert_eq!(audited[1].mesh.triangles.len(), 96);
-        assert!(audited.iter().all(|body| body.topology.watertight_two_manifold));
+        assert!(audited
+            .iter()
+            .all(|body| body.topology.watertight_two_manifold));
         assert!(audited.iter().all(|body| body.enclosed_volume > 0.0));
+    }
+
+    #[test]
+    fn mixed_project_sources_are_stably_ordered_across_kinds() {
+        let mut state = ProjectState::default();
+        state.objects[0].position = Vec3::new(1.0, 2.0, 0.0);
+        let imported_id = state.add_imported_surface("tetra.obj", tetra_surface());
+        state.imported_surfaces[0].position = Vec3::new(-1.0, 2.0, 0.0);
+
+        let audited = audit_project_sources_for_exterior_meshing(&state).unwrap();
+        assert_eq!(
+            audited
+                .iter()
+                .map(|body| body.scene_object_id)
+                .collect::<Vec<_>>(),
+            vec![1, imported_id]
+        );
+        assert!(audited
+            .iter()
+            .all(|body| body.topology.watertight_two_manifold));
+    }
+
+    #[test]
+    fn duplicate_cross_kind_scene_identity_fails_closed() {
+        let mut state = ProjectState::default();
+        state.add_imported_surface("tetra.obj", tetra_surface());
+        state.imported_surfaces[0].id = state.objects[0].id;
+
+        let error = audit_project_sources_for_exterior_meshing(&state).unwrap_err();
+        assert!(error.contains("duplicate cross-kind SceneObject id 1"));
     }
 
     #[test]
@@ -266,6 +404,17 @@ mod tests {
         state.objects[0].rotation_deg.x = f32::NAN;
 
         let error = audit_analytic_primitives_for_exterior_meshing(&state).unwrap_err();
+        assert!(error.contains("non-finite transform"));
+    }
+
+    #[test]
+    fn non_finite_import_transform_fails_closed() {
+        let mut state = ProjectState::default();
+        state.objects.clear();
+        state.add_imported_surface("tetra.obj", tetra_surface());
+        state.imported_surfaces[0].position.x = f32::NAN;
+
+        let error = audit_imported_surfaces_for_exterior_meshing(&state).unwrap_err();
         assert!(error.contains("non-finite transform"));
     }
 }
