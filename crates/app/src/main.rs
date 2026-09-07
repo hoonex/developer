@@ -15,6 +15,7 @@ mod scene;
 mod simulation;
 mod surface_import;
 mod ui;
+mod ui_evidence;
 
 use accurate_execute::AccurateExecutionRuntime;
 use accurate_prepare::AccurateRuntime;
@@ -60,6 +61,7 @@ fn main() {
                 scene::draw_editor_gizmos,
                 surface_import::draw_imported_surface_wireframes,
                 scene::draw_flow_gizmos,
+                ui_evidence::capture_primary_window_when_requested,
             ),
         )
         .add_systems(

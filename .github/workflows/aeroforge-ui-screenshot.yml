@@ -5,6 +5,8 @@ on:
     branches: ["feat/aeroforge-foundation"]
     paths:
       - ".github/workflows/aeroforge-ui-screenshot.yml"
+      - "crates/app/src/main.rs"
+      - "crates/app/src/ui_evidence.rs"
   workflow_dispatch:
 
 permissions:
@@ -33,172 +35,90 @@ jobs:
             ${{ runner.os }}-cargo-
       - name: Build AeroForge desktop app
         run: cargo build -p aeroforge-app
-      - name: Launch AeroForge and capture rendered client
+      - name: Launch AeroForge and capture Bevy primary render target
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           Add-Type -AssemblyName System.Drawing
-          Add-Type @"
-          using System;
-          using System.Runtime.InteropServices;
-          public static class AeroForgeCaptureWin32 {
-              [StructLayout(LayoutKind.Sequential)]
-              public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
-              [StructLayout(LayoutKind.Sequential)]
-              public struct POINT { public int X; public int Y; }
-              [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
-              [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
-              [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hWnd, out RECT rect);
-              [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr hWnd, ref POINT point);
-              [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-              [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-              [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
-          }
-          "@
 
           $exe = (Resolve-Path ".\target\debug\aeroforge-app.exe").Path
+          $capturePath = Join-Path $PWD "aeroforge-bevy-primary.png"
           $stdout = Join-Path $PWD "aeroforge-stdout.log"
           $stderr = Join-Path $PWD "aeroforge-stderr.log"
+          $env:AEROFORGE_UI_EVIDENCE_PATH = $capturePath
           $process = Start-Process -FilePath $exe -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
 
           try {
-              $handle = [IntPtr]::Zero
-              for ($i = 0; $i -lt 30; $i++) {
+              $ready = $false
+              for ($attempt = 1; $attempt -le 40; $attempt++) {
                   Start-Sleep -Seconds 1
                   $process.Refresh()
                   if ($process.HasExited) {
-                      throw "AeroForge exited before a window became available. Exit code: $($process.ExitCode)"
+                      throw "AeroForge exited before Bevy wrote the primary-window screenshot. Exit code: $($process.ExitCode)"
                   }
-                  if ($process.MainWindowHandle -ne [IntPtr]::Zero) {
-                      $handle = $process.MainWindowHandle
-                      break
+                  if (Test-Path $capturePath) {
+                      $file = Get-Item $capturePath
+                      if ($file.Length -gt 0) {
+                          $ready = $true
+                          break
+                      }
                   }
               }
-              if ($handle -eq [IntPtr]::Zero) {
-                  throw "AeroForge did not expose a native window handle within 30 seconds."
+              if (-not $ready) {
+                  throw "Bevy did not write the requested primary-window screenshot within 40 seconds."
               }
 
-              [AeroForgeCaptureWin32]::ShowWindow($handle, 9) | Out-Null
-              [AeroForgeCaptureWin32]::SetForegroundWindow($handle) | Out-Null
-
-              $clientPath = Join-Path $PWD "aeroforge-current-client.png"
-              $renderReady = $false
-              $lastStats = "no client frame sampled"
-              $clientWidth = 0
-              $clientHeight = 0
-              $nonDark = 0
-              $sampleCount = 0
-              $lumaSpan = 0
-
-              # CPU/software rendering on hosted Windows can need several seconds after HWND
-              # creation before the first useful Bevy/egui frame is presented. Bound the wait and
-              # reject a merely non-empty all-black bitmap instead of treating it as UI evidence.
-              for ($attempt = 1; $attempt -le 15; $attempt++) {
-                  Start-Sleep -Seconds 2
-                  $process.Refresh()
-                  if ($process.HasExited) {
-                      throw "AeroForge exited while waiting for a rendered client frame. Exit code: $($process.ExitCode)"
-                  }
-                  $candidate = $process.MainWindowHandle
-                  if ($candidate -eq [IntPtr]::Zero -or -not [AeroForgeCaptureWin32]::IsWindow($candidate)) {
-                      $lastStats = "attempt=$attempt native window unavailable"
-                      continue
-                  }
-                  $handle = $candidate
-
-                  $clientRect = [AeroForgeCaptureWin32+RECT]::new()
-                  $origin = [AeroForgeCaptureWin32+POINT]::new()
-                  if (-not [AeroForgeCaptureWin32]::GetClientRect($handle, [ref]$clientRect) -or
-                      -not [AeroForgeCaptureWin32]::ClientToScreen($handle, [ref]$origin)) {
-                      $lastStats = "attempt=$attempt client geometry unavailable"
-                      continue
-                  }
-                  $clientWidth = $clientRect.Right - $clientRect.Left
-                  $clientHeight = $clientRect.Bottom - $clientRect.Top
-                  if ($clientWidth -le 0 -or $clientHeight -le 0) {
-                      $lastStats = "attempt=$attempt invalid client ${clientWidth}x${clientHeight}"
-                      continue
-                  }
-
-                  $bitmap = [System.Drawing.Bitmap]::new($clientWidth, $clientHeight)
-                  $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+              # Make sure save_to_disk has released a complete decodable PNG before validating it.
+              $bitmap = $null
+              for ($attempt = 1; $attempt -le 5; $attempt++) {
                   try {
-                      $graphics.CopyFromScreen($origin.X, $origin.Y, 0, 0, $bitmap.Size)
-                      $bitmap.Save($clientPath, [System.Drawing.Imaging.ImageFormat]::Png)
-
-                      $stepX = [Math]::Max(1, [int][Math]::Floor($clientWidth / 96.0))
-                      $stepY = [Math]::Max(1, [int][Math]::Floor($clientHeight / 54.0))
-                      $minLuma = 255
-                      $maxLuma = 0
-                      $nonDark = 0
-                      $sampleCount = 0
-                      for ($y = 0; $y -lt $clientHeight; $y += $stepY) {
-                          for ($x = 0; $x -lt $clientWidth; $x += $stepX) {
-                              $pixel = $bitmap.GetPixel($x, $y)
-                              $luma = [int](($pixel.R + $pixel.G + $pixel.B) / 3)
-                              $sampleCount++
-                              if ($luma -gt 24) { $nonDark++ }
-                              if ($luma -lt $minLuma) { $minLuma = $luma }
-                              if ($luma -gt $maxLuma) { $maxLuma = $luma }
-                          }
-                      }
-                      $lumaSpan = $maxLuma - $minLuma
-                      $lastStats = "attempt=$attempt client=${clientWidth}x${clientHeight} non-dark=$nonDark/$sampleCount luma-span=$lumaSpan"
-                      if ($nonDark -ge 12 -and $lumaSpan -ge 20) {
-                          $renderReady = $true
-                      }
-                  } finally {
-                      $graphics.Dispose()
-                      $bitmap.Dispose()
+                      $bitmap = [System.Drawing.Bitmap]::new($capturePath)
+                      break
+                  } catch {
+                      Start-Sleep -Milliseconds 500
                   }
-                  if ($renderReady) { break }
+              }
+              if ($null -eq $bitmap) {
+                  throw "Bevy screenshot exists but could not be decoded as a complete image."
               }
 
-              if (-not $renderReady) {
-                  throw "AeroForge native client never produced a non-black rendered frame within 30 seconds; $lastStats"
-              }
-
-              $rect = [AeroForgeCaptureWin32+RECT]::new()
-              if (-not [AeroForgeCaptureWin32]::GetWindowRect($handle, [ref]$rect)) {
-                  throw "GetWindowRect failed after rendered-client validation."
-              }
-              $width = $rect.Right - $rect.Left
-              $height = $rect.Bottom - $rect.Top
-
-              $screenPath = Join-Path $PWD "aeroforge-current-screen.png"
-              $bitmap = [System.Drawing.Bitmap]::new($width, $height)
-              $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
               try {
-                  $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bitmap.Size)
-                  $bitmap.Save($screenPath, [System.Drawing.Imaging.ImageFormat]::Png)
+                  $width = $bitmap.Width
+                  $height = $bitmap.Height
+                  if ($width -lt 800 -or $height -lt 450) {
+                      throw "Bevy screenshot dimensions are unexpectedly small: ${width}x${height}."
+                  }
+
+                  $stepX = [Math]::Max(1, [int][Math]::Floor($width / 128.0))
+                  $stepY = [Math]::Max(1, [int][Math]::Floor($height / 72.0))
+                  $nonDark = 0
+                  $sampleCount = 0
+                  $minLuma = 255
+                  $maxLuma = 0
+                  for ($y = 0; $y -lt $height; $y += $stepY) {
+                      for ($x = 0; $x -lt $width; $x += $stepX) {
+                          $pixel = $bitmap.GetPixel($x, $y)
+                          $luma = [int](($pixel.R + $pixel.G + $pixel.B) / 3)
+                          $sampleCount++
+                          if ($luma -gt 24) { $nonDark++ }
+                          if ($luma -lt $minLuma) { $minLuma = $luma }
+                          if ($luma -gt $maxLuma) { $maxLuma = $luma }
+                      }
+                  }
+                  $lumaSpan = $maxLuma - $minLuma
+                  if ($nonDark -lt 32 -or $lumaSpan -lt 20) {
+                      throw "Bevy primary-window screenshot is effectively blank: non-dark=$nonDark/$sampleCount luma-span=$lumaSpan"
+                  }
               } finally {
-                  $graphics.Dispose()
                   $bitmap.Dispose()
               }
 
-              $printPath = Join-Path $PWD "aeroforge-current-printwindow.png"
-              $printBitmap = [System.Drawing.Bitmap]::new($width, $height)
-              $printGraphics = [System.Drawing.Graphics]::FromImage($printBitmap)
-              try {
-                  $hdc = $printGraphics.GetHdc()
-                  try {
-                      $printed = [AeroForgeCaptureWin32]::PrintWindow($handle, $hdc, 2)
-                  } finally {
-                      $printGraphics.ReleaseHdc($hdc)
-                  }
-                  if ($printed) {
-                      $printBitmap.Save($printPath, [System.Drawing.Imaging.ImageFormat]::Png)
-                  }
-              } finally {
-                  $printGraphics.Dispose()
-                  $printBitmap.Dispose()
-              }
-
-              $clientFile = Get-Item $clientPath
-              $clientHash = (Get-FileHash $clientPath -Algorithm SHA256).Hash
-              "Captured rendered AeroForge client ${clientWidth}x${clientHeight} from handle $handle; client-bytes=$($clientFile.Length); client-sha256=$clientHash; non-dark=$nonDark/$sampleCount; luma-span=$lumaSpan" | Set-Content -Path "aeroforge-capture.txt"
+              $file = Get-Item $capturePath
+              $hash = (Get-FileHash $capturePath -Algorithm SHA256).Hash
+              "Captured Bevy primary render target ${width}x${height}; bytes=$($file.Length); sha256=$hash; non-dark=$nonDark/$sampleCount; luma-span=$lumaSpan" | Set-Content -Path "aeroforge-capture.txt"
               Get-Content "aeroforge-capture.txt"
           } finally {
+              Remove-Item Env:AEROFORGE_UI_EVIDENCE_PATH -ErrorAction SilentlyContinue
               if (-not $process.HasExited) {
                   Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
               }
@@ -209,9 +129,7 @@ jobs:
         with:
           name: aeroforge-ui-screenshot
           path: |
-            aeroforge-current-client.png
-            aeroforge-current-screen.png
-            aeroforge-current-printwindow.png
+            aeroforge-bevy-primary.png
             aeroforge-capture.txt
             aeroforge-stdout.log
             aeroforge-stderr.log
