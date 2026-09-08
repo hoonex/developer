@@ -14,6 +14,9 @@ use crate::source_clearance::{
 use crate::source_containment::{
     validate_exterior_mesher_source_containment, SourceContainmentPolicy,
 };
+use crate::source_facet_correspondence::{
+    validate_source_boundary_facet_correspondence, SourceBoundaryFacetCorrespondencePolicy,
+};
 use crate::source_intersection::SourceSurfaceIntersectionPolicy;
 use crate::su2_mesh::{
     BoundaryRole, BoundarySource, DomainAxis, DomainSide, Su2MarkerBinding,
@@ -134,7 +137,27 @@ fn configured_real_tetgen_exposes_body_wall_first_cell_height_evidence() {
     )
     .unwrap();
 
-    let marker_map = admitted.containment().admission().marker_map();
+    let admission = admitted.containment().admission();
+    let marker_map = admission.marker_map();
+    let facet_report = validate_source_boundary_facet_correspondence(
+        &bound.run().parsed.mesh,
+        marker_map,
+        admission.audited_sources(),
+        SourceBoundaryFacetCorrespondencePolicy {
+            vertex_distance_tolerance: 1.0e-12,
+            max_triangle_pair_tests: 100_000,
+        },
+    )
+    .unwrap();
+    assert_eq!(facet_report.triangle_pair_tests, 144);
+    assert_eq!(facet_report.bodies.len(), 1);
+    let facet_body = &facet_report.bodies[0];
+    assert_eq!(facet_body.scene_object_id, 42);
+    assert_eq!(facet_body.source_triangle_count, 12);
+    assert_eq!(facet_body.boundary_triangle_count, 12);
+    assert_eq!(facet_body.matched_triangle_count, 12);
+    assert!(facet_body.maximum_matched_vertex_distance <= 1.0e-12);
+
     let report = validate_body_wall_first_cell_heights(
         &bound.run().parsed.mesh,
         marker_map,
