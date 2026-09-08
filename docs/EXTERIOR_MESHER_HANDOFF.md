@@ -115,6 +115,20 @@ The pass extrema remain extrema of the complete lower-threshold and sharp select
 
 A positive sub-sharp count on a rounded triangulated fixture establishes **bounded discrete polygonal normal-variation correspondence only**. It does not prove continuous curvature, analytic/CAD feature semantics, exact edge identity, body-fitted fidelity, or engineering CFD accuracy.
 
+### Bounded body-wall first-cell height
+
+`validate_body_wall_first_cell_heights` adds an explicit local near-wall geometry observation without claiming a boundary-layer generator. It consumes the exact validated `VolumeMesh + Su2MarkerMap` and resolves body markers only through `BoundarySource::SceneObject`.
+
+For each canonical body-wall triangle, the boundary-orientation contract identifies its unique positive owning tetrahedron. The validator finds the unique fourth vertex of that tetrahedron and measures its perpendicular distance to the wall-face plane. `BodyWallFirstCellHeightPolicy` requires:
+
+- finite non-negative `minimum_height`;
+- finite `maximum_height` strictly above the minimum; and
+- non-zero `max_body_boundary_faces` covering the complete body-wall face set.
+
+The report retains the complete checked body-wall face count and, per SceneObject, boundary-face count, minimum height, maximum height, and mean height. Invalid/non-positive heights, policy violations, missing body faces, or insufficient face budget fail closed.
+
+This establishes **bounded first-adjacent-tetra wall-normal geometric-height evidence only**. It does not establish a prism/hex boundary-layer stack, multiple wall-normal layers, controlled growth ratio, orthogonality, y+, engineering near-wall adequacy, or body-fitted fidelity.
+
 ## Owned TetGen handoff
 
 `ValidatedTetgenExteriorHandoff` retains:
@@ -127,28 +141,28 @@ A positive sub-sharp count on a rounded triangulated fixture establishes **bound
 - source/body-boundary normal policy/report;
 - source/body-boundary sharp-crease feature-edge policy/report;
 - source/body-boundary discrete normal-variation policy/report;
+- body-wall first-cell-height policy/report;
 - TetGen stdout/stderr, exit code, and switch contract;
 - parsed input-node, tetrahedron, and boundary-face IDs; and
 - tetrahedron reorientation count.
 
-The clearance, normal, feature-edge, and discrete normal-variation evidence are therefore inseparable from the exact source state and solver-bound TetGen mesh/marker pair that passed the complete path.
+The clearance, normal, feature-edge, discrete normal-variation, and first-cell-height evidence are therefore inseparable from the exact source state and solver-bound TetGen mesh/marker pair that passed the complete path.
 
 ## Persisted external TetGen provenance
 
-Validated TetGen preparation writes the exact `aeroforge_tetgen_input.poly` and immutable `aeroforge_tetgen_handoff.tsv` **format version 6**.
+Validated TetGen preparation writes the exact `aeroforge_tetgen_input.poly` and immutable `aeroforge_tetgen_handoff.tsv` **format version 7**.
 
-The v6 sidecar retains all prior hole-seed, containment, process/parser, tetrahedral-overlap, source-clearance, source-normal, and sharp-crease feature-edge evidence and adds discrete normal-variation evidence.
+The v7 sidecar retains all prior hole-seed, containment, process/parser, tetrahedral-overlap, source-clearance, source-normal, sharp-crease feature-edge, and discrete normal-variation evidence and adds first-cell-height evidence.
 
-Variation evidence includes:
+First-cell-height evidence includes:
 
-- lower variation-angle and sharp-cutoff thresholds;
-- shared distance, direction-alignment, and dihedral-difference tolerances;
-- maximum edge-pair work per pass;
-- variation-pass, sharp-pass, and checked-total edge-pair counts;
+- selected minimum and maximum height;
+- maximum body-boundary-face work budget;
+- complete checked body-wall face count;
 - body count; and
-- per-body SceneObject ID, source/boundary variation counts, source/boundary sharp counts, source/boundary sub-sharp count differences, and both passes' complete bidirectional midpoint-distance, direction-alignment, and dihedral-difference extrema.
+- per-body SceneObject ID, boundary-face count, minimum height, maximum height, and mean height.
 
-The sidecar does not create a continuous-curvature or CAD-feature status token from these observations.
+The v6 variation evidence remains unchanged: lower variation-angle and sharp-cutoff thresholds, shared distance/direction/dihedral tolerances, maximum edge-pair work per pass, variation/sharp/total work, per-body variation/sharp/sub-sharp counts, and both complete passes' geometric extrema. The sidecar does not create a continuous-curvature, CAD-feature, boundary-layer, or y+ status token from these observations.
 
 Clearance evidence continues to include the selected positive floor, maximum/executed pair work, pair count, and per-pair SceneObject IDs, source triangle counts, and observed minimum clearance. Normal evidence continues to include the distance/cosine/work policy, executed pair count, body count, and per-body triangle counts, maximum centroid distances, and minimum bidirectional opposition cosines. Sharp-crease evidence continues to retain the v5 feature-angle, geometry-tolerance, pair-work, selected-edge-count, and per-body extrema fields.
 
@@ -156,14 +170,14 @@ Raw external stdout/stderr are not copied into the persisted sidecar; their byte
 
 ## Scope of the existing evidence
 
-The external TetGen handoff now establishes more than the generic handoff: it also owns bounded positive inter-body source clearance, bounded positive-volume tetrahedral non-overlap, bounded centroid-local source/body normal-opposition, bounded sharp-crease edge correspondence, and bounded triangulated discrete normal-variation reports. These are meaningful geometry-evidence gates, but they do not justify a body-fitted fidelity state by themselves.
+The external TetGen handoff now establishes more than the generic handoff: it also owns bounded positive inter-body source clearance, bounded positive-volume tetrahedral non-overlap, bounded centroid-local source/body normal-opposition, bounded sharp-crease edge correspondence, bounded triangulated discrete normal variation, and bounded first-cell wall-normal geometric-height reports. These are meaningful geometry-evidence gates, but they do not justify a body-fitted fidelity state or boundary-layer claim by themselves.
 
 Neither the generic nor external TetGen handoff currently establishes:
 
 - exact source triangle ↔ boundary triangle or source edge ↔ boundary edge coincidence/identity;
 - continuous-curvature preservation or analytic/CAD feature semantics;
 - a universal engineering minimum body separation beyond the explicit caller-selected numerical clearance floor;
-- boundary-layer quality or wall-normal spacing;
+- a layered boundary-layer mesh, controlled wall-normal growth, orthogonality, y+, or engineering near-wall suitability;
 - globally validated skewness/orthogonality thresholds for an engineering workflow;
 - body-fitted fidelity classification;
 - engineering CFD accuracy;
@@ -173,4 +187,4 @@ Neither the generic nor external TetGen handoff currently establishes:
 
 ## Remaining higher-fidelity obligations
 
-Before AeroForge makes a body-fitted state representable, the intended meshing workflow still needs evidence appropriate to that claim, including continuous-curvature/CAD-feature preservation beyond the current triangulated sharp-crease and discrete-normal-variation gates where relevant, boundary-layer evidence for near-wall-resolution claims, pinned SU2 end-to-end reference cases, and independent grid/domain/model/reference validation before engineering-accuracy claims.
+Before AeroForge makes a body-fitted state representable, the intended meshing workflow still needs evidence appropriate to that claim, including source/output conformance stronger than the current proximity/crease/discrete-variation gates, continuous-curvature/CAD-feature preservation where relevant, actual boundary-layer generation/evidence when near-wall-resolution claims are intended, pinned SU2 end-to-end reference cases, and independent grid/domain/model/reference validation before engineering-accuracy claims.

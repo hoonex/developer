@@ -78,8 +78,9 @@ A parsed TetGen mesh is not solver-bound merely because TetGen exited successful
 1. bounded positive-volume tetrahedral interior non-overlap using deterministic sweep-and-prune plus tetrahedral SAT;
 2. the generic exterior handoff: declared exterior provenance, caller-selected local tetrahedron quality, bounded source-shell intersection evidence, and bounded bidirectional source-surface proximity;
 3. bounded bidirectional source/body-boundary normal opposition;
-4. bounded bidirectional sharp-crease feature-edge correspondence; and
-5. bounded triangulated discrete normal-variation correspondence.
+4. bounded bidirectional sharp-crease feature-edge correspondence;
+5. bounded triangulated discrete normal-variation correspondence; and
+6. bounded body-wall first-cell geometric-height validation.
 
 The normal gate compares every source and body-boundary triangle centroid against the nearest triangle on the opposite surface under explicit distance tolerance, minimum opposition cosine, and triangle-pair work budget. Source normals are outward-from-solid; canonical body-boundary normals are outward-from-fluid (fluid→solid), so a conforming wall is expected to be anti-parallel. Raw external face order cannot make this gate pass or fail by itself.
 
@@ -89,28 +90,29 @@ The discrete normal-variation gate runs the same proven edge correspondence engi
 
 This two-threshold report is a triangulated-surface proxy. A positive sub-sharp count on a rounded polygonal fixture is useful evidence that nonzero below-cutoff normal variation survived the source→boundary path, but it is not a continuous-curvature or CAD-feature-preservation proof.
 
-`ValidatedTetgenExteriorHandoff` owns the exact source-clearance, containment, hole-seed, tetrahedral-overlap, normal-alignment, sharp-crease feature-edge, discrete normal-variation, and generic handoff evidence together with the prepared PLC, process evidence, parser IDs, and tetrahedron reorientation count.
+The first-cell-height gate runs on the same validated `VolumeMesh + Su2MarkerMap`. For every SceneObject body-wall triangle, canonical boundary orientation supplies the unique positive owning tetrahedron and the validator measures the perpendicular distance from the wall-face plane to that tetrahedron's unique opposite vertex. `BodyWallFirstCellHeightPolicy` supplies a finite minimum/maximum height interval and complete body-boundary-face budget. The retained report records total checked faces and per-body SceneObject ID, face count, minimum height, maximum height, and mean height.
+
+That observation characterizes only the first adjacent tetrahedron. It does not establish a layered prism/hex boundary layer, layer count, growth ratio, orthogonality, y+, or engineering near-wall adequacy.
+
+`ValidatedTetgenExteriorHandoff` owns the exact source-clearance, containment, hole-seed, tetrahedral-overlap, normal-alignment, sharp-crease feature-edge, discrete normal-variation, body-wall first-cell-height, and generic handoff evidence together with the prepared PLC, process evidence, parser IDs, and tetrahedron reorientation count.
 
 ## Persistence
 
 Validated external TetGen cases persist:
 
 - `aeroforge_tetgen_input.poly` — the exact deterministic PLC used for the external run; and
-- `aeroforge_tetgen_handoff.tsv` format version 6.
+- `aeroforge_tetgen_handoff.tsv` format version 7.
 
-The v6 sidecar retains all previous hole-seed, source-containment, process/parser, bounded tetrahedral-overlap, source-clearance, bounded normal-opposition, and sharp-crease feature-edge evidence and adds the owned discrete normal-variation evidence:
+The v7 sidecar retains all previous hole-seed, source-containment, process/parser, bounded tetrahedral-overlap, source-clearance, bounded normal-opposition, sharp-crease feature-edge, and discrete normal-variation evidence and adds the owned first-cell-height evidence:
 
-- `source_normal_variation_minimum_angle_radians`;
-- `source_normal_variation_sharp_cutoff_radians`;
-- `source_normal_variation_distance_tolerance`;
-- `source_normal_variation_minimum_direction_alignment_cosine`;
-- `source_normal_variation_maximum_dihedral_angle_difference_radians`;
-- `source_normal_variation_max_edge_pair_tests_per_pass`;
-- variation-pass, sharp-pass, and total edge-pair test counts;
-- `source_normal_variation_body_count`; and
-- per body: stable SceneObject ID; source/boundary variation, sharp, and sub-sharp edge counts; plus the complete variation-pass and sharp-pass bidirectional midpoint-distance, direction-alignment, and dihedral-difference extrema.
+- `body_wall_first_cell_minimum_height`;
+- `body_wall_first_cell_maximum_height`;
+- `body_wall_first_cell_max_boundary_faces`;
+- `body_wall_first_cell_boundary_face_count`;
+- `body_wall_first_cell_body_count`; and
+- per body: stable SceneObject ID, checked boundary-face count, minimum height, maximum height, and mean height.
 
-The persisted extrema remain the complete lower-threshold and sharp-threshold pass observations. They are not relabeled as smooth-band-only measurements.
+The v6 discrete normal-variation fields remain unchanged: lower variation-angle and sharp-cutoff thresholds, shared geometric tolerances, per-pass work limits, variation/sharp/total checked work, per-body variation/sharp/sub-sharp counts, and both complete passes' geometric extrema. The persisted extrema remain the complete lower-threshold and sharp-threshold pass observations rather than being relabeled as smooth-band-only measurements.
 
 Clearance evidence continues to include the caller-selected positive floor/work budget, executed pair count, body-pair count, and per-pair SceneObject IDs, source triangle counts, and observed minimum surface clearance. Normal evidence continues to include the global distance/cosine/work policy, executed pair count, body count, and per-body SceneObject ID, source/boundary triangle counts, maximum centroid distances, and minimum bidirectional opposition cosines. Sharp-crease evidence continues to include the feature-angle, distance, direction-alignment, dihedral-difference, edge-work, selected-edge counts and per-body extrema introduced in v5.
 
@@ -118,14 +120,14 @@ Persistence uses create-new semantics. Failure to write the TetGen provenance re
 
 ## Current evidence and non-claims
 
-Routine CI exercises a real system-installed TetGen executable through both the backend handoff and desktop prepare/persistence path. The current evidence establishes the implemented source admission, bounded positive inter-body clearance, external invocation/parsing, volumetric overlap, generic handoff, canonical boundary orientation, bounded centroid-local normal opposition, bounded sharp-crease feature-edge correspondence, and bounded triangulated discrete normal-variation contracts. A rounded real-TetGen fixture exercises a positive sub-sharp variation count while the sharp-cutoff selection remains separate.
+Routine CI exercises a real system-installed TetGen executable through both the backend handoff and desktop prepare/persistence path. The current evidence establishes the implemented source admission, bounded positive inter-body clearance, external invocation/parsing, volumetric overlap, generic handoff, canonical boundary orientation, bounded centroid-local normal opposition, bounded sharp-crease feature-edge correspondence, bounded triangulated discrete normal-variation, and bounded first-cell wall-normal geometric-height contracts. A rounded real-TetGen fixture exercises a positive sub-sharp variation count while the sharp-cutoff selection remains separate; real TetGen and desktop persistence both exercise the owned first-cell-height path.
 
 It does **not** establish:
 
 - exact source-triangle ↔ boundary-triangle or source-edge ↔ boundary-edge identity/coincidence;
 - continuous-curvature preservation or analytic/CAD feature semantics;
 - a universal engineering minimum body separation beyond the explicit caller-selected numerical clearance policy;
-- boundary-layer or wall-normal spacing quality;
+- a layered boundary-layer mesh, controlled wall-normal growth, orthogonality, y+, or engineering near-wall suitability;
 - universal engineering mesh-quality thresholds;
 - body-fitted fidelity as an AeroForge classification;
 - grid/domain convergence, GCI, or aerodynamic accuracy.
