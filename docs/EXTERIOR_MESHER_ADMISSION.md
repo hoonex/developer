@@ -1,6 +1,10 @@
 # Exterior mesher source-shell admission
 
-A future source-surface-driven exterior mesher must not consume merely owned geometry. AeroForge now separates four pre-mesher input states:
+AeroForge separates source admission, external-mesher execution, output validation, and fidelity classification. Passing one stage never silently upgrades a later claim.
+
+## Source-side promoted states
+
+The source-surface-driven exterior path uses explicit promoted states:
 
 ```text
 ValidatedExteriorMesherInput
@@ -12,49 +16,108 @@ ValidatedExteriorMesherInput
 → ClearanceValidatedExteriorMesherInput
 ```
 
-The first state owns the finite six-face outer domain, audited source bodies, stable SceneObject identity, strict source-AABB containment, and deterministic domain/body marker provenance.
+`ValidatedExteriorMesherInput` owns finite outer-domain bounds, audited source bodies, stable `SceneObject.id` provenance, and deterministic domain/body marker bindings.
 
-Intersection admission revalidates that base state instead of trusting the earlier promotion indefinitely. The current domain bindings and source set are run back through the canonical input builder; non-canonical post-validation mutation fails closed. Each source mesh also has its current bounds and topology recomputed and compared with the cached audit evidence before source-shell intersection work begins.
+Intersection admission revalidates the base state, recomputes current source bounds/topology, checks non-adjacent self-intersection and inter-body contact/intersection, and stores the exact `SourceSurfaceIntersectionPolicy` and report. Work is bounded explicitly; no sampling or silent truncation is allowed.
 
-The second state stores the exact `SourceSurfaceIntersectionPolicy` and resulting `SourceSurfaceIntersectionReport`. Its owned base input is private after promotion; the mesher-facing API exposes read-only accessors for domain bounds, audited sources, marker provenance, and intersection evidence. Promotion fails closed on invalid base input, non-canonical mutation, stale audit metadata, invalid tolerance, zero/exhausted triangle-pair budget, source-shell self-intersection, or contact/intersection between distinct source shells.
+Containment admission rejects invalid exterior-fluid configurations such as one closed source shell nested wholly inside another. It uses an explicit geometric epsilon and complete point/triangle work reservation. Near-contact inside the configured epsilon fails closed.
 
-Intersection-free shells can still be topologically invalid for a distinct exterior-fluid boundary set when one closed solid is wholly nested inside another. The containment gate therefore checks one representative boundary vertex in both directions for each source-body pair, using an explicit geometric epsilon and a worst-case point/triangle work reservation that is rejected before winding evaluation if it exceeds policy. Because the input shells are connected, closed, and already proven non-intersecting, a change from inside to outside along a shell would require an intersection; the bidirectional representative-point test is sufficient for complete nesting under those preconditions. Near-contact within the configured containment epsilon also fails closed.
+Clearance admission checks every triangle pair across every distinct SceneObject pair and retains the minimum Euclidean triangle-to-triangle surface distance, including vertex-to-triangle and edge-to-edge closest approaches. `minimum_clearance` must be finite and strictly positive and `max_triangle_pair_tests` must cover the complete requested work. A single-body scene correctly records zero inter-body pair observations/tests.
 
-The third state, `ContainmentValidatedExteriorMesherInput`, owns the intersection-admitted input plus the exact containment policy/report. It is the required input to the separate positive-clearance gate rather than an executable TetGen state.
+The external TetGen runner accepts only `ClearanceValidatedExteriorMesherInput`, so a caller cannot bypass the clearance gate and attach unrelated evidence later.
 
-`validate_exterior_mesher_source_clearance` checks every triangle pair for every distinct SceneObject pair and retains the minimum Euclidean triangle-to-triangle surface distance. The distance calculation includes vertex-to-triangle and edge-to-edge closest approaches, so skew edge interiors are not omitted. The complete inter-body triangle-pair work is reserved before evaluation; overflow, zero budget, or policy exhaustion fails closed rather than sampling or truncating the evidence.
+The desktop clearance floor currently used by the validated TetGen path is a numerical admission floor, not an engineering separation requirement.
 
-The clearance policy requires a finite strictly positive `minimum_clearance` and an explicit `max_triangle_pair_tests`. Passing establishes only that the admitted source shells satisfy that caller-selected numerical clearance floor. It does **not** establish a universal engineering separation threshold. A single-body source set has no distinct body pairs, so its successful report contains zero pair tests and zero pair observations rather than inventing a distance.
+## External path
 
-The fourth state, `ClearanceValidatedExteriorMesherInput`, privately owns the containment-admitted input together with the exact clearance policy/report. The external TetGen runner requires this promoted type, so a containment-only caller cannot bypass the positive-clearance gate and later substitute clearance evidence.
-
-The implemented external path is therefore:
+The implemented route is:
 
 ```text
 raw imported/analytic surface
 → deterministic repair/audit
-→ ValidatedExteriorMesherInput
-→ revalidated + sealed IntersectionValidatedExteriorMesherInput
-→ nested-solid rejection
-→ ContainmentValidatedExteriorMesherInput
-→ bounded positive inter-body clearance
-→ ClearanceValidatedExteriorMesherInput
-→ deterministic TetGen PLC + external TetGen process
-→ candidate VolumeMesh + authoritative marker map
-→ ValidatedExteriorMesherHandoff
-→ TetGen-specific overlap / normal / sharp-crease / discrete-normal-variation / first-cell-height evidence gates
+→ source intersection admission
+→ nesting/containment admission
+→ positive inter-body clearance admission
+→ deterministic TetGen PLC
+→ external TetGen process
+→ parsed candidate VolumeMesh + authoritative marker map
+→ generic ValidatedExteriorMesherHandoff
+→ TetGen overlap / normal / sharp-crease / discrete-normal-variation / first-cell-height gates
 → ValidatedTetgenExteriorHandoff
+→ one-to-one constrained-facet correspondence gate
+→ FacetValidatedTetgenExteriorHandoff
 → validated SU2 bundle / persisted case
 ```
 
-The candidate output still must pass declared exterior provenance, local tetrahedron quality, source intersection revalidation, bounded bidirectional source correspondence, TetGen-specific positive-volume tetrahedral non-overlap, bounded bidirectional source/body-boundary normal opposition, bounded bidirectional sharp-crease edge correspondence, bounded triangulated discrete normal-variation correspondence, and bounded body-wall first-cell geometric-height validation. Revalidating source intersections at handoff is deliberate defense in depth against stale or substituted geometry between mesher admission and output validation.
+The generic handoff still revalidates declared exterior provenance, local tetrahedron quality, source-shell intersections, and bounded bidirectional source-surface proximity. Revalidation is deliberate defense in depth against stale or substituted geometry.
 
-The sharp-crease gate independently extracts manifold source and output boundary edges whose adjacent-triangle normal angle meets the caller-selected feature threshold, excludes coplanar triangulation diagonals, and compares selected edges bidirectionally under explicit midpoint-distance, direction-alignment, dihedral-difference, and complete pair-work limits.
+## TetGen-specific output evidence
 
-`validate_source_boundary_discrete_normal_variation` reuses that edge-correspondence engine in two nested passes. The lower pass selects every manifold edge whose adjacent-triangle normal angle reaches `minimum_variation_angle_radians`; the second pass selects the subset reaching `sharp_feature_cutoff_radians`. Both passes use the same caller-selected distance, direction-alignment and dihedral-difference tolerances and each has its own explicit pair-work bound. The report retains both complete pass reports plus per-body variation/sharp counts and their sub-sharp count difference rather than pretending the extrema are measurements of a continuous smooth band.
+### Positive-volume tetrahedral non-overlap
 
-`validate_body_wall_first_cell_heights` then observes every SceneObject body-wall boundary triangle on the exact validated output. Canonical boundary orientation identifies the unique positive owning tetrahedron; the first-cell height is the perpendicular distance from that wall-face plane to the tetrahedron's unique opposite vertex. The caller supplies an explicit finite minimum/maximum height interval and complete body-boundary-face work budget. The report retains the checked face count and, per SceneObject, face count plus minimum, maximum, and mean first-cell height.
+`validate_tetrahedral_interior_overlaps` uses deterministic broad-phase filtering and tetrahedral separating-axis tests. Face/edge/vertex contact is permitted; positive-volume interior overlap fails. Complete broad-phase work is bounded and pathological input fails closed instead of consuming unbounded work.
 
-This is **local first-adjacent-tetra geometric evidence only**. It does not show that a prism/hex boundary-layer stack was generated, how many wall-normal layers exist, whether a growth ratio is controlled, whether cells are orthogonal, or whether y+ is appropriate.
+### Canonical boundary orientation and normal opposition
 
-A positive sub-sharp count on a rounded triangulated fixture is meaningful discrete polygonal normal-variation evidence, and the owned first-cell-height report provides a bounded wall-normal geometric observation. Positive source-body clearance, bounded sharp-crease correspondence, bounded discrete normal variation, and first-cell height evidence still do not establish constrained triangle or edge identity, continuous-curvature preservation, CAD-feature preservation, body-fitted fidelity, boundary-layer suitability, universal engineering mesh quality, y+, or CFD accuracy.
+Raw TetGen `.face` order is not normal evidence. `orient_exterior_boundary_triangles` determines the unique positive owning tetrahedron and orients each exterior face outward from the fluid cell.
+
+`validate_source_boundary_normal_alignment` then compares every source triangle centroid and every canonical body-boundary centroid bidirectionally under explicit distance, opposition-cosine, and complete triangle-pair work limits. The report retains body counts, triangle counts, maximum centroid distances, and minimum opposition cosines.
+
+### Sharp-crease edge correspondence
+
+`validate_source_boundary_feature_edges` independently builds manifold edge maps from source and output body triangles. Edges are selected by a caller-selected adjacent-normal angle threshold, so coplanar triangulation diagonals are excluded. Selected edges are checked bidirectionally using midpoint-to-segment distance, orientation-independent direction alignment, dihedral-angle agreement, and complete pair-work bounds.
+
+This is bounded sharp-crease evidence. It does not imply exact source/output edge identity or CAD feature semantics.
+
+### Discrete normal variation
+
+`validate_source_boundary_discrete_normal_variation` runs the proven edge-correspondence engine twice with nested angle thresholds: a lower variation threshold and a strictly larger sharp cutoff. The report retains both complete passes plus per-body variation, sharp, and sub-sharp count differences.
+
+A positive sub-sharp count on a rounded triangulated fixture is meaningful discrete polygonal normal-variation evidence. It is not continuous-curvature evidence.
+
+### Body-wall first-cell height
+
+`validate_body_wall_first_cell_heights` checks every SceneObject body-wall boundary triangle on the exact validated output. The canonical owning tetrahedron supplies the unique opposite vertex; the measured height is the perpendicular distance from the wall-face plane to that vertex.
+
+The caller supplies finite minimum/maximum heights and a complete face-work budget. The report retains total checked body-wall faces and per-body face count, minimum, maximum, and mean height.
+
+This is first-adjacent-tetra geometric evidence only. It does not establish a layered prism/hex boundary layer, layer count, growth ratio, orthogonality, y+, or engineering near-wall adequacy.
+
+### One-to-one constrained source/body facet correspondence
+
+`validate_source_boundary_facet_correspondence` is the stronger current surface-conformance gate. For each SceneObject it requires equal source and body-boundary triangle counts and performs the complete `source_triangle_count × boundary_triangle_count` comparison set under an explicit work budget.
+
+Two triangles match only when their three vertex coordinates can be paired within `vertex_distance_tolerance`; winding and cyclic vertex order are not treated as identity. Each source triangle must match exactly one boundary triangle and each boundary triangle must match exactly one source triangle. Missing, extra, duplicate, or ambiguously matching facets fail closed.
+
+The report retains per body:
+
+- stable SceneObject ID;
+- source triangle count;
+- boundary triangle count;
+- matched triangle count; and
+- maximum matched vertex distance.
+
+This establishes **one-to-one triangulated facet coincidence within the selected numerical tolerance**. Routine real-TetGen evidence includes both a cube and a rounded 528-triangle source/output case. It is stronger than proximity, normal, or crease correspondence alone.
+
+It still does **not** establish analytic-surface identity, CAD patch/curve semantics, exact source/output edge identity, or continuous curvature, because the current source representation is a triangle mesh rather than a CAD feature model.
+
+## Persisted ownership boundary
+
+The actual desktop path owns the stronger `FacetValidatedTetgenExteriorHandoff`, which wraps the previously validated TetGen handoff together with the exact constrained-facet policy/report. Persistence writes the exact TetGen PLC and `aeroforge_tetgen_handoff.tsv` format version 8, including the facet policy, complete pair work, and per-body facet correspondence report.
+
+`body_fitted_status` and `engineering_quality_status` remain `not_established`.
+
+## Current claim boundary
+
+The validated external path now establishes bounded source admission, positive inter-body numerical clearance, external-process/parser provenance, positive-volume tetrahedral non-overlap, generic source proximity, canonical normal opposition, sharp-crease correspondence, discrete triangulated normal variation, first-cell wall-normal height observations, and one-to-one triangulated source/body facet coincidence.
+
+It does not yet establish:
+
+- analytic/CAD surface or feature semantics;
+- continuous-curvature preservation independent of the input triangulation;
+- exact source/output edge identity;
+- a layered boundary-layer mesh, growth control, orthogonality, or y+ suitability;
+- universal engineering mesh-quality thresholds;
+- body-fitted fidelity as an AeroForge classification;
+- engineering CFD accuracy; or
+- grid/domain/model convergence or GCI.
