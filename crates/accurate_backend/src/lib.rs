@@ -18,6 +18,7 @@ mod source_containment;
 mod source_feature_edges;
 mod source_intersection;
 mod source_normal_alignment;
+mod source_normal_variation;
 mod su2;
 mod su2_mesh;
 mod surface_correspondence;
@@ -120,6 +121,13 @@ pub use source_normal_alignment::{
     validate_source_boundary_normal_alignment, NormalComparisonDirection,
     SourceBoundaryNormalBodyReport, SourceBoundaryNormalError, SourceBoundaryNormalPolicy,
     SourceBoundaryNormalReport,
+};
+pub use source_normal_variation::{
+    validate_source_boundary_discrete_normal_variation,
+    SourceBoundaryDiscreteNormalVariationBodyReport,
+    SourceBoundaryDiscreteNormalVariationError,
+    SourceBoundaryDiscreteNormalVariationPolicy,
+    SourceBoundaryDiscreteNormalVariationReport,
 };
 pub use su2::{
     discover_su2, probe_su2_banner, run_su2_case, FlowModel, InletBoundary, Su2Case,
