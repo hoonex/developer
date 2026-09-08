@@ -24,6 +24,7 @@ mod su2;
 mod su2_mesh;
 mod surface_correspondence;
 mod tetra_overlap;
+mod tetgen_facet_handoff;
 mod tetgen_handoff;
 mod tetgen_output;
 mod tetgen_plc;
@@ -34,6 +35,8 @@ mod voxel_case;
 mod voxel_mesh;
 mod wall_normal_spacing;
 
+#[cfg(test)]
+mod tetgen_facet_real_smoke;
 #[cfg(test)]
 mod tetgen_real_smoke;
 #[cfg(test)]
@@ -154,6 +157,10 @@ pub use surface_correspondence::{
 pub use tetra_overlap::{
     validate_tetrahedral_interior_overlaps, TetrahedralOverlapError, TetrahedralOverlapPolicy,
     TetrahedralOverlapReport,
+};
+pub use tetgen_facet_handoff::{
+    validate_tetgen_external_handoff_with_facet_correspondence,
+    FacetValidatedTetgenExteriorHandoff, FacetValidatedTetgenExteriorHandoffError,
 };
 pub use tetgen_handoff::{
     run_tetgen_for_handoff, validate_tetgen_external_handoff, BoundTetgenExternalRun,
