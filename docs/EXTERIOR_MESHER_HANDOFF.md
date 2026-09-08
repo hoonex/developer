@@ -1,122 +1,121 @@
 # Exterior mesher handoff contract
 
-AeroForge now has an explicit solver-bound handoff for a candidate exterior-fluid tetrahedral mesh. This is a validation boundary, not a body-fitted mesher and not a mesh-fidelity promotion.
+AeroForge has an explicit solver-bound validation boundary for candidate exterior-fluid tetrahedral meshes. It is not itself a mesher, fidelity label, or engineering-accuracy certificate.
 
-## Owned generic handoff
+## Generic owned handoff
 
-`ValidatedExteriorMesherHandoff` owns:
+`ValidatedExteriorMesherHandoff` owns the candidate `VolumeMesh`, authoritative `Su2MarkerMap`, successful declared-exterior report, and the exact policies/reports that admitted the mesh.
 
-- the candidate `VolumeMesh`;
-- its authoritative `Su2MarkerMap`;
-- the caller-selected local tetrahedron quality policy and successful report;
-- the caller-selected bounded source-surface intersection policy and successful report;
-- the caller-selected bounded source-surface correspondence policy and successful report; and
-- the successful declared exterior-fluid provenance report.
+`validate_candidate_exterior_mesher_handoff` requires four contracts:
 
-The only public constructor is `validate_candidate_exterior_mesher_handoff`.
+1. **Declared exterior provenance** — `validate_declared_exterior_fluid_mesh_input` requires the ordinary tetrahedral volume audit, complete boundary-marker binding, explicit outer `DomainFace` provenance, and stable `SceneObject.id` body-wall provenance.
+2. **Local tetrahedral quality** — `validate_exterior_mesh_quality` applies caller-selected minimum mean-ratio and maximum edge-length-ratio limits. AeroForge deliberately does not embed a universal engineering threshold.
+3. **Bounded source-shell intersection** — `validate_source_surface_intersections` checks non-adjacent self-intersection and inter-body triangle contact/intersection under an explicit geometric epsilon and triangle-pair budget.
+4. **Bounded source-surface correspondence** — `validate_source_surface_correspondence` checks every used source/body-boundary vertex and every triangle centroid bidirectionally against the opposite triangle surface under explicit distance tolerance and point/triangle work budget.
 
-A generic candidate is accepted only after all four contracts succeed:
+There is no random downsampling, silent budget reduction, marker-string identity recovery, or fidelity inference at this boundary.
 
-1. `validate_declared_exterior_fluid_mesh_input` verifies tetrahedral volume audit, complete boundary marker binding, explicit outer `DomainFace` provenance, and stable `SceneObject.id` wall provenance.
-2. `validate_exterior_mesh_quality` applies caller-supplied local shape limits. It checks tetrahedral mean-ratio quality `12 * (3V)^(2/3) / sum(edge_length^2)` and longest-edge / shortest-edge ratio. AeroForge does not embed a default engineering threshold.
-3. `validate_source_surface_intersections` checks each audited source shell for non-adjacent triangle self-intersection and checks distinct source bodies for triangle contact/intersection. It uses an explicit geometric epsilon and explicit triangle-pair budget; exceeding that budget fails closed before geometric testing.
-4. `validate_source_surface_correspondence` verifies bounded bidirectional proximity between every used source/body-boundary vertex plus every triangle centroid and the opposite triangle surface, under an explicit distance tolerance and comparison budget.
+A successful generic handoff means only those four retained contracts passed. An exactly aligned staircase cavity can satisfy them; therefore generic handoff possession is not evidence of body-fitted meshing or global tetrahedral non-overlap.
 
-Failure of any contract rejects the handoff. There is no random sampling, silent budget reduction, marker-name identity recovery, implicit local-quality threshold, or fidelity inference at this boundary.
+## Generic persisted admission evidence
 
-## What generic success means
+Validated exterior SU2 preparation persists immutable `aeroforge_exterior_handoff.tsv` format version 2. It records:
 
-A successful generic handoff means the candidate has the topology/provenance evidence required by the declared exterior-fluid contract, satisfies the caller-selected local tetrahedron shape limits, passed the configured bounded source-shell intersection checks, and satisfies the configured bounded source-surface proximity check. It creates one owned object that downstream solver preparation can consume without separating the mesh, authoritative marker map, policies, and reports that admitted it.
+- stable SceneObject IDs;
+- local-quality policy and observed extrema/cell indices;
+- source-intersection epsilon, budget and executed/skipped work;
+- source-correspondence tolerance, budget and executed work; and
+- per-body source/boundary counts, sample counts, and maximum bidirectional distances.
 
-The regression fixture intentionally demonstrates that an exactly aligned staircase/voxel cavity can satisfy this handoff. Therefore possession of `ValidatedExteriorMesherHandoff` must **not** be interpreted as evidence of body-fitted geometry or global tetrahedral non-overlap.
+The sidecar uses create-new semantics and records `body_fitted_status=not_established` and `engineering_quality_status=not_established`. The separate `aeroforge_mesh_fidelity.tsv` remains authoritative for fidelity classification.
 
-The validated exterior SU2 adapter consumes the `VolumeMesh` and `Su2MarkerMap` directly from this owned handoff. It deliberately does not accept an independent replacement mesh or marker map. The generic generated-case API remains available as a compatibility path, but callers using the validated exterior path can keep the admitted geometry and authoritative marker provenance paired through SU2 bundle rendering.
+## External TetGen additions
 
-## Persisted generic handoff admission provenance
+The external TetGen route adds obligations around the generic handoff rather than weakening it.
 
-`prepare_validated_exterior_su2_case_directory` and its explicit-global-reference variant persist a validated handoff through the ordinary generated-case contract and add one immutable sidecar:
+### Bound external process provenance
 
-`aeroforge_exterior_handoff.tsv`
+`BoundTetgenExternalRun` retains one containment-admitted input, exact `TetgenHoleSeedPolicy`, deterministic `PreparedTetgenPlc`, and the external process/parser result. `validate_tetgen_external_handoff` regenerates the PLC from the retained input/policy before promotion; mismatch fails closed.
 
-The sidecar is format version 2 and records the stable SceneObject IDs plus the exact validation policies and bounded observations that admitted the generic handoff:
+### Positive-volume tetrahedral non-overlap
 
-- quality minimum mean-ratio policy, observed minimum, and the cell index where that minimum occurred;
-- quality maximum edge-length-ratio policy, observed maximum, and the cell index where that maximum occurred;
-- the number of quality-audited tetrahedral cells;
-- source-intersection geometric epsilon, triangle-pair budget, executed pair count, and skipped shared-edge count;
-- source-correspondence distance tolerance, point/triangle budget, and executed comparison count; and
-- for every admitted body: SceneObject ID, source/boundary triangle counts, source/boundary sample counts, maximum source-to-boundary distance, and maximum boundary-to-source distance.
+Before the generic handoff consumes the parsed mesh, `validate_tetrahedral_interior_overlaps` applies the exact caller-selected `TetrahedralOverlapPolicy`.
 
-The body records preserve the deterministic correspondence report order already owned by `ValidatedExteriorMesherHandoff`; they do not recover identity from marker strings or filenames.
+The implementation uses deterministic X-axis sweep-and-prune, Y/Z AABB filtering, and tetrahedral separating-axis tests on remaining candidates. Face/edge/vertex contact is permitted; detected positive-volume interior overlap fails. Broad-phase work is explicitly bounded, so dense pathological input can fail closed instead of consuming unbounded pair work.
 
-The sidecar is created with create-new semantics and `sync_all()`. If that write fails, the just-created case directory is removed and the validated prepare call fails rather than returning a prepared case with missing admission evidence.
+The successful `TetrahedralOverlapReport` is owned by `ValidatedTetgenExteriorHandoff` together with its policy.
 
-This sidecar is evidence only for the implemented bounded generic handoff gates. It explicitly records `body_fitted_status=not_established` and `engineering_quality_status=not_established`. The existing `aeroforge_mesh_fidelity.tsv` remains authoritative for mesh-fidelity classification and still has no body-fitted state for this path.
+### Canonical exterior boundary orientation
 
-## External TetGen volumetric-overlap gate
+`VolumeMesh::audit()` treats boundary triangles as unordered face identities, so raw external `.face` winding is not a reliable normal direction. `orient_exterior_boundary_triangles` finds the unique positive owning tetrahedron for every labeled exterior face and deterministically orients the face normal away from the fluid cell.
 
-The external TetGen path adds one further validation obligation before its parsed volume can reach the generic four-gate handoff.
+For a body wall, this canonical normal points fluid→solid. An audited source shell is consistently oriented outward-from-solid, so an aligned source/body pair should have opposite normals.
 
-`validate_tetgen_external_handoff` first checks that the retained admitted source state and exact hole-seed policy regenerate the retained PLC. It then runs `validate_tetrahedral_interior_overlaps` on the exact parsed TetGen `VolumeMesh` under a caller-selected `TetrahedralOverlapPolicy`.
+### Bounded source/body normal opposition
 
-The overlap gate uses a deterministic X-axis sweep-and-prune broad phase. Only active pairs whose X interiors overlap consume the explicit pair-test budget; Y/Z AABB checks reduce those to candidate pairs. The complete candidate set is collected only if the broad phase remains inside budget, then each candidate is tested with tetrahedral separating axes from both tetrahedra's face normals plus all edge-edge cross products. Face, edge and vertex contact are permitted; detected positive-volume interior overlap fails closed.
+`validate_source_boundary_normal_alignment` is a separate external-TetGen evidence gate with an explicit `SourceBoundaryNormalPolicy`:
 
-`ValidatedTetgenExteriorHandoff` retains both the exact overlap policy and the successful `TetrahedralOverlapReport`, including:
+- `distance_tolerance`;
+- `minimum_opposition_cosine`; and
+- `max_triangle_pair_tests`.
 
-- tetrahedron count;
-- broad-phase pair tests;
-- AABB candidate pairs; and
-- SAT pair tests.
+For every body, all source-triangle centroids and all canonical body-boundary triangle centroids are checked bidirectionally against the nearest triangle on the opposite surface. The gate requires both centroid proximity and anti-parallel normal agreement under the policy. It reserves the complete bidirectional triangle-pair work before comparison and fails closed when the budget is insufficient.
 
-This makes the external-TetGen non-overlap admission evidence inseparable from the solver-bound TetGen handoff. It does not change the generic `ValidatedExteriorMesherHandoff` contract and does not automatically extend the same evidence to another future mesher.
+The report retains, per SceneObject:
+
+- source and boundary triangle counts;
+- maximum source→boundary and boundary→source centroid distances; and
+- minimum source→boundary and boundary→source opposition cosines.
+
+This establishes **bounded centroid-local normal-opposition evidence only**. It does not establish exact triangle identity, sharp-feature preservation, curvature preservation, or CAD-feature preservation.
+
+## Owned TetGen handoff
+
+`ValidatedTetgenExteriorHandoff` retains:
+
+- the generic `ValidatedExteriorMesherHandoff`;
+- exact prepared TetGen PLC and hole-seed policy;
+- source-containment policy/report;
+- tetrahedral-overlap policy/report;
+- source/body-boundary normal policy/report;
+- TetGen stdout/stderr, exit code, and switch contract;
+- parsed input-node, tetrahedron, and boundary-face IDs; and
+- tetrahedron reorientation count.
+
+The normal evidence is therefore inseparable from the exact solver-bound TetGen mesh/marker pair that passed the generic handoff.
 
 ## Persisted external TetGen provenance
 
-The validated external-TetGen prepare path additionally writes the exact deterministic PLC as `aeroforge_tetgen_input.poly` and immutable `aeroforge_tetgen_handoff.tsv` provenance.
+Validated TetGen preparation writes the exact `aeroforge_tetgen_input.poly` and immutable `aeroforge_tetgen_handoff.tsv` **format version 3**.
 
-The TetGen sidecar is format version 2. In addition to hole-seed, source-containment, process, parser and reorientation evidence, it persists the exact overlap policy and successful work report:
+The v3 sidecar includes the prior hole-seed, containment, process/parser and tetrahedral-overlap evidence plus:
 
-- `tetra_overlap_geometric_epsilon`;
-- `tetra_overlap_max_pair_tests`;
-- `tetra_overlap_cells`;
-- `tetra_overlap_broad_phase_pair_tests`;
-- `tetra_overlap_aabb_candidate_pairs`; and
-- `tetra_overlap_sat_pair_tests`.
+- `source_normal_distance_tolerance`;
+- `source_normal_minimum_opposition_cosine`;
+- `source_normal_max_triangle_pair_tests`;
+- `source_normal_triangle_pair_tests`;
+- `source_normal_body_count`; and
+- per-body SceneObject ID, source/boundary triangle counts, maximum centroid distances, and minimum bidirectional opposition cosines.
 
-Raw external stdout/stderr remain bounded in persistence by recording byte counts while the in-memory handoff retains their text. The TetGen sidecar continues to record `body_fitted_status=not_established` and `engineering_quality_status=not_established`.
+Raw external stdout/stderr are not copied into the persisted sidecar; their byte counts are recorded while the in-memory handoff retains their text. Persistence continues to state `body_fitted_status=not_established` and `engineering_quality_status=not_established`.
 
-## Local tetrahedron quality scope
+## Scope of the existing evidence
 
-The mean-ratio metric is normalized so a regular tetrahedron is 1 and sliver-like degeneration approaches 0. The edge ratio is normalized so equal edge lengths give 1 and elongation increases the value. The policy is explicit per caller because acceptable limits depend on the meshing workflow and intended evidence; AeroForge does not currently claim a validated universal engineering threshold.
+The external TetGen handoff now establishes more than the generic handoff: it also owns a bounded positive-volume tetrahedral-overlap report and bounded centroid-local source/body normal-opposition report. These are meaningful geometry-evidence gates, but they do not justify a body-fitted fidelity state by themselves.
 
-The quality gate is local to individual tetrahedra. By itself it does not detect overlap between otherwise locally valid tetrahedra and does not measure wall-normal spacing or boundary-layer suitability. The external TetGen path now supplies a separate bounded volumetric-overlap gate rather than treating local quality as a proxy for non-overlap.
+Neither the generic nor external TetGen handoff currently establishes:
 
-## Source-intersection scope
-
-The source-intersection gate is a bounded precondition on the audited input surfaces. For a single source shell, triangle pairs sharing a complete topological edge are skipped because that adjacency is already required by the watertight two-manifold audit; non-edge-adjacent pairs are checked. For distinct SceneObjects, every source triangle pair is checked within the explicit work budget, and contact/intersection fails closed.
-
-Passing this source gate establishes only the implemented bounded triangle-level source-shell intersection contract. It does **not** by itself establish a positive minimum separation between bodies, volumetric tetrahedron non-overlap, CAD feature quality, curvature preservation, or suitability for a particular CFD discretization. The external TetGen path's separate overlap report addresses only positive-volume tetrahedral overlap under its configured policy.
-
-## Explicit non-claims
-
-The generic validated exterior handoff does not establish:
-
-- exact triangle-to-triangle coincidence;
-- source normal, sharp-feature, or curvature preservation;
-- positive minimum body separation beyond rejecting detected source-shell contact/intersection;
-- tetrahedron overlap freedom beyond the existing `VolumeMesh` audit;
+- exact source triangle ↔ boundary triangle coincidence/identity;
+- general sharp-feature, curvature, or CAD-feature preservation;
+- positive global minimum body separation beyond the implemented source contact/intersection rejection;
 - boundary-layer quality or wall-normal spacing;
-- globally validated skewness, orthogonality, or solver-quality thresholds;
-- body-fitted meshing;
-- engineering-quality CFD;
+- globally validated skewness/orthogonality thresholds for an engineering workflow;
+- body-fitted fidelity classification;
+- engineering CFD accuracy;
 - grid/domain convergence or GCI.
 
-The external TetGen handoff additionally establishes the implemented bounded positive-volume tetrahedral non-overlap contract under its retained epsilon and work budget. It still does **not** establish source-feature preservation, boundary-layer quality, universal engineering mesh thresholds, body-fitted fidelity, aerodynamic accuracy, or convergence.
+`Su2MeshFidelity` therefore still has no body-fitted variant. The staircase path remains `staircase_voxel_derived`; the external TetGen path remains `unclassified_audited_volume` with body-fitted and engineering-quality status not established.
 
-`Su2MeshFidelity` therefore still has no body-fitted variant. The staircase path remains `staircase_voxel_derived` with `body_fitted_status=false`; external TetGen cases remain `unclassified_audited_volume` with `body_fitted_status=not_established` and `engineering_quality_status=not_established`.
+## Remaining higher-fidelity obligations
 
-## Remaining evidence before a higher-fidelity state
-
-A distinct source-surface-driven exterior mesher may return a candidate `VolumeMesh + Su2MarkerMap`, but it must pass the owned generic handoff before using the validated exterior SU2 bundle/prepare path and must supply volumetric non-overlap evidence appropriate to that mesher. The external TetGen path now has one such bounded gate, but that alone is not enough to introduce a body-fitted fidelity state.
-
-Before any body-fitted fidelity state becomes representable, AeroForge still needs feature/normal/curvature preservation evidence appropriate to the mesher, boundary-layer evidence where relevant, pinned SU2 end-to-end reference evidence for the distinct path, and independent grid/domain/model/reference validation before engineering claims.
+Before AeroForge makes a body-fitted state representable, the intended meshing workflow still needs evidence appropriate to that claim, including stronger feature/curvature preservation where relevant, positive-clearance evidence if required, boundary-layer evidence for near-wall-resolution claims, pinned SU2 end-to-end reference cases, and independent grid/domain/model/reference validation before engineering-accuracy claims.
