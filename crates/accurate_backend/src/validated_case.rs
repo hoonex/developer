@@ -161,31 +161,38 @@ fn render_validated_exterior_handoff_provenance(
         .collect::<Vec<_>>()
         .join(",");
 
-    format!(
+    let mut output = format!(
         concat!(
             "key\tvalue\n",
-            "format_version\t1\n",
+            "format_version\t2\n",
             "contract\tvalidated_exterior_handoff\n",
             "scene_object_ids\t{}\n",
             "body_fitted_status\tnot_established\n",
             "engineering_quality_status\tnot_established\n",
             "quality_min_mean_ratio_policy\t{}\n",
             "quality_max_edge_length_ratio_policy\t{}\n",
+            "quality_cells\t{}\n",
             "quality_min_mean_ratio_observed\t{}\n",
+            "quality_min_mean_ratio_cell\t{}\n",
             "quality_max_edge_length_ratio_observed\t{}\n",
+            "quality_max_edge_length_ratio_cell\t{}\n",
             "source_intersection_geometric_epsilon\t{}\n",
             "source_intersection_max_triangle_pair_tests\t{}\n",
             "source_intersection_triangle_pair_tests\t{}\n",
             "source_intersection_skipped_shared_edge_pairs\t{}\n",
             "correspondence_distance_tolerance\t{}\n",
             "correspondence_max_point_triangle_tests\t{}\n",
-            "correspondence_point_triangle_tests\t{}\n"
+            "correspondence_point_triangle_tests\t{}\n",
+            "correspondence_body_count\t{}\n"
         ),
         scene_object_ids,
         handoff.quality_policy.min_mean_ratio,
         handoff.quality_policy.max_edge_length_ratio,
+        handoff.quality.cells,
         handoff.quality.min_mean_ratio,
+        handoff.quality.min_mean_ratio_cell,
         handoff.quality.max_edge_length_ratio,
+        handoff.quality.max_edge_length_ratio_cell,
         handoff.source_intersection_policy.geometric_epsilon,
         handoff.source_intersection_policy.max_triangle_pair_tests,
         handoff.source_intersections.triangle_pair_tests,
@@ -193,7 +200,31 @@ fn render_validated_exterior_handoff_provenance(
         handoff.correspondence_policy.distance_tolerance,
         handoff.correspondence_policy.max_point_triangle_tests,
         handoff.correspondence.point_triangle_tests,
-    )
+        handoff.correspondence.bodies.len(),
+    );
+
+    for (index, body) in handoff.correspondence.bodies.iter().enumerate() {
+        output.push_str(&format!(
+            concat!(
+                "correspondence_body_{index}_scene_object_id\t{}\n",
+                "correspondence_body_{index}_source_triangle_count\t{}\n",
+                "correspondence_body_{index}_boundary_triangle_count\t{}\n",
+                "correspondence_body_{index}_source_sample_count\t{}\n",
+                "correspondence_body_{index}_boundary_sample_count\t{}\n",
+                "correspondence_body_{index}_max_source_to_boundary_distance\t{}\n",
+                "correspondence_body_{index}_max_boundary_to_source_distance\t{}\n"
+            ),
+            body.scene_object_id,
+            body.source_triangle_count,
+            body.boundary_triangle_count,
+            body.source_sample_count,
+            body.boundary_sample_count,
+            body.max_source_to_boundary_distance,
+            body.max_boundary_to_source_distance,
+        ));
+    }
+
+    output
 }
 
 #[cfg(test)]
@@ -211,7 +242,8 @@ mod tests {
     };
     use crate::su2_mesh::Su2MarkerMap;
     use crate::surface_correspondence::{
-        SourceSurfaceCorrespondencePolicy, SourceSurfaceCorrespondenceReport,
+        SourceSurfaceBodyCorrespondence, SourceSurfaceCorrespondencePolicy,
+        SourceSurfaceCorrespondenceReport,
     };
 
     fn temp_root(label: &str) -> std::path::PathBuf {
@@ -245,11 +277,11 @@ mod tests {
                 max_edge_length_ratio: 4.0,
             },
             quality: ExteriorMeshQualityReport {
-                cells: 1,
+                cells: 3,
                 min_mean_ratio: 0.35,
-                min_mean_ratio_cell: 0,
+                min_mean_ratio_cell: 1,
                 max_edge_length_ratio: 2.5,
-                max_edge_length_ratio_cell: 0,
+                max_edge_length_ratio_cell: 2,
             },
             source_intersection_policy: SourceSurfaceIntersectionPolicy {
                 geometric_epsilon: 1.0e-8,
@@ -265,7 +297,26 @@ mod tests {
                 max_point_triangle_tests: 12_000,
             },
             correspondence: SourceSurfaceCorrespondenceReport {
-                bodies: Vec::new(),
+                bodies: vec![
+                    SourceSurfaceBodyCorrespondence {
+                        scene_object_id: 42,
+                        source_triangle_count: 12,
+                        boundary_triangle_count: 18,
+                        source_sample_count: 20,
+                        boundary_sample_count: 26,
+                        max_source_to_boundary_distance: 2.5e-6,
+                        max_boundary_to_source_distance: 3.5e-6,
+                    },
+                    SourceSurfaceBodyCorrespondence {
+                        scene_object_id: 77,
+                        source_triangle_count: 8,
+                        boundary_triangle_count: 14,
+                        source_sample_count: 15,
+                        boundary_sample_count: 21,
+                        max_source_to_boundary_distance: 4.5e-6,
+                        max_boundary_to_source_distance: 5.5e-6,
+                    },
+                ],
                 point_triangle_tests: 480,
             },
         }
@@ -293,15 +344,18 @@ mod tests {
                 .join(EXTERIOR_HANDOFF_PROVENANCE_FILENAME),
         )
         .unwrap();
-        assert!(evidence.contains("format_version\t1"));
+        assert!(evidence.contains("format_version\t2"));
         assert!(evidence.contains("contract\tvalidated_exterior_handoff"));
         assert!(evidence.contains("scene_object_ids\t42,77"));
         assert!(evidence.contains("body_fitted_status\tnot_established"));
         assert!(evidence.contains("engineering_quality_status\tnot_established"));
         assert!(evidence.contains("quality_min_mean_ratio_policy\t0.2"));
         assert!(evidence.contains("quality_max_edge_length_ratio_policy\t4"));
+        assert!(evidence.contains("quality_cells\t3"));
         assert!(evidence.contains("quality_min_mean_ratio_observed\t0.35"));
+        assert!(evidence.contains("quality_min_mean_ratio_cell\t1"));
         assert!(evidence.contains("quality_max_edge_length_ratio_observed\t2.5"));
+        assert!(evidence.contains("quality_max_edge_length_ratio_cell\t2"));
         assert!(evidence.contains("source_intersection_geometric_epsilon\t0.00000001"));
         assert!(evidence.contains("source_intersection_max_triangle_pair_tests\t9000"));
         assert!(evidence.contains("source_intersection_triangle_pair_tests\t1234"));
@@ -309,6 +363,21 @@ mod tests {
         assert!(evidence.contains("correspondence_distance_tolerance\t0.00001"));
         assert!(evidence.contains("correspondence_max_point_triangle_tests\t12000"));
         assert!(evidence.contains("correspondence_point_triangle_tests\t480"));
+        assert!(evidence.contains("correspondence_body_count\t2"));
+        assert!(evidence.contains("correspondence_body_0_scene_object_id\t42"));
+        assert!(evidence.contains("correspondence_body_0_source_triangle_count\t12"));
+        assert!(evidence.contains("correspondence_body_0_boundary_triangle_count\t18"));
+        assert!(evidence.contains("correspondence_body_0_source_sample_count\t20"));
+        assert!(evidence.contains("correspondence_body_0_boundary_sample_count\t26"));
+        assert!(evidence.contains("correspondence_body_0_max_source_to_boundary_distance\t0.0000025"));
+        assert!(evidence.contains("correspondence_body_0_max_boundary_to_source_distance\t0.0000035"));
+        assert!(evidence.contains("correspondence_body_1_scene_object_id\t77"));
+        assert!(evidence.contains("correspondence_body_1_source_triangle_count\t8"));
+        assert!(evidence.contains("correspondence_body_1_boundary_triangle_count\t14"));
+        assert!(evidence.contains("correspondence_body_1_source_sample_count\t15"));
+        assert!(evidence.contains("correspondence_body_1_boundary_sample_count\t21"));
+        assert!(evidence.contains("correspondence_body_1_max_source_to_boundary_distance\t0.0000045"));
+        assert!(evidence.contains("correspondence_body_1_max_boundary_to_source_distance\t0.0000055"));
 
         let fidelity = fs::read_to_string(
             prepared
