@@ -7,8 +7,8 @@ use aeroforge_volume_core::VolumeMesh;
 ///
 /// `geometric_epsilon` is expressed in mesh coordinate units. Intersections whose separating-axis
 /// projection overlap is less than or equal to this tolerance are treated as contact, not as
-/// positive-volume overlap. `max_tetrahedron_pair_tests` bounds the complete deterministic pair
-/// enumeration before any geometric work begins; no sampling or silent truncation is permitted.
+/// positive-volume overlap. `max_tetrahedron_pair_tests` bounds deterministic sweep-and-prune
+/// broad-phase pair tests. No random sampling or silent truncation is permitted.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TetrahedralOverlapPolicy {
     pub geometric_epsilon: f64,
@@ -19,7 +19,7 @@ pub struct TetrahedralOverlapPolicy {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TetrahedralOverlapReport {
     pub cells: usize,
-    pub reserved_pair_tests: usize,
+    pub broad_phase_pair_tests: usize,
     pub aabb_candidate_pairs: usize,
     pub sat_pair_tests: usize,
 }
@@ -38,7 +38,7 @@ pub enum TetrahedralOverlapError {
         index: u32,
     },
     PairBudgetExceeded {
-        required: usize,
+        required_at_least: usize,
         max: usize,
     },
     InteriorOverlap {
@@ -64,9 +64,12 @@ impl Display for TetrahedralOverlapError {
                 f,
                 "tetrahedral overlap input cell {cell} references missing point {index}"
             ),
-            Self::PairBudgetExceeded { required, max } => write!(
+            Self::PairBudgetExceeded {
+                required_at_least,
+                max,
+            } => write!(
                 f,
-                "tetrahedral overlap validation requires {required} cell-pair tests, exceeding configured budget {max}"
+                "tetrahedral overlap broad phase requires at least {required_at_least} cell-pair tests, exceeding configured budget {max}"
             ),
             Self::InteriorOverlap {
                 first_cell,
@@ -81,18 +84,29 @@ impl Display for TetrahedralOverlapError {
 
 impl Error for TetrahedralOverlapError {}
 
+#[derive(Clone, Debug)]
+struct TetrahedronRecord {
+    cell: usize,
+    points: [[f64; 3]; 4],
+    min: [f64; 3],
+    max: [f64; 3],
+}
+
 /// Rejects positive-volume overlap between tetrahedral cells with bounded deterministic work.
 ///
 /// This is intentionally a stronger spatial gate than `VolumeMesh::audit()`. The caller is still
 /// expected to run the canonical mesh audit for positive orientation, manifold face ownership and
-/// complete boundary labeling. This pass adds only geometric non-overlap evidence: every unordered
-/// cell pair is reserved against the explicit budget, an AABB broad phase removes clearly separated
-/// pairs, and candidate pairs are tested with the complete tetrahedron separating-axis set (both
-/// tetrahedra's face normals plus all edge-edge cross products).
+/// complete boundary labeling. This pass adds geometric non-overlap evidence using a deterministic
+/// X-axis sweep-and-prune broad phase. Only cells whose X interiors overlap enter the explicit pair
+/// budget; Y/Z AABB overlap then selects candidates. SAT is deferred until the entire broad phase
+/// has completed inside budget, so budget exhaustion fails closed before any candidate is accepted
+/// or rejected by the narrower geometry test.
 ///
-/// Face, edge and vertex contact are allowed. A pair is rejected only when its projection overlap is
-/// strictly greater than `geometric_epsilon` on every usable separating axis, which establishes
-/// positive-volume convex interior overlap at the configured tolerance.
+/// Candidate pairs are tested with the complete tetrahedron separating-axis set: both tetrahedra's
+/// face normals plus all edge-edge cross products. Face, edge and vertex contact are allowed. A pair
+/// is rejected only when projection overlap is strictly greater than `geometric_epsilon` on every
+/// usable separating axis, establishing positive-volume convex interior overlap at the configured
+/// tolerance.
 pub fn validate_tetrahedral_interior_overlaps(
     mesh: &VolumeMesh,
     policy: TetrahedralOverlapPolicy,
@@ -113,22 +127,9 @@ pub fn validate_tetrahedral_interior_overlaps(
         }
     }
 
-    let reserved_pair_tests = pair_count(mesh.cells.len()).ok_or(
-        TetrahedralOverlapError::PairBudgetExceeded {
-            required: usize::MAX,
-            max: policy.max_tetrahedron_pair_tests,
-        },
-    )?;
-    if reserved_pair_tests > policy.max_tetrahedron_pair_tests {
-        return Err(TetrahedralOverlapError::PairBudgetExceeded {
-            required: reserved_pair_tests,
-            max: policy.max_tetrahedron_pair_tests,
-        });
-    }
-
     let mut tetrahedra = Vec::with_capacity(mesh.cells.len());
     for (cell_index, cell) in mesh.cells.iter().enumerate() {
-        let mut tetrahedron = [[0.0_f64; 3]; 4];
+        let mut points = [[0.0_f64; 3]; 4];
         for (slot, &index) in cell.vertices.iter().enumerate() {
             let Some(&point) = mesh.points.get(index as usize) else {
                 return Err(TetrahedralOverlapError::IndexOutOfBounds {
@@ -136,70 +137,132 @@ pub fn validate_tetrahedral_interior_overlaps(
                     index,
                 });
             };
-            tetrahedron[slot] = point;
+            points[slot] = point;
         }
-        tetrahedra.push(tetrahedron);
+        let (min, max) = tetrahedron_bounds(&points);
+        tetrahedra.push(TetrahedronRecord {
+            cell: cell_index,
+            points,
+            min,
+            max,
+        });
     }
 
-    let mut aabb_candidate_pairs = 0_usize;
-    let mut sat_pair_tests = 0_usize;
-    for first_cell in 0..tetrahedra.len() {
-        for second_cell in (first_cell + 1)..tetrahedra.len() {
-            let first = &tetrahedra[first_cell];
-            let second = &tetrahedra[second_cell];
-            if !aabb_interiors_may_overlap(first, second, policy.geometric_epsilon) {
-                continue;
-            }
-            aabb_candidate_pairs += 1;
-            sat_pair_tests += 1;
-            if tetrahedra_strictly_overlap(first, second, policy.geometric_epsilon) {
-                return Err(TetrahedralOverlapError::InteriorOverlap {
-                    first_cell,
-                    second_cell,
+    let mut sweep_order = (0..tetrahedra.len()).collect::<Vec<_>>();
+    sweep_order.sort_by(|&first, &second| {
+        tetrahedra[first].min[0]
+            .total_cmp(&tetrahedra[second].min[0])
+            .then_with(|| tetrahedra[first].max[0].total_cmp(&tetrahedra[second].max[0]))
+            .then_with(|| tetrahedra[first].cell.cmp(&tetrahedra[second].cell))
+    });
+
+    let mut active = Vec::<usize>::new();
+    let mut broad_phase_pair_tests = 0_usize;
+    let mut candidates = Vec::<(usize, usize)>::new();
+
+    for current_index in sweep_order {
+        let current_min_x = tetrahedra[current_index].min[0];
+        active.retain(|&active_index| {
+            interval_interior_overlap(
+                tetrahedra[active_index].min[0],
+                tetrahedra[active_index].max[0],
+                current_min_x,
+                tetrahedra[current_index].max[0],
+                policy.geometric_epsilon,
+            )
+        });
+
+        for &active_index in &active {
+            broad_phase_pair_tests = broad_phase_pair_tests.checked_add(1).ok_or(
+                TetrahedralOverlapError::PairBudgetExceeded {
+                    required_at_least: usize::MAX,
+                    max: policy.max_tetrahedron_pair_tests,
+                },
+            )?;
+            if broad_phase_pair_tests > policy.max_tetrahedron_pair_tests {
+                return Err(TetrahedralOverlapError::PairBudgetExceeded {
+                    required_at_least: broad_phase_pair_tests,
+                    max: policy.max_tetrahedron_pair_tests,
                 });
             }
+
+            if aabb_interiors_may_overlap_records(
+                &tetrahedra[active_index],
+                &tetrahedra[current_index],
+                policy.geometric_epsilon,
+            ) {
+                candidates.push((active_index, current_index));
+            }
+        }
+        active.push(current_index);
+    }
+
+    let mut sat_pair_tests = 0_usize;
+    for (first_index, second_index) in candidates.iter().copied() {
+        sat_pair_tests += 1;
+        let first = &tetrahedra[first_index];
+        let second = &tetrahedra[second_index];
+        if tetrahedra_strictly_overlap(
+            &first.points,
+            &second.points,
+            policy.geometric_epsilon,
+        ) {
+            let (first_cell, second_cell) = if first.cell < second.cell {
+                (first.cell, second.cell)
+            } else {
+                (second.cell, first.cell)
+            };
+            return Err(TetrahedralOverlapError::InteriorOverlap {
+                first_cell,
+                second_cell,
+            });
         }
     }
 
     Ok(TetrahedralOverlapReport {
         cells: mesh.cells.len(),
-        reserved_pair_tests,
-        aabb_candidate_pairs,
+        broad_phase_pair_tests,
+        aabb_candidate_pairs: candidates.len(),
         sat_pair_tests,
     })
 }
 
-fn pair_count(cells: usize) -> Option<usize> {
-    if cells < 2 {
-        return Some(0);
+fn tetrahedron_bounds(tetrahedron: &[[f64; 3]; 4]) -> ([f64; 3], [f64; 3]) {
+    let mut min = tetrahedron[0];
+    let mut max = tetrahedron[0];
+    for point in &tetrahedron[1..] {
+        for axis in 0..3 {
+            min[axis] = min[axis].min(point[axis]);
+            max[axis] = max[axis].max(point[axis]);
+        }
     }
-    if cells % 2 == 0 {
-        (cells / 2).checked_mul(cells - 1)
-    } else {
-        cells.checked_mul((cells - 1) / 2)
-    }
+    (min, max)
 }
 
-fn aabb_interiors_may_overlap(
-    first: &[[f64; 3]; 4],
-    second: &[[f64; 3]; 4],
+fn aabb_interiors_may_overlap_records(
+    first: &TetrahedronRecord,
+    second: &TetrahedronRecord,
     epsilon: f64,
 ) -> bool {
-    (0..3).all(|axis| {
-        let (first_min, first_max) = coordinate_bounds(first, axis);
-        let (second_min, second_max) = coordinate_bounds(second, axis);
-        first_max.min(second_max) - first_min.max(second_min) > epsilon
+    (1..3).all(|axis| {
+        interval_interior_overlap(
+            first.min[axis],
+            first.max[axis],
+            second.min[axis],
+            second.max[axis],
+            epsilon,
+        )
     })
 }
 
-fn coordinate_bounds(tetrahedron: &[[f64; 3]; 4], axis: usize) -> (f64, f64) {
-    let mut min = tetrahedron[0][axis];
-    let mut max = min;
-    for point in &tetrahedron[1..] {
-        min = min.min(point[axis]);
-        max = max.max(point[axis]);
-    }
-    (min, max)
+fn interval_interior_overlap(
+    first_min: f64,
+    first_max: f64,
+    second_min: f64,
+    second_max: f64,
+    epsilon: f64,
+) -> bool {
+    first_max.min(second_max) - first_min.max(second_min) > epsilon
 }
 
 const TETRAHEDRON_FACES: [[usize; 3]; 4] = [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]];
@@ -414,7 +477,7 @@ mod tests {
         );
 
         let report = validate_tetrahedral_interior_overlaps(&candidate, policy(1)).unwrap();
-        assert_eq!(report.reserved_pair_tests, 1);
+        assert_eq!(report.broad_phase_pair_tests, 1);
         assert_eq!(report.aabb_candidate_pairs, 0);
         assert_eq!(report.sat_pair_tests, 0);
     }
@@ -434,34 +497,59 @@ mod tests {
             vec![[0, 1, 2, 3], [1, 4, 5, 6]],
         );
 
-        assert!(validate_tetrahedral_interior_overlaps(&candidate, policy(1)).is_ok());
+        let report = validate_tetrahedral_interior_overlaps(&candidate, policy(1)).unwrap();
+        assert_eq!(report.broad_phase_pair_tests, 0);
+        assert_eq!(report.sat_pair_tests, 0);
     }
 
     #[test]
-    fn separated_cells_pass_with_no_sat_candidates() {
+    fn many_x_separated_cells_do_not_consume_pair_budget() {
+        let mut points = Vec::new();
+        let mut cells = Vec::new();
+        for cell in 0..64_u32 {
+            let x = f64::from(cell) * 2.0;
+            let base = u32::try_from(points.len()).unwrap();
+            points.extend([
+                [x, 0.0, 0.0],
+                [x + 1.0, 0.0, 0.0],
+                [x, 1.0, 0.0],
+                [x, 0.0, 1.0],
+            ]);
+            cells.push([base, base + 1, base + 2, base + 3]);
+        }
+        let candidate = mesh(points, cells);
+
+        let report = validate_tetrahedral_interior_overlaps(&candidate, policy(1)).unwrap();
+        assert_eq!(report.cells, 64);
+        assert_eq!(report.broad_phase_pair_tests, 0);
+        assert_eq!(report.aabb_candidate_pairs, 0);
+        assert_eq!(report.sat_pair_tests, 0);
+    }
+
+    #[test]
+    fn x_overlap_y_separation_consumes_broad_phase_not_sat_budget() {
         let candidate = mesh(
             vec![
                 [0.0, 0.0, 0.0],
                 [1.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
-                [3.0, 0.0, 0.0],
-                [4.0, 0.0, 0.0],
-                [3.0, 1.0, 0.0],
-                [3.0, 0.0, 1.0],
+                [0.0, 3.0, 0.0],
+                [1.0, 3.0, 0.0],
+                [0.0, 4.0, 0.0],
+                [0.0, 3.0, 1.0],
             ],
             vec![[0, 1, 2, 3], [4, 5, 6, 7]],
         );
 
         let report = validate_tetrahedral_interior_overlaps(&candidate, policy(1)).unwrap();
-        assert_eq!(report.cells, 2);
-        assert_eq!(report.reserved_pair_tests, 1);
+        assert_eq!(report.broad_phase_pair_tests, 1);
         assert_eq!(report.aabb_candidate_pairs, 0);
         assert_eq!(report.sat_pair_tests, 0);
     }
 
     #[test]
-    fn pair_budget_fails_closed_before_geometry_tests() {
+    fn dense_sweep_budget_fails_closed_before_sat() {
         let candidate = mesh(
             vec![
                 [0.0, 0.0, 0.0],
@@ -475,7 +563,7 @@ mod tests {
         assert_eq!(
             validate_tetrahedral_interior_overlaps(&candidate, policy(2)),
             Err(TetrahedralOverlapError::PairBudgetExceeded {
-                required: 3,
+                required_at_least: 3,
                 max: 2,
             })
         );
