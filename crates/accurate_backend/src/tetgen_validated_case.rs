@@ -254,6 +254,7 @@ pub(crate) fn render_tetgen_handoff_provenance(
             body.max_boundary_to_source_centroid_distance,
             body.min_source_to_boundary_opposition_cosine,
             body.min_boundary_to_source_opposition_cosine,
+            index = index,
         ));
     }
     output
