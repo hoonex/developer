@@ -29,10 +29,12 @@ pub(crate) fn snapshot_project_state(state: &ProjectState) -> ProjectState {
 /// source-body clearance, external process parsing, bounded volumetric tetrahedral-overlap
 /// validation, local tetrahedron sanity quality, bounded source correspondence, bounded
 /// source/body-boundary normal-opposition validation, bounded sharp-crease feature-edge
-/// correspondence, and bounded triangulated discrete normal-variation correspondence. The returned
-/// `AccuratePreparedCase` still records body-fitted and engineering-quality status as not established
-/// and forces TetGen-specific provenance persistence later. Sharp-crease and discrete normal-
-/// variation evidence do not establish continuous-curvature or CAD-feature preservation.
+/// correspondence, bounded triangulated discrete normal-variation correspondence, and bounded
+/// body-wall first-cell geometric-height validation. The returned `AccuratePreparedCase` still
+/// records body-fitted and engineering-quality status as not established and forces TetGen-specific
+/// provenance persistence later. Sharp-crease, discrete normal-variation, and first-cell-height
+/// evidence do not establish continuous-curvature/CAD-feature preservation, a boundary-layer mesh,
+/// y+, or engineering near-wall adequacy.
 pub(crate) fn prepare_tetgen_from_state(
     state: &ProjectState,
     settings: &AccurateSettings,
@@ -143,7 +145,7 @@ mod tests {
         assert!(exterior.contains("engineering_quality_status\tnot_established"));
 
         let tetgen = fs::read_to_string(case_dir.join("aeroforge_tetgen_handoff.tsv")).unwrap();
-        assert!(tetgen.contains("format_version\t6"));
+        assert!(tetgen.contains("format_version\t7"));
         assert!(tetgen.contains("contract\tvalidated_external_tetgen_handoff"));
         assert!(tetgen.contains("body_fitted_status\tnot_established"));
         assert!(tetgen.contains("engineering_quality_status\tnot_established"));
@@ -192,6 +194,16 @@ mod tests {
         assert!(tetgen.contains("source_normal_variation_body_0_source_sub_sharp_variation_edge_count\t"));
         assert!(tetgen.contains("source_normal_variation_body_0_variation_min_source_to_boundary_direction_alignment_cosine\t"));
         assert!(tetgen.contains("source_normal_variation_body_0_sharp_max_source_to_boundary_dihedral_angle_difference_radians\t"));
+        assert!(tetgen.contains("body_wall_first_cell_minimum_height\t0.000000000001"));
+        assert!(tetgen.contains("body_wall_first_cell_maximum_height\t1000000"));
+        assert!(tetgen.contains("body_wall_first_cell_max_boundary_faces\t20000000"));
+        assert!(tetgen.contains("body_wall_first_cell_boundary_face_count\t"));
+        assert!(tetgen.contains("body_wall_first_cell_body_count\t1"));
+        assert!(tetgen.contains("body_wall_first_cell_body_0_scene_object_id\t1"));
+        assert!(tetgen.contains("body_wall_first_cell_body_0_boundary_face_count\t"));
+        assert!(tetgen.contains("body_wall_first_cell_body_0_minimum_height\t"));
+        assert!(tetgen.contains("body_wall_first_cell_body_0_maximum_height\t"));
+        assert!(tetgen.contains("body_wall_first_cell_body_0_mean_height\t"));
         assert!(case_dir.join("aeroforge_tetgen_input.poly").is_file());
 
         let fidelity = fs::read_to_string(case_dir.join("aeroforge_mesh_fidelity.tsv")).unwrap();

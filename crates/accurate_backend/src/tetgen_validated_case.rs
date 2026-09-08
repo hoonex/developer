@@ -57,14 +57,13 @@ impl From<PrepareValidatedExteriorCaseError> for PrepareTetgenValidatedExteriorC
 /// In addition to the generic validated-exterior sidecar, this path persists the exact deterministic
 /// `.poly` supplied to TetGen plus a bounded metadata manifest covering the explicit hole-seed,
 /// source inter-body clearance, containment, tetrahedral-overlap, source/body-boundary normal,
-/// sharp-crease feature-edge, and triangulated discrete normal-variation policies/reports, process
-/// exit/switch contract, parser counts and tetrahedron reorientation count. Raw stdout/stderr are
-/// intentionally not persisted because external tools can emit unbounded text; their byte counts
-/// are recorded while the in-memory handoff retains the content.
+/// sharp-crease feature-edge, triangulated discrete normal-variation, and body-wall first-cell
+/// height policies/reports, process exit/switch contract, parser counts and tetrahedron
+/// reorientation count. Raw stdout/stderr are intentionally not persisted because external tools
+/// can emit unbounded text; their byte counts are recorded while the in-memory handoff retains the
+/// content.
 ///
-/// The in-memory handoff now also owns bounded body-wall first-cell-height policy/report evidence.
-/// That evidence is intentionally not persisted by format v6; provenance versioning for it is a
-/// separate change. The manifest keeps `body_fitted_status=not_established` and
+/// The manifest keeps `body_fitted_status=not_established` and
 /// `engineering_quality_status=not_established`. Passing the current gates must not silently promote
 /// either claim. Sharp-crease, discrete normal-variation, and first-cell-height evidence do not
 /// establish continuous curvature, CAD-feature preservation, a boundary-layer mesh, y+, or
@@ -155,7 +154,7 @@ pub(crate) fn render_tetgen_handoff_provenance(
     let mut output = format!(
         concat!(
             "key\tvalue\n",
-            "format_version\t6\n",
+            "format_version\t7\n",
             "contract\tvalidated_external_tetgen_handoff\n",
             "source_scene_object_ids\t{}\n",
             "body_fitted_status\tnot_established\n",
@@ -211,6 +210,11 @@ pub(crate) fn render_tetgen_handoff_provenance(
             "source_normal_variation_sharp_edge_pair_tests\t{}\n",
             "source_normal_variation_total_edge_pair_tests\t{}\n",
             "source_normal_variation_body_count\t{}\n",
+            "body_wall_first_cell_minimum_height\t{}\n",
+            "body_wall_first_cell_maximum_height\t{}\n",
+            "body_wall_first_cell_max_boundary_faces\t{}\n",
+            "body_wall_first_cell_boundary_face_count\t{}\n",
+            "body_wall_first_cell_body_count\t{}\n",
             "parsed_input_node_id_count\t{}\n",
             "parsed_tetrahedron_id_count\t{}\n",
             "parsed_boundary_face_id_count\t{}\n",
@@ -272,6 +276,11 @@ pub(crate) fn render_tetgen_handoff_provenance(
         handoff.normal_variation.sharp.edge_pair_tests,
         handoff.normal_variation.total_edge_pair_tests,
         handoff.normal_variation.bodies.len(),
+        handoff.wall_height_policy.minimum_height,
+        handoff.wall_height_policy.maximum_height,
+        handoff.wall_height_policy.max_body_boundary_faces,
+        handoff.wall_heights.boundary_face_count,
+        handoff.wall_heights.bodies.len(),
         handoff.input_node_ids.len(),
         handoff.tetrahedron_ids.len(),
         handoff.boundary_face_ids.len(),
@@ -396,6 +405,23 @@ pub(crate) fn render_tetgen_handoff_provenance(
             sharp.min_boundary_to_source_direction_alignment_cosine,
             sharp.max_source_to_boundary_dihedral_angle_difference_radians,
             sharp.max_boundary_to_source_dihedral_angle_difference_radians,
+            index = index,
+        ));
+    }
+    for (index, body) in handoff.wall_heights.bodies.iter().enumerate() {
+        output.push_str(&format!(
+            concat!(
+                "body_wall_first_cell_body_{index}_scene_object_id\t{}\n",
+                "body_wall_first_cell_body_{index}_boundary_face_count\t{}\n",
+                "body_wall_first_cell_body_{index}_minimum_height\t{}\n",
+                "body_wall_first_cell_body_{index}_maximum_height\t{}\n",
+                "body_wall_first_cell_body_{index}_mean_height\t{}\n"
+            ),
+            body.scene_object_id,
+            body.boundary_face_count,
+            body.minimum_height,
+            body.maximum_height,
+            body.mean_height,
             index = index,
         ));
     }
@@ -682,10 +708,10 @@ mod tests {
     }
 
     #[test]
-    fn tetgen_manifest_retains_explicit_policy_and_non_claims() {
+    fn tetgen_manifest_retains_explicit_policy_and_nonclaims() {
         let handoff = synthetic_tetgen_handoff();
         let text = render_tetgen_handoff_provenance(&handoff);
-        assert!(text.contains("format_version\t6"));
+        assert!(text.contains("format_version\t7"));
         assert!(text.contains("contract\tvalidated_external_tetgen_handoff"));
         assert!(text.contains("body_fitted_status\tnot_established"));
         assert!(text.contains("engineering_quality_status\tnot_established"));
@@ -736,9 +762,18 @@ mod tests {
         assert!(text.contains("source_normal_variation_body_0_source_sub_sharp_variation_edge_count\t0"));
         assert!(text.contains("source_normal_variation_body_0_variation_min_source_to_boundary_direction_alignment_cosine\t1"));
         assert!(text.contains("source_normal_variation_body_0_sharp_max_source_to_boundary_dihedral_angle_difference_radians\t0"));
+        assert!(text.contains("body_wall_first_cell_minimum_height\t0.000001"));
+        assert!(text.contains("body_wall_first_cell_maximum_height\t10"));
+        assert!(text.contains("body_wall_first_cell_max_boundary_faces\t1000"));
+        assert!(text.contains("body_wall_first_cell_boundary_face_count\t4"));
+        assert!(text.contains("body_wall_first_cell_body_count\t1"));
+        assert!(text.contains("body_wall_first_cell_body_0_scene_object_id\t42"));
+        assert!(text.contains("body_wall_first_cell_body_0_boundary_face_count\t4"));
+        assert!(text.contains("body_wall_first_cell_body_0_minimum_height\t0.25"));
+        assert!(text.contains("body_wall_first_cell_body_0_maximum_height\t0.75"));
+        assert!(text.contains("body_wall_first_cell_body_0_mean_height\t0.5"));
         assert!(text.contains("hole_seed_0_scene_object_id\t42"));
         assert!(text.contains("reoriented_tetrahedra\t1"));
-        assert!(!text.contains("body_wall_first_cell_"));
     }
 
     #[test]
@@ -788,6 +823,7 @@ mod tests {
                 .join(TETGEN_HANDOFF_PROVENANCE_FILENAME),
         )
         .unwrap();
+        assert!(manifest.contains("format_version\t7"));
         assert!(manifest.contains("source_scene_object_ids\t42"));
         assert!(manifest.contains("tetgen_exit_code\t0"));
         assert!(manifest.contains("source_clearance_minimum_clearance\t0.000001"));
@@ -802,7 +838,16 @@ mod tests {
         assert!(manifest.contains("source_normal_variation_total_edge_pair_tests\t144"));
         assert!(manifest.contains("source_normal_variation_body_0_scene_object_id\t42"));
         assert!(manifest.contains("source_normal_variation_body_0_source_sub_sharp_variation_edge_count\t0"));
-        assert!(!manifest.contains("body_wall_first_cell_"));
+        assert!(manifest.contains("body_wall_first_cell_minimum_height\t0.000001"));
+        assert!(manifest.contains("body_wall_first_cell_maximum_height\t10"));
+        assert!(manifest.contains("body_wall_first_cell_max_boundary_faces\t1000"));
+        assert!(manifest.contains("body_wall_first_cell_boundary_face_count\t4"));
+        assert!(manifest.contains("body_wall_first_cell_body_count\t1"));
+        assert!(manifest.contains("body_wall_first_cell_body_0_scene_object_id\t42"));
+        assert!(manifest.contains("body_wall_first_cell_body_0_boundary_face_count\t4"));
+        assert!(manifest.contains("body_wall_first_cell_body_0_minimum_height\t0.25"));
+        assert!(manifest.contains("body_wall_first_cell_body_0_maximum_height\t0.75"));
+        assert!(manifest.contains("body_wall_first_cell_body_0_mean_height\t0.5"));
 
         let second = persist_tetgen_handoff_files(result.clone(), &handoff).unwrap_err();
         assert!(matches!(second, PrepareTetgenValidatedExteriorCaseError::Provenance(_)));
