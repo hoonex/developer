@@ -43,7 +43,7 @@ jobs:
       - name: Install external TetGen test dependency
         run: |
           sudo apt-get update
-          sudo apt-get install -y tetgen libasound2-dev
+          sudo apt-get install -y tetgen libasound2-dev libudev-dev
           command -v tetgen
       - name: Cache TetGen smoke Cargo
         uses: actions/cache@v4
