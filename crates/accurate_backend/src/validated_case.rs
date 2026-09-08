@@ -206,14 +206,15 @@ fn render_validated_exterior_handoff_provenance(
     for (index, body) in handoff.correspondence.bodies.iter().enumerate() {
         output.push_str(&format!(
             concat!(
-                "correspondence_body_{index}_scene_object_id\t{}\n",
-                "correspondence_body_{index}_source_triangle_count\t{}\n",
-                "correspondence_body_{index}_boundary_triangle_count\t{}\n",
-                "correspondence_body_{index}_source_sample_count\t{}\n",
-                "correspondence_body_{index}_boundary_sample_count\t{}\n",
-                "correspondence_body_{index}_max_source_to_boundary_distance\t{}\n",
-                "correspondence_body_{index}_max_boundary_to_source_distance\t{}\n"
+                "correspondence_body_{0}_scene_object_id\t{1}\n",
+                "correspondence_body_{0}_source_triangle_count\t{2}\n",
+                "correspondence_body_{0}_boundary_triangle_count\t{3}\n",
+                "correspondence_body_{0}_source_sample_count\t{4}\n",
+                "correspondence_body_{0}_boundary_sample_count\t{5}\n",
+                "correspondence_body_{0}_max_source_to_boundary_distance\t{6}\n",
+                "correspondence_body_{0}_max_boundary_to_source_distance\t{7}\n"
             ),
+            index,
             body.scene_object_id,
             body.source_triangle_count,
             body.boundary_triangle_count,
