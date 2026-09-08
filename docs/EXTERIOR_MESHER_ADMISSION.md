@@ -1,6 +1,6 @@
 # Exterior mesher source-shell admission
 
-A future source-surface-driven exterior mesher must not consume merely owned geometry. AeroForge now separates three pre-mesher input states:
+A future source-surface-driven exterior mesher must not consume merely owned geometry. AeroForge now separates four pre-mesher input states:
 
 ```text
 ValidatedExteriorMesherInput
@@ -8,6 +8,8 @@ ValidatedExteriorMesherInput
 → IntersectionValidatedExteriorMesherInput
 → validate_exterior_mesher_source_containment(...)
 → ContainmentValidatedExteriorMesherInput
+→ validate_exterior_mesher_source_clearance(...)
+→ ClearanceValidatedExteriorMesherInput
 ```
 
 The first state owns the finite six-face outer domain, audited source bodies, stable SceneObject identity, strict source-AABB containment, and deterministic domain/body marker provenance.
@@ -18,21 +20,32 @@ The second state stores the exact `SourceSurfaceIntersectionPolicy` and resultin
 
 Intersection-free shells can still be topologically invalid for a distinct exterior-fluid boundary set when one closed solid is wholly nested inside another. The containment gate therefore checks one representative boundary vertex in both directions for each source-body pair, using an explicit geometric epsilon and a worst-case point/triangle work reservation that is rejected before winding evaluation if it exceeds policy. Because the input shells are connected, closed, and already proven non-intersecting, a change from inside to outside along a shell would require an intersection; the bidirectional representative-point test is sufficient for complete nesting under those preconditions. Near-contact within the configured containment epsilon also fails closed.
 
-The third state, `ContainmentValidatedExteriorMesherInput`, owns the intersection-admitted input plus the exact containment policy/report and again exposes only shared accessors. It still does **not** establish a positive minimum body-to-body clearance, constrained tetrahedralization, source-triangle preservation, body-fittedness, boundary-layer quality, or CFD accuracy.
+The third state, `ContainmentValidatedExteriorMesherInput`, owns the intersection-admitted input plus the exact containment policy/report. It is the required input to the separate positive-clearance gate rather than an executable TetGen state.
 
-The intended distinct path is therefore:
+`validate_exterior_mesher_source_clearance` checks every triangle pair for every distinct SceneObject pair and retains the minimum Euclidean triangle-to-triangle surface distance. The distance calculation includes vertex-to-triangle and edge-to-edge closest approaches, so skew edge interiors are not omitted. The complete inter-body triangle-pair work is reserved before evaluation; overflow, zero budget, or policy exhaustion fails closed rather than sampling or truncating the evidence.
+
+The clearance policy requires a finite strictly positive `minimum_clearance` and an explicit `max_triangle_pair_tests`. Passing establishes only that the admitted source shells satisfy that caller-selected numerical clearance floor. It does **not** establish a universal engineering separation threshold. A single-body source set has no distinct body pairs, so its successful report contains zero pair tests and zero pair observations rather than inventing a distance.
+
+The fourth state, `ClearanceValidatedExteriorMesherInput`, privately owns the containment-admitted input together with the exact clearance policy/report. The external TetGen runner requires this promoted type, so a containment-only caller cannot bypass the positive-clearance gate and later substitute clearance evidence.
+
+The implemented external path is therefore:
 
 ```text
-raw imported surface
+raw imported/analytic surface
 → deterministic repair/audit
 → ValidatedExteriorMesherInput
 → revalidated + sealed IntersectionValidatedExteriorMesherInput
 → nested-solid rejection
 → ContainmentValidatedExteriorMesherInput
-→ [source-surface-driven exterior mesher: not implemented yet]
+→ bounded positive inter-body clearance
+→ ClearanceValidatedExteriorMesherInput
+→ deterministic TetGen PLC + external TetGen process
 → candidate VolumeMesh + authoritative marker map
 → ValidatedExteriorMesherHandoff
+→ ValidatedTetgenExteriorHandoff
 → validated SU2 bundle / persisted case
 ```
 
-The candidate output still must pass declared exterior provenance, local tetrahedron quality, source intersection revalidation, and bounded bidirectional source correspondence in `validate_candidate_exterior_mesher_handoff`. Revalidating source intersections at handoff is deliberate defense in depth against stale or substituted geometry between mesher admission and output validation.
+The candidate output still must pass declared exterior provenance, local tetrahedron quality, source intersection revalidation, bounded bidirectional source correspondence, TetGen-specific positive-volume tetrahedral non-overlap, and bounded bidirectional source/body-boundary normal opposition. Revalidating source intersections at handoff is deliberate defense in depth against stale or substituted geometry between mesher admission and output validation.
+
+Positive source-body clearance is necessary geometry evidence for distinct bodies, but it does not establish constrained triangle identity, general feature/curvature preservation, body-fitted fidelity, boundary-layer quality, universal engineering mesh quality, or CFD accuracy.

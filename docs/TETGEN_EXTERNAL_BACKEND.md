@@ -13,18 +13,23 @@ TetGen is not bundled, linked, vendored, downloaded, or redistributed by AeroFor
 
 ## Source admission before PLC generation
 
-The deterministic PLC builder accepts only the promoted source state:
+The deterministic PLC/external-run path accepts only the promoted source state:
 
 ```text
 AuditedImportedSurfaceBody
 → ValidatedExteriorMesherInput
 → IntersectionValidatedExteriorMesherInput
 → ContainmentValidatedExteriorMesherInput
+→ ClearanceValidatedExteriorMesherInput
 → prepare_tetgen_plc(...)
 → PreparedTetgenPlc
 ```
 
-That chain locks the domain, authoritative marker/source provenance, source audits, bounded self/inter-body source-shell intersection checks, nested-solid rejection, and containment evidence before external meshing. Passing those gates is not a body-fitted or engineering-quality certificate.
+That chain locks the domain, authoritative marker/source provenance, source audits, bounded self/inter-body source-shell intersection checks, nested-solid rejection, containment evidence, and bounded positive inter-body source-surface clearance before external meshing. `run_tetgen_for_handoff` requires the clearance-promoted state, so a containment-only caller cannot bypass the clearance gate and later attach unrelated evidence.
+
+The clearance gate evaluates every source-triangle pair across every distinct SceneObject pair and retains the minimum Euclidean triangle-to-triangle surface distance, including vertex-to-triangle and edge-to-edge closest approaches. Its positive clearance floor and complete triangle-pair work budget are explicit caller-selected policy values; overflow or exhaustion fails closed. This is a numerical contract, not a universal engineering separation threshold. A one-body scene has no inter-body pairs and therefore records zero pair observations/tests.
+
+Passing these gates is not a body-fitted or engineering-quality certificate.
 
 ## Deterministic `.poly` contract
 
@@ -68,7 +73,7 @@ Raw `.face` winding is not treated as normal evidence. `orient_exterior_boundary
 
 ## Solver-bound validation
 
-A parsed TetGen mesh is not solver-bound merely because TetGen exited successfully. `validate_tetgen_external_handoff` retains the admitted source state and prepared PLC, verifies they remain internally consistent, and requires:
+A parsed TetGen mesh is not solver-bound merely because TetGen exited successfully. `BoundTetgenExternalRun` owns the exact clearance-promoted source state, prepared PLC, hole-seed policy, and external process result. `validate_tetgen_external_handoff` verifies that retained state can regenerate the exact PLC and requires:
 
 1. bounded positive-volume tetrahedral interior non-overlap using deterministic sweep-and-prune plus tetrahedral SAT;
 2. the generic exterior handoff: declared exterior provenance, caller-selected local tetrahedron quality, bounded source-shell intersection evidence, and bounded bidirectional source-surface proximity; and
@@ -76,28 +81,36 @@ A parsed TetGen mesh is not solver-bound merely because TetGen exited successful
 
 The normal gate compares every source and body-boundary triangle centroid against the nearest triangle on the opposite surface under explicit distance tolerance, minimum opposition cosine, and triangle-pair work budget. Source normals are outward-from-solid; canonical body-boundary normals are outward-from-fluid (fluid→solid), so a conforming wall is expected to be anti-parallel. Raw external face order cannot make this gate pass or fail by itself.
 
-`ValidatedTetgenExteriorHandoff` owns the exact policies and successful reports together with the generic handoff, prepared PLC, process evidence, parser IDs, and tetrahedron reorientation count.
+`ValidatedTetgenExteriorHandoff` owns the exact source-clearance, containment, hole-seed, tetrahedral-overlap, normal-alignment and generic handoff evidence together with the prepared PLC, process evidence, parser IDs, and tetrahedron reorientation count.
 
 ## Persistence
 
 Validated external TetGen cases persist:
 
 - `aeroforge_tetgen_input.poly` — the exact deterministic PLC used for the external run; and
-- `aeroforge_tetgen_handoff.tsv` format version 3.
+- `aeroforge_tetgen_handoff.tsv` format version 4.
 
-The v3 sidecar retains hole-seed and source-containment evidence, process/parser metadata, bounded tetrahedral-overlap policy/report, and the bounded normal-opposition policy/report. Normal evidence includes the global distance/cosine/work policy, executed pair count, body count, and per-body SceneObject ID, source/boundary triangle counts, maximum centroid distances, and minimum bidirectional opposition cosines.
+The v4 sidecar retains the previous hole-seed, source-containment, process/parser, bounded tetrahedral-overlap, and bounded normal-opposition evidence and adds the owned source-clearance evidence:
+
+- `source_clearance_minimum_clearance`;
+- `source_clearance_max_triangle_pair_tests`;
+- `source_clearance_triangle_pair_tests`;
+- `source_clearance_body_pair_count`; and
+- per body pair: stable SceneObject IDs, source triangle counts, and observed minimum surface clearance.
+
+Normal evidence continues to include the global distance/cosine/work policy, executed pair count, body count, and per-body SceneObject ID, source/boundary triangle counts, maximum centroid distances, and minimum bidirectional opposition cosines.
 
 Persistence uses create-new semantics. Failure to write the TetGen provenance removes the just-created case directory rather than returning a partially provenanced prepared case.
 
 ## Current evidence and non-claims
 
-Routine CI exercises a real system-installed TetGen executable through both the backend handoff and desktop prepare/persistence path. The current evidence establishes the implemented source admission, external invocation/parsing, volumetric overlap, generic handoff, canonical boundary orientation, and bounded centroid-local normal-opposition contracts.
+Routine CI exercises a real system-installed TetGen executable through both the backend handoff and desktop prepare/persistence path. The current evidence establishes the implemented source admission, bounded positive inter-body clearance, external invocation/parsing, volumetric overlap, generic handoff, canonical boundary orientation, and bounded centroid-local normal-opposition contracts.
 
 It does **not** establish:
 
 - exact source-triangle ↔ boundary-triangle identity or coincidence;
 - general sharp-feature, curvature, or CAD-feature preservation;
-- a universal minimum body clearance;
+- a universal engineering minimum body separation beyond the explicit caller-selected numerical clearance policy;
 - boundary-layer or wall-normal spacing quality;
 - universal engineering mesh-quality thresholds;
 - body-fitted fidelity as an AeroForge classification;

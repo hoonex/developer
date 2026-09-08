@@ -33,9 +33,15 @@ The sidecar uses create-new semantics and records `body_fitted_status=not_establ
 
 The external TetGen route adds obligations around the generic handoff rather than weakening it.
 
-### Bound external process provenance
+### Clearance-promoted source admission and bound process provenance
 
-`BoundTetgenExternalRun` retains one containment-admitted input, exact `TetgenHoleSeedPolicy`, deterministic `PreparedTetgenPlc`, and the external process/parser result. `validate_tetgen_external_handoff` regenerates the PLC from the retained input/policy before promotion; mismatch fails closed.
+Before TetGen process execution, source geometry must progress through intersection and containment admission and then through `validate_exterior_mesher_source_clearance` to `ClearanceValidatedExteriorMesherInput`.
+
+The positive-clearance gate checks every triangle pair across every distinct source-body pair and retains the minimum Euclidean triangle-to-triangle distance, including vertex-to-triangle and edge-to-edge closest approaches. It requires a finite positive caller-selected `minimum_clearance` and reserves the complete inter-body triangle-pair work against `max_triangle_pair_tests` before evaluation. Budget overflow/exhaustion fails closed. For a single-body scene there are no inter-body pairs, so zero pair observations/tests are retained.
+
+This establishes bounded numerical source-body separation under the selected policy; it does not establish a universal engineering clearance threshold.
+
+`BoundTetgenExternalRun` retains one clearance-admitted input, exact `TetgenHoleSeedPolicy`, deterministic `PreparedTetgenPlc`, and the external process/parser result. `validate_tetgen_external_handoff` regenerates the PLC from the retained input/policy before promotion; mismatch fails closed. Because the runner accepts only the clearance-promoted type, containment-only state cannot bypass this admission evidence.
 
 ### Positive-volume tetrahedral non-overlap
 
@@ -76,19 +82,28 @@ This establishes **bounded centroid-local normal-opposition evidence only**. It 
 - the generic `ValidatedExteriorMesherHandoff`;
 - exact prepared TetGen PLC and hole-seed policy;
 - source-containment policy/report;
+- source inter-body clearance policy/report;
 - tetrahedral-overlap policy/report;
 - source/body-boundary normal policy/report;
 - TetGen stdout/stderr, exit code, and switch contract;
 - parsed input-node, tetrahedron, and boundary-face IDs; and
 - tetrahedron reorientation count.
 
-The normal evidence is therefore inseparable from the exact solver-bound TetGen mesh/marker pair that passed the generic handoff.
+The clearance and normal evidence are therefore inseparable from the exact source state and solver-bound TetGen mesh/marker pair that passed the complete path.
 
 ## Persisted external TetGen provenance
 
-Validated TetGen preparation writes the exact `aeroforge_tetgen_input.poly` and immutable `aeroforge_tetgen_handoff.tsv` **format version 3**.
+Validated TetGen preparation writes the exact `aeroforge_tetgen_input.poly` and immutable `aeroforge_tetgen_handoff.tsv` **format version 4**.
 
-The v3 sidecar includes the prior hole-seed, containment, process/parser and tetrahedral-overlap evidence plus:
+The v4 sidecar includes the prior hole-seed, containment, process/parser, tetrahedral-overlap and source-normal evidence plus:
+
+- `source_clearance_minimum_clearance`;
+- `source_clearance_max_triangle_pair_tests`;
+- `source_clearance_triangle_pair_tests`;
+- `source_clearance_body_pair_count`; and
+- per body pair: stable first/second SceneObject IDs, source triangle counts, and observed minimum clearance.
+
+Normal evidence continues to include:
 
 - `source_normal_distance_tolerance`;
 - `source_normal_minimum_opposition_cosine`;
@@ -101,13 +116,13 @@ Raw external stdout/stderr are not copied into the persisted sidecar; their byte
 
 ## Scope of the existing evidence
 
-The external TetGen handoff now establishes more than the generic handoff: it also owns a bounded positive-volume tetrahedral-overlap report and bounded centroid-local source/body normal-opposition report. These are meaningful geometry-evidence gates, but they do not justify a body-fitted fidelity state by themselves.
+The external TetGen handoff now establishes more than the generic handoff: it also owns bounded positive inter-body source clearance, bounded positive-volume tetrahedral non-overlap, and bounded centroid-local source/body normal-opposition reports. These are meaningful geometry-evidence gates, but they do not justify a body-fitted fidelity state by themselves.
 
 Neither the generic nor external TetGen handoff currently establishes:
 
 - exact source triangle ↔ boundary triangle coincidence/identity;
 - general sharp-feature, curvature, or CAD-feature preservation;
-- positive global minimum body separation beyond the implemented source contact/intersection rejection;
+- a universal engineering minimum body separation beyond the explicit caller-selected numerical clearance floor;
 - boundary-layer quality or wall-normal spacing;
 - globally validated skewness/orthogonality thresholds for an engineering workflow;
 - body-fitted fidelity classification;
@@ -118,4 +133,4 @@ Neither the generic nor external TetGen handoff currently establishes:
 
 ## Remaining higher-fidelity obligations
 
-Before AeroForge makes a body-fitted state representable, the intended meshing workflow still needs evidence appropriate to that claim, including stronger feature/curvature preservation where relevant, positive-clearance evidence if required, boundary-layer evidence for near-wall-resolution claims, pinned SU2 end-to-end reference cases, and independent grid/domain/model/reference validation before engineering-accuracy claims.
+Before AeroForge makes a body-fitted state representable, the intended meshing workflow still needs evidence appropriate to that claim, including stronger exact/source-feature or curvature preservation where relevant, boundary-layer evidence for near-wall-resolution claims, pinned SU2 end-to-end reference cases, and independent grid/domain/model/reference validation before engineering-accuracy claims.
