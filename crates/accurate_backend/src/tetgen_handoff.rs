@@ -11,6 +11,9 @@ use crate::source_containment::{
     ContainmentValidatedExteriorMesherInput, SourceContainmentPolicy, SourceContainmentReport,
 };
 use crate::surface_correspondence::SourceSurfaceCorrespondencePolicy;
+use crate::tetra_overlap::{
+    validate_tetrahedral_interior_overlaps, TetrahedralOverlapError, TetrahedralOverlapPolicy,
+};
 use crate::tetgen_output::ParsedTetgenVolumeMesh;
 use crate::tetgen_plc::{
     prepare_tetgen_plc, PreparedTetgenPlc, TetgenHoleSeedPolicy, TetgenPlcError,
@@ -144,6 +147,7 @@ pub struct ValidatedTetgenExteriorHandoff {
 pub enum TetgenExteriorHandoffError {
     Prepare(TetgenPlcError),
     BoundStateMismatch,
+    Overlap(TetrahedralOverlapError),
     Handoff(ExteriorMesherHandoffError),
 }
 
@@ -158,6 +162,10 @@ impl Display for TetgenExteriorHandoffError {
                 f,
                 "TetGen bound-run state is internally inconsistent: retained admitted input/policy no longer regenerates the retained PLC"
             ),
+            Self::Overlap(error) => write!(
+                f,
+                "TetGen output volumetric overlap validation failed: {error}"
+            ),
             Self::Handoff(error) => write!(f, "TetGen exterior handoff validation failed: {error}"),
         }
     }
@@ -167,6 +175,7 @@ impl Error for TetgenExteriorHandoffError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Prepare(error) => Some(error),
+            Self::Overlap(error) => Some(error),
             Self::Handoff(error) => Some(error),
             Self::BoundStateMismatch => None,
         }
@@ -179,28 +188,36 @@ impl From<TetgenPlcError> for TetgenExteriorHandoffError {
     }
 }
 
+impl From<TetrahedralOverlapError> for TetgenExteriorHandoffError {
+    fn from(value: TetrahedralOverlapError) -> Self {
+        Self::Overlap(value)
+    }
+}
+
 impl From<ExteriorMesherHandoffError> for TetgenExteriorHandoffError {
     fn from(value: ExteriorMesherHandoffError) -> Self {
         Self::Handoff(value)
     }
 }
 
-/// Promotes one bound external TetGen result through the existing solver-bound exterior handoff
-/// gates without accepting any independent source input or marker map from the caller.
+/// Promotes one bound external TetGen result through the solver-bound exterior handoff gates
+/// without accepting any independent source input or marker map from the caller.
 ///
 /// The retained admitted input and exact hole-seed policy are first used to regenerate the PLC as
-/// an internal consistency check. The parsed boundary markers are then validated against the
-/// authoritative marker map owned by that same admitted input, and the candidate must pass explicit
-/// local tetrahedron quality plus the already-admitted source-intersection policy and the
-/// caller-selected bidirectional source correspondence policy.
+/// an internal consistency check. Before the generic exterior handoff consumes the parsed mesh,
+/// the exact TetGen output must also pass the caller-selected bounded tetrahedral interior-overlap
+/// policy. The generic handoff then checks exterior provenance, local tetrahedron quality, the
+/// already-admitted source-intersection policy and caller-selected bidirectional source
+/// correspondence policy.
 ///
 /// Source containment is not rerun because the retained `ContainmentValidatedExteriorMesherInput`
 /// is an owned promoted state whose private base input already passed source intersection and
-/// containment validation. Its exact policy/report are retained in the returned value. No fidelity
-/// promotion is performed: success must not be translated to `body_fitted_status=true`.
+/// containment validation. No fidelity promotion is performed: overlap freedom under the supplied
+/// bounded policy is necessary evidence, not a body-fitted or engineering-quality certificate.
 pub fn validate_tetgen_external_handoff(
     bound: BoundTetgenExternalRun,
     quality_policy: ExteriorMeshQualityPolicy,
+    overlap_policy: TetrahedralOverlapPolicy,
     correspondence_policy: SourceSurfaceCorrespondencePolicy,
 ) -> Result<ValidatedTetgenExteriorHandoff, TetgenExteriorHandoffError> {
     let expected = prepare_tetgen_plc(&bound.input, bound.hole_seed_policy)?;
@@ -228,6 +245,8 @@ pub fn validate_tetgen_external_handoff(
         boundary_face_ids,
         reoriented_tetrahedra,
     } = parsed;
+
+    validate_tetrahedral_interior_overlaps(&mesh, overlap_policy)?;
 
     let containment_policy = input.containment_policy();
     let containment = input.containment_report().clone();
@@ -395,6 +414,13 @@ mod tests {
         }
     }
 
+    fn overlap_policy() -> TetrahedralOverlapPolicy {
+        TetrahedralOverlapPolicy {
+            geometric_epsilon: 1.0e-10,
+            max_tetrahedron_pair_tests: 100_000,
+        }
+    }
+
     fn correspondence_policy() -> SourceSurfaceCorrespondencePolicy {
         SourceSurfaceCorrespondencePolicy {
             distance_tolerance: 1.0e-10,
@@ -435,6 +461,7 @@ mod tests {
         let result = validate_tetgen_external_handoff(
             bound,
             quality_policy(),
+            overlap_policy(),
             correspondence_policy(),
         )
         .unwrap();
@@ -451,6 +478,25 @@ mod tests {
         assert_eq!(result.handoff.exterior.scene_object_ids, vec![42]);
         assert_eq!(result.handoff.exterior.domain_boundary_count, 6);
         assert_eq!(result.handoff.correspondence.bodies[0].scene_object_id, 42);
+    }
+
+    #[test]
+    fn volumetric_overlap_fails_before_generic_exterior_handoff() {
+        let (input, mut mesh) = admitted_fixture();
+        mesh.cells.push(mesh.cells[0].clone());
+        let bound = synthetic_bound_run(&input, mesh, hole_policy());
+
+        let error = validate_tetgen_external_handoff(
+            bound,
+            quality_policy(),
+            overlap_policy(),
+            correspondence_policy(),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            TetgenExteriorHandoffError::Overlap(TetrahedralOverlapError::InteriorOverlap { .. })
+        ));
     }
 
     #[test]
@@ -471,6 +517,7 @@ mod tests {
         let result = validate_tetgen_external_handoff(
             bound,
             quality_policy(),
+            overlap_policy(),
             correspondence_policy(),
         )
         .unwrap();
@@ -486,6 +533,7 @@ mod tests {
         let error = validate_tetgen_external_handoff(
             bound,
             quality_policy(),
+            overlap_policy(),
             correspondence_policy(),
         )
         .unwrap_err();
@@ -501,6 +549,7 @@ mod tests {
         let error = validate_tetgen_external_handoff(
             bound,
             quality_policy(),
+            overlap_policy(),
             correspondence_policy(),
         )
         .unwrap_err();

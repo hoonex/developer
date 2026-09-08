@@ -17,6 +17,7 @@ use crate::su2_mesh::{
     BoundaryRole, BoundarySource, DomainAxis, DomainSide, Su2MarkerBinding,
 };
 use crate::surface_correspondence::SourceSurfaceCorrespondencePolicy;
+use crate::tetra_overlap::TetrahedralOverlapPolicy;
 use crate::tetgen_handoff::{run_tetgen_for_handoff, validate_tetgen_external_handoff};
 use crate::tetgen_plc::{TetgenHoleSeedPolicy, TETGEN_BASELINE_SWITCHES};
 use crate::tetgen_runner::discover_tetgen;
@@ -131,6 +132,10 @@ fn configured_real_tetgen_reaches_validated_handoff() {
         ExteriorMeshQualityPolicy {
             min_mean_ratio: 1.0e-12,
             max_edge_length_ratio: 1.0e6,
+        },
+        TetrahedralOverlapPolicy {
+            geometric_epsilon: 1.0e-10,
+            max_tetrahedron_pair_tests: 20_000_000,
         },
         SourceSurfaceCorrespondencePolicy {
             distance_tolerance: 1.0e-9,

@@ -6,7 +6,8 @@ use aeroforge_accurate_backend::{
     validate_tetgen_external_handoff, BoundaryRole, BoundarySource,
     ContainmentValidatedExteriorMesherInput, DomainAxis, DomainSide, ExteriorMeshQualityPolicy,
     SourceContainmentPolicy, SourceSurfaceCorrespondencePolicy, SourceSurfaceIntersectionPolicy,
-    Su2MarkerBinding, TetgenHoleSeedPolicy, ValidatedTetgenExteriorHandoff,
+    Su2MarkerBinding, TetrahedralOverlapPolicy, TetgenHoleSeedPolicy,
+    ValidatedTetgenExteriorHandoff,
 };
 use aeroforge_volume_core::BoundaryMarkerId;
 
@@ -31,6 +32,10 @@ const DESKTOP_TETGEN_HOLE_SEED_POLICY: TetgenHoleSeedPolicy = TetgenHoleSeedPoli
 const DESKTOP_TETGEN_SANITY_QUALITY_POLICY: ExteriorMeshQualityPolicy = ExteriorMeshQualityPolicy {
     min_mean_ratio: 1.0e-12,
     max_edge_length_ratio: 1.0e6,
+};
+const DESKTOP_TETGEN_OVERLAP_POLICY: TetrahedralOverlapPolicy = TetrahedralOverlapPolicy {
+    geometric_epsilon: 1.0e-10,
+    max_tetrahedron_pair_tests: 20_000_000,
 };
 const DESKTOP_SOURCE_CORRESPONDENCE_POLICY: SourceSurfaceCorrespondencePolicy =
     SourceSurfaceCorrespondencePolicy {
@@ -87,13 +92,15 @@ pub fn admit_project_geometry_for_tetgen(
 }
 
 /// Executes the configured external TetGen binary for one already-auditable desktop project and
-/// promotes its output through AeroForge's solver-bound quality/provenance/correspondence gates.
+/// promotes its output through AeroForge's solver-bound overlap/quality/provenance/correspondence
+/// gates.
 ///
 /// The quality limits here are deliberately permissive numerical sanity checks matching the real
-/// TetGen CI smoke; they are not engineering mesh-quality thresholds. The returned handoff retains
-/// the exact PLC, policies, source/domain ownership, process evidence, parsed IDs, local quality,
-/// and bounded source correspondence. It still records body-fitted and engineering-quality status
-/// as not established.
+/// TetGen CI smoke; they are not engineering mesh-quality thresholds. The volumetric overlap gate
+/// uses a deterministic sweep-and-prune broad phase with an explicit pair-test budget. Passing it
+/// establishes only the implemented positive-volume non-overlap contract at the configured
+/// tolerance. The returned handoff still records body-fitted and engineering-quality status as not
+/// established.
 pub fn run_project_tetgen_handoff(
     state: &ProjectState,
     executable: &Path,
@@ -105,6 +112,7 @@ pub fn run_project_tetgen_handoff(
     validate_tetgen_external_handoff(
         bound,
         DESKTOP_TETGEN_SANITY_QUALITY_POLICY,
+        DESKTOP_TETGEN_OVERLAP_POLICY,
         DESKTOP_SOURCE_CORRESPONDENCE_POLICY,
     )
     .map_err(|error| format!("desktop TetGen exterior handoff rejected: {error}"))
