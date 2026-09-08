@@ -13,6 +13,7 @@ mod mixed_scene_voxel;
 mod prepared_case;
 mod primitive_voxel;
 mod scene_provenance;
+mod source_clearance;
 mod source_containment;
 mod source_intersection;
 mod source_normal_alignment;
@@ -94,6 +95,11 @@ pub use primitive_voxel::{
 pub use scene_provenance::{
     build_active_scene_owner_marker_provenance, build_scene_owner_marker_provenance,
     scene_object_wall_tag, SceneOwnerMarkerProvenance, SceneOwnerProvenanceError,
+};
+pub use source_clearance::{
+    validate_source_inter_body_clearance, SourceInterBodyClearanceError,
+    SourceInterBodyClearancePairReport, SourceInterBodyClearancePolicy,
+    SourceInterBodyClearanceReport,
 };
 pub use source_containment::{
     validate_exterior_mesher_source_containment, ContainmentValidatedExteriorMesherInput,
