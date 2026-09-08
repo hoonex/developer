@@ -18,10 +18,7 @@ use crate::source_containment::{
 use crate::source_feature_edges::SourceBoundaryFeatureEdgePolicy;
 use crate::source_intersection::SourceSurfaceIntersectionPolicy;
 use crate::source_normal_alignment::SourceBoundaryNormalPolicy;
-use crate::source_normal_variation::{
-    validate_source_boundary_discrete_normal_variation,
-    SourceBoundaryDiscreteNormalVariationPolicy,
-};
+use crate::source_normal_variation::SourceBoundaryDiscreteNormalVariationPolicy;
 use crate::su2_mesh::{
     BoundaryRole, BoundarySource, DomainAxis, DomainSide, Su2MarkerBinding,
 };
@@ -129,6 +126,17 @@ fn domain_bindings() -> Vec<Su2MarkerBinding> {
     ]
 }
 
+fn normal_variation_policy() -> SourceBoundaryDiscreteNormalVariationPolicy {
+    SourceBoundaryDiscreteNormalVariationPolicy {
+        minimum_variation_angle_radians: 1.0e-6,
+        sharp_feature_cutoff_radians: 0.5,
+        distance_tolerance: 1.0e-9,
+        minimum_direction_alignment_cosine: 0.999_999,
+        maximum_dihedral_angle_difference_radians: 1.0e-9,
+        max_edge_pair_tests_per_pass: 20_000_000,
+    }
+}
+
 #[test]
 fn configured_real_tetgen_reaches_validated_handoff() {
     let required = env::var_os("AEROFORGE_REQUIRE_REAL_TETGEN").is_some();
@@ -220,6 +228,7 @@ fn configured_real_tetgen_reaches_validated_handoff() {
             maximum_dihedral_angle_difference_radians: 1.0e-9,
             max_edge_pair_tests: 10_000_000,
         },
+        normal_variation_policy(),
     )
     .unwrap();
 
@@ -250,6 +259,11 @@ fn configured_real_tetgen_reaches_validated_handoff() {
     assert!(handoff.feature_edges.bodies[0].min_boundary_to_source_direction_alignment_cosine >= 0.999_999);
     assert!(handoff.feature_edges.bodies[0].max_source_to_boundary_dihedral_angle_difference_radians <= 1.0e-9);
     assert!(handoff.feature_edges.bodies[0].max_boundary_to_source_dihedral_angle_difference_radians <= 1.0e-9);
+    assert_eq!(handoff.normal_variation_policy, normal_variation_policy());
+    assert_eq!(handoff.normal_variation.bodies.len(), 1);
+    assert_eq!(handoff.normal_variation.bodies[0].scene_object_id, 42);
+    assert_eq!(handoff.normal_variation.bodies[0].source_sub_sharp_variation_edge_count, 0);
+    assert_eq!(handoff.normal_variation.bodies[0].boundary_sub_sharp_variation_edge_count, 0);
 }
 
 #[test]
@@ -269,7 +283,6 @@ fn configured_real_tetgen_exhibits_bounded_sub_sharp_normal_variation_on_rounded
         AccurateImportedSurfacePolicy::default(),
     )
     .unwrap();
-    let source_for_variation = source.clone();
     let base = build_validated_exterior_mesher_input(
         [0.0, 0.0, 0.0],
         [3.0, 3.0, 3.0],
@@ -338,26 +351,13 @@ fn configured_real_tetgen_exhibits_bounded_sub_sharp_normal_variation_on_rounded
             maximum_dihedral_angle_difference_radians: 1.0e-9,
             max_edge_pair_tests: 20_000_000,
         },
+        normal_variation_policy(),
     )
     .unwrap();
 
-    let variation = validate_source_boundary_discrete_normal_variation(
-        &handoff.handoff.mesh,
-        &handoff.handoff.marker_map,
-        &[source_for_variation],
-        SourceBoundaryDiscreteNormalVariationPolicy {
-            minimum_variation_angle_radians: 1.0e-6,
-            sharp_feature_cutoff_radians: 0.5,
-            distance_tolerance: 1.0e-9,
-            minimum_direction_alignment_cosine: 0.999_999,
-            maximum_dihedral_angle_difference_radians: 1.0e-9,
-            max_edge_pair_tests_per_pass: 20_000_000,
-        },
-    )
-    .unwrap();
-
-    assert_eq!(variation.bodies.len(), 1);
-    let body = &variation.bodies[0];
+    assert_eq!(handoff.normal_variation_policy, normal_variation_policy());
+    assert_eq!(handoff.normal_variation.bodies.len(), 1);
+    let body = &handoff.normal_variation.bodies[0];
     assert_eq!(body.scene_object_id, 42);
     assert!(body.source_variation_edge_count > 0);
     assert!(body.boundary_variation_edge_count > 0);
@@ -365,10 +365,10 @@ fn configured_real_tetgen_exhibits_bounded_sub_sharp_normal_variation_on_rounded
     assert_eq!(body.boundary_sharp_edge_count, 0);
     assert!(body.source_sub_sharp_variation_edge_count > 0);
     assert!(body.boundary_sub_sharp_variation_edge_count > 0);
-    assert!(variation.variation.edge_pair_tests > 0);
-    assert_eq!(variation.sharp.edge_pair_tests, 0);
+    assert!(handoff.normal_variation.variation.edge_pair_tests > 0);
+    assert_eq!(handoff.normal_variation.sharp.edge_pair_tests, 0);
     assert_eq!(
-        variation.total_edge_pair_tests,
-        variation.variation.edge_pair_tests
+        handoff.normal_variation.total_edge_pair_tests,
+        handoff.normal_variation.variation.edge_pair_tests
     );
 }

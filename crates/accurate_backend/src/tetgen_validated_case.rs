@@ -65,7 +65,8 @@ impl From<PrepareValidatedExteriorCaseError> for PrepareTetgenValidatedExteriorC
 /// The manifest keeps `body_fitted_status=not_established` and
 /// `engineering_quality_status=not_established`. Passing the current gates must not silently promote
 /// either claim, and feature-edge evidence does not establish smooth-curvature or CAD-feature
-/// preservation.
+/// preservation. Discrete normal-variation evidence is owned in memory after its separate handoff
+/// gate but is intentionally not persisted until the provenance format is versioned separately.
 pub fn prepare_tetgen_validated_exterior_su2_case_directory(
     root: &Path,
     case_directory_name: &str,
@@ -360,6 +361,11 @@ mod tests {
     use crate::source_normal_alignment::{
         SourceBoundaryNormalBodyReport, SourceBoundaryNormalPolicy, SourceBoundaryNormalReport,
     };
+    use crate::source_normal_variation::{
+        SourceBoundaryDiscreteNormalVariationBodyReport,
+        SourceBoundaryDiscreteNormalVariationPolicy,
+        SourceBoundaryDiscreteNormalVariationReport,
+    };
     use crate::su2_mesh::{
         BoundaryRole, BoundarySource, DomainAxis, DomainSide, Su2MarkerBinding, Su2MarkerMap,
     };
@@ -489,6 +495,22 @@ mod tests {
             },
         };
 
+        let feature_body = SourceBoundaryFeatureEdgeBodyReport {
+            scene_object_id: 42,
+            source_feature_edge_count: 6,
+            boundary_feature_edge_count: 6,
+            max_source_to_boundary_midpoint_distance: 0.0,
+            max_boundary_to_source_midpoint_distance: 0.0,
+            min_source_to_boundary_direction_alignment_cosine: 1.0,
+            min_boundary_to_source_direction_alignment_cosine: 1.0,
+            max_source_to_boundary_dihedral_angle_difference_radians: 0.0,
+            max_boundary_to_source_dihedral_angle_difference_radians: 0.0,
+        };
+        let feature_report = SourceBoundaryFeatureEdgeReport {
+            bodies: vec![feature_body],
+            edge_pair_tests: 72,
+        };
+
         ValidatedTetgenExteriorHandoff {
             handoff,
             prepared,
@@ -531,19 +553,28 @@ mod tests {
                 maximum_dihedral_angle_difference_radians: 1.0e-6,
                 max_edge_pair_tests: 1_000,
             },
-            feature_edges: SourceBoundaryFeatureEdgeReport {
-                bodies: vec![SourceBoundaryFeatureEdgeBodyReport {
+            feature_edges: feature_report.clone(),
+            normal_variation_policy: SourceBoundaryDiscreteNormalVariationPolicy {
+                minimum_variation_angle_radians: 0.1,
+                sharp_feature_cutoff_radians: 0.5,
+                distance_tolerance: 1.0e-6,
+                minimum_direction_alignment_cosine: 0.999_999,
+                maximum_dihedral_angle_difference_radians: 1.0e-6,
+                max_edge_pair_tests_per_pass: 1_000,
+            },
+            normal_variation: SourceBoundaryDiscreteNormalVariationReport {
+                bodies: vec![SourceBoundaryDiscreteNormalVariationBodyReport {
                     scene_object_id: 42,
-                    source_feature_edge_count: 6,
-                    boundary_feature_edge_count: 6,
-                    max_source_to_boundary_midpoint_distance: 0.0,
-                    max_boundary_to_source_midpoint_distance: 0.0,
-                    min_source_to_boundary_direction_alignment_cosine: 1.0,
-                    min_boundary_to_source_direction_alignment_cosine: 1.0,
-                    max_source_to_boundary_dihedral_angle_difference_radians: 0.0,
-                    max_boundary_to_source_dihedral_angle_difference_radians: 0.0,
+                    source_variation_edge_count: 6,
+                    boundary_variation_edge_count: 6,
+                    source_sharp_edge_count: 6,
+                    boundary_sharp_edge_count: 6,
+                    source_sub_sharp_variation_edge_count: 0,
+                    boundary_sub_sharp_variation_edge_count: 0,
                 }],
-                edge_pair_tests: 72,
+                variation: feature_report.clone(),
+                sharp: feature_report,
+                total_edge_pair_tests: 144,
             },
             tetgen_stdout: "ok\n".into(),
             tetgen_stderr: String::new(),
@@ -598,6 +629,7 @@ mod tests {
         assert!(text.contains("source_feature_body_0_max_source_to_boundary_dihedral_angle_difference_radians\t0"));
         assert!(text.contains("hole_seed_0_scene_object_id\t42"));
         assert!(text.contains("reoriented_tetrahedra\t1"));
+        assert!(!text.contains("source_normal_variation_"));
     }
 
     #[test]
@@ -657,6 +689,7 @@ mod tests {
         assert!(manifest.contains("source_feature_max_edge_pair_tests\t1000"));
         assert!(manifest.contains("source_feature_edge_pair_tests\t72"));
         assert!(manifest.contains("source_feature_body_0_scene_object_id\t42"));
+        assert!(!manifest.contains("source_normal_variation_"));
 
         let second = persist_tetgen_handoff_files(result.clone(), &handoff).unwrap_err();
         assert!(matches!(second, PrepareTetgenValidatedExteriorCaseError::Provenance(_)));

@@ -20,6 +20,12 @@ use crate::source_normal_alignment::{
     validate_source_boundary_normal_alignment, SourceBoundaryNormalError,
     SourceBoundaryNormalPolicy, SourceBoundaryNormalReport,
 };
+use crate::source_normal_variation::{
+    validate_source_boundary_discrete_normal_variation,
+    SourceBoundaryDiscreteNormalVariationError,
+    SourceBoundaryDiscreteNormalVariationPolicy,
+    SourceBoundaryDiscreteNormalVariationReport,
+};
 use crate::surface_correspondence::SourceSurfaceCorrespondencePolicy;
 use crate::tetra_overlap::{
     validate_tetrahedral_interior_overlaps, TetrahedralOverlapError, TetrahedralOverlapPolicy,
@@ -135,11 +141,11 @@ pub fn run_tetgen_for_handoff(
 /// The retained evidence binds together the deterministic prepared PLC, its exact explicit
 /// hole-seed policy, source inter-body clearance policy/report, source-containment policy/report,
 /// bounded tetrahedral-overlap policy/report, bounded bidirectional source/body-boundary normal
-/// policy/report, bounded sharp-crease edge correspondence policy/report, TetGen process
-/// diagnostics, parser IDs and tetrahedron reorientation count, plus the generic exterior
-/// provenance/quality/intersection/correspondence handoff. Holding this value is deliberately
-/// **not** a body-fitted, general feature-preservation, curvature-preservation, or engineering CFD
-/// certificate.
+/// policy/report, bounded sharp-crease edge correspondence policy/report, bounded triangulated
+/// discrete normal-variation policy/report, TetGen process diagnostics, parser IDs and tetrahedron
+/// reorientation count, plus the generic exterior provenance/quality/intersection/correspondence
+/// handoff. Holding this value is deliberately **not** a body-fitted, continuous-curvature,
+/// CAD-feature-preservation, or engineering CFD certificate.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValidatedTetgenExteriorHandoff {
     pub handoff: ValidatedExteriorMesherHandoff,
@@ -155,6 +161,8 @@ pub struct ValidatedTetgenExteriorHandoff {
     pub normal_alignment: SourceBoundaryNormalReport,
     pub feature_policy: SourceBoundaryFeatureEdgePolicy,
     pub feature_edges: SourceBoundaryFeatureEdgeReport,
+    pub normal_variation_policy: SourceBoundaryDiscreteNormalVariationPolicy,
+    pub normal_variation: SourceBoundaryDiscreteNormalVariationReport,
     pub tetgen_stdout: String,
     pub tetgen_stderr: String,
     pub tetgen_exit_code: Option<i32>,
@@ -173,6 +181,7 @@ pub enum TetgenExteriorHandoffError {
     Handoff(ExteriorMesherHandoffError),
     NormalAlignment(SourceBoundaryNormalError),
     FeatureEdges(SourceBoundaryFeatureEdgeError),
+    NormalVariation(SourceBoundaryDiscreteNormalVariationError),
 }
 
 impl Display for TetgenExteriorHandoffError {
@@ -199,6 +208,10 @@ impl Display for TetgenExteriorHandoffError {
                 f,
                 "TetGen output source/body-boundary sharp-feature edge validation failed: {error}"
             ),
+            Self::NormalVariation(error) => write!(
+                f,
+                "TetGen output source/body-boundary discrete normal-variation validation failed: {error}"
+            ),
         }
     }
 }
@@ -211,6 +224,7 @@ impl Error for TetgenExteriorHandoffError {
             Self::Handoff(error) => Some(error),
             Self::NormalAlignment(error) => Some(error),
             Self::FeatureEdges(error) => Some(error),
+            Self::NormalVariation(error) => Some(error),
             Self::BoundStateMismatch => None,
         }
     }
@@ -246,6 +260,12 @@ impl From<SourceBoundaryFeatureEdgeError> for TetgenExteriorHandoffError {
     }
 }
 
+impl From<SourceBoundaryDiscreteNormalVariationError> for TetgenExteriorHandoffError {
+    fn from(value: SourceBoundaryDiscreteNormalVariationError) -> Self {
+        Self::NormalVariation(value)
+    }
+}
+
 /// Promotes one bound external TetGen result through the solver-bound exterior handoff gates
 /// without accepting any independent source input or marker map from the caller.
 ///
@@ -255,17 +275,19 @@ impl From<SourceBoundaryFeatureEdgeError> for TetgenExteriorHandoffError {
 /// interior-overlap policy. The generic handoff then checks exterior provenance, local tetrahedron
 /// quality, the already-admitted source-intersection policy and caller-selected bidirectional
 /// source correspondence policy. Finally the exact mesh/marker/source triplet owned by that handoff
-/// must pass caller-selected bounded bidirectional source/body-boundary normal-opposition and
-/// sharp-crease edge-correspondence policies. Both gates canonicalize volume-side boundary winding
-/// rather than trusting TetGen `.face` order. The source clearance, overlap, normal and feature-edge
-/// policies and successful reports are retained in the returned value.
+/// must pass caller-selected bounded bidirectional source/body-boundary normal-opposition,
+/// sharp-crease edge-correspondence, and discrete normal-variation policies. These gates
+/// canonicalize volume-side boundary winding rather than trusting TetGen `.face` order. The source
+/// clearance, overlap, normal, feature-edge and discrete normal-variation policies and successful
+/// reports are retained in the returned value.
 ///
 /// Source clearance and containment are not rerun because the retained
 /// `ClearanceValidatedExteriorMesherInput` is an owned promoted state whose nested private input
 /// already passed source intersection and containment validation. No fidelity promotion is
 /// performed: positive caller-selected source separation, overlap freedom, bounded centroid-local
-/// normal opposition and bounded sharp-crease correspondence are necessary evidence, not a
-/// body-fitted, general feature/curvature-preserving, or engineering-quality certificate.
+/// normal opposition, bounded sharp-crease correspondence and bounded triangulated normal
+/// variation are necessary evidence, not a body-fitted, continuous-curvature/CAD-preserving, or
+/// engineering-quality certificate.
 pub fn validate_tetgen_external_handoff(
     bound: BoundTetgenExternalRun,
     quality_policy: ExteriorMeshQualityPolicy,
@@ -273,6 +295,7 @@ pub fn validate_tetgen_external_handoff(
     correspondence_policy: SourceSurfaceCorrespondencePolicy,
     normal_policy: SourceBoundaryNormalPolicy,
     feature_policy: SourceBoundaryFeatureEdgePolicy,
+    normal_variation_policy: SourceBoundaryDiscreteNormalVariationPolicy,
 ) -> Result<ValidatedTetgenExteriorHandoff, TetgenExteriorHandoffError> {
     let expected = prepare_tetgen_plc(bound.input.containment(), bound.hole_seed_policy)?;
     if expected != bound.prepared {
@@ -328,6 +351,12 @@ pub fn validate_tetgen_external_handoff(
         admission.audited_sources(),
         feature_policy,
     )?;
+    let normal_variation = validate_source_boundary_discrete_normal_variation(
+        &handoff.mesh,
+        &handoff.marker_map,
+        admission.audited_sources(),
+        normal_variation_policy,
+    )?;
 
     Ok(ValidatedTetgenExteriorHandoff {
         handoff,
@@ -343,6 +372,8 @@ pub fn validate_tetgen_external_handoff(
         normal_alignment,
         feature_policy,
         feature_edges,
+        normal_variation_policy,
+        normal_variation,
         tetgen_stdout: stdout,
         tetgen_stderr: stderr,
         tetgen_exit_code: exit_code,
@@ -533,6 +564,17 @@ mod tests {
         }
     }
 
+    fn normal_variation_policy() -> SourceBoundaryDiscreteNormalVariationPolicy {
+        SourceBoundaryDiscreteNormalVariationPolicy {
+            minimum_variation_angle_radians: 0.1,
+            sharp_feature_cutoff_radians: 0.5,
+            distance_tolerance: 1.0e-10,
+            minimum_direction_alignment_cosine: 0.999_999,
+            maximum_dihedral_angle_difference_radians: 1.0e-10,
+            max_edge_pair_tests_per_pass: 100_000,
+        }
+    }
+
     fn synthetic_bound_run(
         input: &ClearanceValidatedExteriorMesherInput,
         mesh: aeroforge_volume_core::VolumeMesh,
@@ -570,6 +612,7 @@ mod tests {
             correspondence_policy(),
             normal_policy(),
             feature_policy(),
+            normal_variation_policy(),
         )
         .unwrap();
 
@@ -606,6 +649,16 @@ mod tests {
         assert!(result.feature_edges.bodies[0].min_boundary_to_source_direction_alignment_cosine > 0.999_999_999);
         assert!(result.feature_edges.bodies[0].max_source_to_boundary_dihedral_angle_difference_radians <= 1.0e-12);
         assert!(result.feature_edges.bodies[0].max_boundary_to_source_dihedral_angle_difference_radians <= 1.0e-12);
+        assert_eq!(result.normal_variation_policy, normal_variation_policy());
+        assert_eq!(result.normal_variation.bodies.len(), 1);
+        assert_eq!(result.normal_variation.bodies[0].scene_object_id, 42);
+        assert_eq!(result.normal_variation.bodies[0].source_variation_edge_count, 12);
+        assert_eq!(result.normal_variation.bodies[0].boundary_variation_edge_count, 12);
+        assert_eq!(result.normal_variation.bodies[0].source_sharp_edge_count, 12);
+        assert_eq!(result.normal_variation.bodies[0].boundary_sharp_edge_count, 12);
+        assert_eq!(result.normal_variation.bodies[0].source_sub_sharp_variation_edge_count, 0);
+        assert_eq!(result.normal_variation.bodies[0].boundary_sub_sharp_variation_edge_count, 0);
+        assert_eq!(result.normal_variation.total_edge_pair_tests, 576);
         assert_eq!(result.tetgen_exit_code, Some(0));
         assert_eq!(result.tetgen_switches, TETGEN_BASELINE_SWITCHES);
         assert_eq!(result.input_node_ids, vec![0, 1, 2, 3]);
@@ -630,6 +683,7 @@ mod tests {
             correspondence_policy(),
             normal_policy(),
             feature_policy(),
+            normal_variation_policy(),
         )
         .unwrap_err();
         assert!(matches!(
@@ -662,12 +716,14 @@ mod tests {
             correspondence_policy(),
             normal_policy(),
             feature_policy(),
+            normal_variation_policy(),
         )
         .unwrap();
         assert_eq!(result.hole_seed_policy.max_point_triangle_tests, 100_000);
         assert_eq!(result.clearance_policy, clearance_policy());
         assert_eq!(result.normal_policy, normal_policy());
         assert_eq!(result.feature_policy, feature_policy());
+        assert_eq!(result.normal_variation_policy, normal_variation_policy());
     }
 
     #[test]
@@ -683,6 +739,7 @@ mod tests {
             correspondence_policy(),
             normal_policy(),
             feature_policy(),
+            normal_variation_policy(),
         )
         .unwrap_err();
         assert!(matches!(error, TetgenExteriorHandoffError::Handoff(_)));
@@ -701,6 +758,7 @@ mod tests {
             correspondence_policy(),
             normal_policy(),
             feature_policy(),
+            normal_variation_policy(),
         )
         .unwrap_err();
         assert_eq!(error, TetgenExteriorHandoffError::BoundStateMismatch);

@@ -5,8 +5,9 @@ use aeroforge_accurate_backend::{
     validate_exterior_mesher_input_intersections, validate_exterior_mesher_source_clearance,
     validate_exterior_mesher_source_containment, validate_tetgen_external_handoff, BoundaryRole,
     BoundarySource, ClearanceValidatedExteriorMesherInput, DomainAxis, DomainSide,
-    ExteriorMeshQualityPolicy, SourceBoundaryFeatureEdgePolicy, SourceBoundaryNormalPolicy,
-    SourceContainmentPolicy, SourceInterBodyClearancePolicy, SourceSurfaceCorrespondencePolicy,
+    ExteriorMeshQualityPolicy, SourceBoundaryDiscreteNormalVariationPolicy,
+    SourceBoundaryFeatureEdgePolicy, SourceBoundaryNormalPolicy, SourceContainmentPolicy,
+    SourceInterBodyClearancePolicy, SourceSurfaceCorrespondencePolicy,
     SourceSurfaceIntersectionPolicy, Su2MarkerBinding, TetrahedralOverlapPolicy,
     TetgenHoleSeedPolicy, ValidatedTetgenExteriorHandoff,
 };
@@ -60,6 +61,15 @@ const DESKTOP_SOURCE_FEATURE_EDGE_POLICY: SourceBoundaryFeatureEdgePolicy =
         minimum_direction_alignment_cosine: 0.999_999,
         maximum_dihedral_angle_difference_radians: 1.0e-9,
         max_edge_pair_tests: 20_000_000,
+    };
+const DESKTOP_SOURCE_NORMAL_VARIATION_POLICY: SourceBoundaryDiscreteNormalVariationPolicy =
+    SourceBoundaryDiscreteNormalVariationPolicy {
+        minimum_variation_angle_radians: 1.0e-6,
+        sharp_feature_cutoff_radians: 0.5,
+        distance_tolerance: 1.0e-9,
+        minimum_direction_alignment_cosine: 0.999_999,
+        maximum_dihedral_angle_difference_radians: 1.0e-9,
+        max_edge_pair_tests_per_pass: 20_000_000,
     };
 
 /// Promotes the current desktop scene to the source-surface admission state required before an
@@ -120,8 +130,8 @@ pub fn admit_project_geometry_for_tetgen(
 
 /// Executes the configured external TetGen binary for one already-auditable desktop project and
 /// promotes its output through AeroForge's solver-bound source-clearance, overlap,
-/// quality/provenance/correspondence, bounded source/body-boundary normal-opposition, and bounded
-/// sharp-crease edge-correspondence gates.
+/// quality/provenance/correspondence, bounded source/body-boundary normal-opposition, bounded
+/// sharp-crease edge correspondence, and bounded discrete normal-variation correspondence gates.
 ///
 /// The positive source-body clearance floor is an explicit numerical admission policy, not an
 /// engineering spacing criterion. The quality limits here are deliberately permissive numerical
@@ -132,9 +142,11 @@ pub fn admit_project_geometry_for_tetgen(
 /// opposite triangle under explicit distance, opposition-cosine and work limits. The feature gate
 /// independently extracts crease edges above the configured angle and checks bidirectional
 /// midpoint distance, orientation-independent edge direction, dihedral-angle agreement, and work
-/// budget against the exact owned source/body-boundary pair. Passing these gates still does not
-/// establish general feature/curvature/CAD preservation, body-fitted fidelity, or engineering CFD
-/// quality.
+/// budget against the exact owned source/body-boundary pair. The discrete normal-variation gate
+/// reuses that edge correspondence contract at a lower positive angle and at the sharp cutoff,
+/// retaining both reports and the sub-sharp selected-edge count difference. This is evidence about
+/// the triangulated surfaces only; passing does not establish continuous curvature, CAD-feature
+/// preservation, body-fitted fidelity, or engineering CFD quality.
 pub fn run_project_tetgen_handoff(
     state: &ProjectState,
     executable: &Path,
@@ -150,6 +162,7 @@ pub fn run_project_tetgen_handoff(
         DESKTOP_SOURCE_CORRESPONDENCE_POLICY,
         DESKTOP_SOURCE_NORMAL_POLICY,
         DESKTOP_SOURCE_FEATURE_EDGE_POLICY,
+        DESKTOP_SOURCE_NORMAL_VARIATION_POLICY,
     )
     .map_err(|error| format!("desktop TetGen exterior handoff rejected: {error}"))
 }
