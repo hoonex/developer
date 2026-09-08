@@ -126,16 +126,21 @@ pub(crate) fn render_facet_tetgen_handoff_provenance(
     for (index, body) in handoff.facet_correspondence.bodies.iter().enumerate() {
         output.push_str(&format!(
             concat!(
-                "source_facet_body_{index}_scene_object_id\t{}\n",
-                "source_facet_body_{index}_source_triangle_count\t{}\n",
-                "source_facet_body_{index}_boundary_triangle_count\t{}\n",
-                "source_facet_body_{index}_matched_triangle_count\t{}\n",
-                "source_facet_body_{index}_maximum_matched_vertex_distance\t{}\n"
+                "source_facet_body_{}_scene_object_id\t{}\n",
+                "source_facet_body_{}_source_triangle_count\t{}\n",
+                "source_facet_body_{}_boundary_triangle_count\t{}\n",
+                "source_facet_body_{}_matched_triangle_count\t{}\n",
+                "source_facet_body_{}_maximum_matched_vertex_distance\t{}\n"
             ),
+            index,
             body.scene_object_id,
+            index,
             body.source_triangle_count,
+            index,
             body.boundary_triangle_count,
+            index,
             body.matched_triangle_count,
+            index,
             body.maximum_matched_vertex_distance,
         ));
     }
