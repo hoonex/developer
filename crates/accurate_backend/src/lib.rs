@@ -31,6 +31,7 @@ mod tetgen_validated_case;
 mod validated_case;
 mod voxel_case;
 mod voxel_mesh;
+mod wall_normal_spacing;
 
 #[cfg(test)]
 mod tetgen_real_smoke;
@@ -179,4 +180,9 @@ pub use voxel_case::{
 };
 pub use voxel_mesh::{
     tetrahedralize_voxel_fluid_domain, VoxelFluidDomainSpec, VoxelMeshError,
+};
+pub use wall_normal_spacing::{
+    validate_body_wall_first_cell_heights, BodyWallFirstCellHeightBodyReport,
+    BodyWallFirstCellHeightError, BodyWallFirstCellHeightPolicy,
+    BodyWallFirstCellHeightReport,
 };
