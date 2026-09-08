@@ -58,7 +58,7 @@ The native LBM backend remains an interactive preview solver. Its evidence is us
 
 - Poiseuille analytical profile: GREEN.
 - Couette moving-wall profile: GREEN.
-- Ghia Re=100 cavity centerlines: representative errors `u_rmse=0.005814`, `u_max=0.009263`, `v_rmse=0.004238`, `v_max=0.006717`.
+- Ghia Re=100 cavity centerlines: current routine CI reports `u_rmse=0.005814`, `u_max=0.009263`, `v_rmse=0.004238`, `v_max=0.007414`.
 - NEQ velocity/pressure plug flow: GREEN.
 - x-open + y prescribed free-stream uniform flow: `max_velocity_error=1e-8`.
 - exact app-WGSL far-field CPU↔GPU parity evidence reported `max_error=0.00000000` in the controlled smoke.
