@@ -56,10 +56,10 @@ impl From<PrepareValidatedExteriorCaseError> for PrepareTetgenValidatedExteriorC
 ///
 /// In addition to the generic validated-exterior sidecar, this path persists the exact deterministic
 /// `.poly` supplied to TetGen plus a bounded metadata manifest covering the explicit hole-seed,
-/// containment, tetrahedral-overlap and source/body-boundary normal policies/reports, process
-/// exit/switch contract, parser counts and tetrahedron reorientation count. Raw stdout/stderr are
-/// intentionally not persisted because external tools can emit unbounded text; their byte counts
-/// are recorded while the in-memory handoff retains the content.
+/// source inter-body clearance, containment, tetrahedral-overlap and source/body-boundary normal
+/// policies/reports, process exit/switch contract, parser counts and tetrahedron reorientation
+/// count. Raw stdout/stderr are intentionally not persisted because external tools can emit
+/// unbounded text; their byte counts are recorded while the in-memory handoff retains the content.
 ///
 /// The manifest keeps `body_fitted_status=not_established` and
 /// `engineering_quality_status=not_established`. Passing the current gates must not silently promote
@@ -150,7 +150,7 @@ pub(crate) fn render_tetgen_handoff_provenance(
     let mut output = format!(
         concat!(
             "key\tvalue\n",
-            "format_version\t3\n",
+            "format_version\t4\n",
             "contract\tvalidated_external_tetgen_handoff\n",
             "source_scene_object_ids\t{}\n",
             "body_fitted_status\tnot_established\n",
@@ -170,6 +170,10 @@ pub(crate) fn render_tetgen_handoff_provenance(
             "hole_seed_max_point_triangle_tests\t{}\n",
             "hole_seed_reserved_point_triangle_tests\t{}\n",
             "hole_seed_executed_point_triangle_tests\t{}\n",
+            "source_clearance_minimum_clearance\t{}\n",
+            "source_clearance_max_triangle_pair_tests\t{}\n",
+            "source_clearance_triangle_pair_tests\t{}\n",
+            "source_clearance_body_pair_count\t{}\n",
             "containment_geometric_epsilon\t{}\n",
             "containment_max_point_triangle_tests\t{}\n",
             "containment_reserved_point_triangle_tests\t{}\n",
@@ -206,6 +210,10 @@ pub(crate) fn render_tetgen_handoff_provenance(
         handoff.hole_seed_policy.max_point_triangle_tests,
         handoff.prepared.reserved_point_triangle_tests(),
         handoff.prepared.executed_point_triangle_tests(),
+        handoff.clearance_policy.minimum_clearance,
+        handoff.clearance_policy.max_triangle_pair_tests,
+        handoff.clearance.triangle_pair_tests,
+        handoff.clearance.pairs.len(),
         handoff.containment_policy.geometric_epsilon,
         handoff.containment_policy.max_point_triangle_tests,
         handoff.containment.reserved_point_triangle_tests,
@@ -234,6 +242,23 @@ pub(crate) fn render_tetgen_handoff_provenance(
             seed.source_triangle,
             seed.inward_offset,
             seed.attempts,
+        ));
+    }
+    for (index, pair) in handoff.clearance.pairs.iter().enumerate() {
+        output.push_str(&format!(
+            concat!(
+                "source_clearance_pair_{index}_first_scene_object_id\t{}\n",
+                "source_clearance_pair_{index}_second_scene_object_id\t{}\n",
+                "source_clearance_pair_{index}_first_triangle_count\t{}\n",
+                "source_clearance_pair_{index}_second_triangle_count\t{}\n",
+                "source_clearance_pair_{index}_minimum_clearance\t{}\n"
+            ),
+            pair.first_scene_object_id,
+            pair.second_scene_object_id,
+            pair.first_triangle_count,
+            pair.second_triangle_count,
+            pair.minimum_clearance,
+            index = index,
         ));
     }
     for (index, body) in handoff.normal_alignment.bodies.iter().enumerate() {
@@ -278,7 +303,8 @@ mod tests {
         audit_imported_surface_for_accurate_meshing, AccurateImportedSurfacePolicy,
     };
     use crate::source_clearance::{
-        validate_source_inter_body_clearance, SourceInterBodyClearancePolicy,
+        validate_source_inter_body_clearance, SourceInterBodyClearancePairReport,
+        SourceInterBodyClearancePolicy,
     };
     use crate::source_containment::{
         validate_exterior_mesher_source_containment, SourceContainmentPolicy,
@@ -468,12 +494,16 @@ mod tests {
     fn tetgen_manifest_retains_explicit_policy_and_non_claims() {
         let handoff = synthetic_tetgen_handoff();
         let text = render_tetgen_handoff_provenance(&handoff);
-        assert!(text.contains("format_version\t3"));
+        assert!(text.contains("format_version\t4"));
         assert!(text.contains("contract\tvalidated_external_tetgen_handoff"));
         assert!(text.contains("body_fitted_status\tnot_established"));
         assert!(text.contains("engineering_quality_status\tnot_established"));
         assert!(text.contains("tetgen_switches\t-pYzCQ"));
         assert!(text.contains("hole_seed_max_point_triangle_tests\t10000"));
+        assert!(text.contains("source_clearance_minimum_clearance\t0.000001"));
+        assert!(text.contains("source_clearance_max_triangle_pair_tests\t1000"));
+        assert!(text.contains("source_clearance_triangle_pair_tests\t0"));
+        assert!(text.contains("source_clearance_body_pair_count\t0"));
         assert!(text.contains("containment_max_point_triangle_tests\t10000"));
         assert!(text.contains("tetra_overlap_geometric_epsilon\t0.000000001"));
         assert!(text.contains("tetra_overlap_max_pair_tests\t10000"));
@@ -490,6 +520,28 @@ mod tests {
         assert!(text.contains("source_normal_body_0_min_source_to_boundary_opposition_cosine\t1"));
         assert!(text.contains("hole_seed_0_scene_object_id\t42"));
         assert!(text.contains("reoriented_tetrahedra\t1"));
+    }
+
+    #[test]
+    fn tetgen_manifest_renders_per_pair_clearance_evidence_when_present() {
+        let mut handoff = synthetic_tetgen_handoff();
+        handoff.clearance.triangle_pair_tests = 144;
+        handoff.clearance.pairs.push(SourceInterBodyClearancePairReport {
+            first_scene_object_id: 42,
+            second_scene_object_id: 77,
+            first_triangle_count: 12,
+            second_triangle_count: 12,
+            minimum_clearance: 0.25,
+        });
+
+        let text = render_tetgen_handoff_provenance(&handoff);
+        assert!(text.contains("source_clearance_triangle_pair_tests\t144"));
+        assert!(text.contains("source_clearance_body_pair_count\t1"));
+        assert!(text.contains("source_clearance_pair_0_first_scene_object_id\t42"));
+        assert!(text.contains("source_clearance_pair_0_second_scene_object_id\t77"));
+        assert!(text.contains("source_clearance_pair_0_first_triangle_count\t12"));
+        assert!(text.contains("source_clearance_pair_0_second_triangle_count\t12"));
+        assert!(text.contains("source_clearance_pair_0_minimum_clearance\t0.25"));
     }
 
     #[test]
@@ -519,6 +571,8 @@ mod tests {
         .unwrap();
         assert!(manifest.contains("source_scene_object_ids\t42"));
         assert!(manifest.contains("tetgen_exit_code\t0"));
+        assert!(manifest.contains("source_clearance_minimum_clearance\t0.000001"));
+        assert!(manifest.contains("source_clearance_body_pair_count\t0"));
         assert!(manifest.contains("tetra_overlap_max_pair_tests\t10000"));
         assert!(manifest.contains("source_normal_max_triangle_pair_tests\t1000"));
         assert!(manifest.contains("source_normal_body_0_scene_object_id\t42"));

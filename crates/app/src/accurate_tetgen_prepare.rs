@@ -25,11 +25,12 @@ pub(crate) fn snapshot_project_state(state: &ProjectState) -> ProjectState {
 /// Runs the complete desktop external-TetGen preparation path for one immutable project snapshot.
 ///
 /// Discovery is explicit: AeroForge uses `TETGEN_EXECUTABLE` or PATH and never downloads/bundles
-/// TetGen. Successful output has already passed strict source admission, external process parsing,
-/// bounded volumetric tetrahedral-overlap validation, local tetrahedron sanity quality, bounded
-/// source correspondence and bounded source/body-boundary normal-opposition validation. The
-/// returned `AccuratePreparedCase` still records body-fitted and engineering-quality status as not
-/// established and forces TetGen-specific provenance persistence later.
+/// TetGen. Successful output has already passed strict source admission including bounded positive
+/// source-body clearance, external process parsing, bounded volumetric tetrahedral-overlap
+/// validation, local tetrahedron sanity quality, bounded source correspondence and bounded
+/// source/body-boundary normal-opposition validation. The returned `AccuratePreparedCase` still
+/// records body-fitted and engineering-quality status as not established and forces TetGen-specific
+/// provenance persistence later.
 pub(crate) fn prepare_tetgen_from_state(
     state: &ProjectState,
     settings: &AccurateSettings,
@@ -140,10 +141,14 @@ mod tests {
         assert!(exterior.contains("engineering_quality_status\tnot_established"));
 
         let tetgen = fs::read_to_string(case_dir.join("aeroforge_tetgen_handoff.tsv")).unwrap();
-        assert!(tetgen.contains("format_version\t3"));
+        assert!(tetgen.contains("format_version\t4"));
         assert!(tetgen.contains("contract\tvalidated_external_tetgen_handoff"));
         assert!(tetgen.contains("body_fitted_status\tnot_established"));
         assert!(tetgen.contains("engineering_quality_status\tnot_established"));
+        assert!(tetgen.contains("source_clearance_minimum_clearance\t0.000000001"));
+        assert!(tetgen.contains("source_clearance_max_triangle_pair_tests\t20000000"));
+        assert!(tetgen.contains("source_clearance_triangle_pair_tests\t0"));
+        assert!(tetgen.contains("source_clearance_body_pair_count\t0"));
         assert!(tetgen.contains("tetra_overlap_max_pair_tests\t20000000"));
         assert!(tetgen.contains("tetra_overlap_cells\t"));
         assert!(tetgen.contains("tetra_overlap_broad_phase_pair_tests\t"));
