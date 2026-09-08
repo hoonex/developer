@@ -56,17 +56,16 @@ impl From<PrepareValidatedExteriorCaseError> for PrepareTetgenValidatedExteriorC
 ///
 /// In addition to the generic validated-exterior sidecar, this path persists the exact deterministic
 /// `.poly` supplied to TetGen plus a bounded metadata manifest covering the explicit hole-seed,
-/// source inter-body clearance, containment, tetrahedral-overlap, source/body-boundary normal and
-/// sharp-crease feature-edge policies/reports, process exit/switch contract, parser counts and
-/// tetrahedron reorientation count. Raw stdout/stderr are intentionally not persisted because
-/// external tools can emit unbounded text; their byte counts are recorded while the in-memory
-/// handoff retains the content.
+/// source inter-body clearance, containment, tetrahedral-overlap, source/body-boundary normal,
+/// sharp-crease feature-edge, and triangulated discrete normal-variation policies/reports, process
+/// exit/switch contract, parser counts and tetrahedron reorientation count. Raw stdout/stderr are
+/// intentionally not persisted because external tools can emit unbounded text; their byte counts
+/// are recorded while the in-memory handoff retains the content.
 ///
 /// The manifest keeps `body_fitted_status=not_established` and
 /// `engineering_quality_status=not_established`. Passing the current gates must not silently promote
-/// either claim, and feature-edge evidence does not establish smooth-curvature or CAD-feature
-/// preservation. Discrete normal-variation evidence is owned in memory after its separate handoff
-/// gate but is intentionally not persisted until the provenance format is versioned separately.
+/// either claim. Sharp-crease and discrete normal-variation evidence do not establish continuous
+/// curvature or CAD-feature preservation.
 pub fn prepare_tetgen_validated_exterior_su2_case_directory(
     root: &Path,
     case_directory_name: &str,
@@ -153,7 +152,7 @@ pub(crate) fn render_tetgen_handoff_provenance(
     let mut output = format!(
         concat!(
             "key\tvalue\n",
-            "format_version\t5\n",
+            "format_version\t6\n",
             "contract\tvalidated_external_tetgen_handoff\n",
             "source_scene_object_ids\t{}\n",
             "body_fitted_status\tnot_established\n",
@@ -199,6 +198,16 @@ pub(crate) fn render_tetgen_handoff_provenance(
             "source_feature_max_edge_pair_tests\t{}\n",
             "source_feature_edge_pair_tests\t{}\n",
             "source_feature_body_count\t{}\n",
+            "source_normal_variation_minimum_angle_radians\t{}\n",
+            "source_normal_variation_sharp_cutoff_radians\t{}\n",
+            "source_normal_variation_distance_tolerance\t{}\n",
+            "source_normal_variation_minimum_direction_alignment_cosine\t{}\n",
+            "source_normal_variation_maximum_dihedral_angle_difference_radians\t{}\n",
+            "source_normal_variation_max_edge_pair_tests_per_pass\t{}\n",
+            "source_normal_variation_variation_edge_pair_tests\t{}\n",
+            "source_normal_variation_sharp_edge_pair_tests\t{}\n",
+            "source_normal_variation_total_edge_pair_tests\t{}\n",
+            "source_normal_variation_body_count\t{}\n",
             "parsed_input_node_id_count\t{}\n",
             "parsed_tetrahedron_id_count\t{}\n",
             "parsed_boundary_face_id_count\t{}\n",
@@ -246,6 +255,20 @@ pub(crate) fn render_tetgen_handoff_provenance(
         handoff.feature_policy.max_edge_pair_tests,
         handoff.feature_edges.edge_pair_tests,
         handoff.feature_edges.bodies.len(),
+        handoff.normal_variation_policy.minimum_variation_angle_radians,
+        handoff.normal_variation_policy.sharp_feature_cutoff_radians,
+        handoff.normal_variation_policy.distance_tolerance,
+        handoff
+            .normal_variation_policy
+            .minimum_direction_alignment_cosine,
+        handoff
+            .normal_variation_policy
+            .maximum_dihedral_angle_difference_radians,
+        handoff.normal_variation_policy.max_edge_pair_tests_per_pass,
+        handoff.normal_variation.variation.edge_pair_tests,
+        handoff.normal_variation.sharp.edge_pair_tests,
+        handoff.normal_variation.total_edge_pair_tests,
+        handoff.normal_variation.bodies.len(),
         handoff.input_node_ids.len(),
         handoff.tetrahedron_ids.len(),
         handoff.boundary_face_ids.len(),
@@ -321,6 +344,55 @@ pub(crate) fn render_tetgen_handoff_provenance(
             body.min_boundary_to_source_direction_alignment_cosine,
             body.max_source_to_boundary_dihedral_angle_difference_radians,
             body.max_boundary_to_source_dihedral_angle_difference_radians,
+            index = index,
+        ));
+    }
+    for (index, body) in handoff.normal_variation.bodies.iter().enumerate() {
+        let variation = &handoff.normal_variation.variation.bodies[index];
+        let sharp = &handoff.normal_variation.sharp.bodies[index];
+        debug_assert_eq!(variation.scene_object_id, body.scene_object_id);
+        debug_assert_eq!(sharp.scene_object_id, body.scene_object_id);
+        output.push_str(&format!(
+            concat!(
+                "source_normal_variation_body_{index}_scene_object_id\t{}\n",
+                "source_normal_variation_body_{index}_source_variation_edge_count\t{}\n",
+                "source_normal_variation_body_{index}_boundary_variation_edge_count\t{}\n",
+                "source_normal_variation_body_{index}_source_sharp_edge_count\t{}\n",
+                "source_normal_variation_body_{index}_boundary_sharp_edge_count\t{}\n",
+                "source_normal_variation_body_{index}_source_sub_sharp_variation_edge_count\t{}\n",
+                "source_normal_variation_body_{index}_boundary_sub_sharp_variation_edge_count\t{}\n",
+                "source_normal_variation_body_{index}_variation_max_source_to_boundary_midpoint_distance\t{}\n",
+                "source_normal_variation_body_{index}_variation_max_boundary_to_source_midpoint_distance\t{}\n",
+                "source_normal_variation_body_{index}_variation_min_source_to_boundary_direction_alignment_cosine\t{}\n",
+                "source_normal_variation_body_{index}_variation_min_boundary_to_source_direction_alignment_cosine\t{}\n",
+                "source_normal_variation_body_{index}_variation_max_source_to_boundary_dihedral_angle_difference_radians\t{}\n",
+                "source_normal_variation_body_{index}_variation_max_boundary_to_source_dihedral_angle_difference_radians\t{}\n",
+                "source_normal_variation_body_{index}_sharp_max_source_to_boundary_midpoint_distance\t{}\n",
+                "source_normal_variation_body_{index}_sharp_max_boundary_to_source_midpoint_distance\t{}\n",
+                "source_normal_variation_body_{index}_sharp_min_source_to_boundary_direction_alignment_cosine\t{}\n",
+                "source_normal_variation_body_{index}_sharp_min_boundary_to_source_direction_alignment_cosine\t{}\n",
+                "source_normal_variation_body_{index}_sharp_max_source_to_boundary_dihedral_angle_difference_radians\t{}\n",
+                "source_normal_variation_body_{index}_sharp_max_boundary_to_source_dihedral_angle_difference_radians\t{}\n"
+            ),
+            body.scene_object_id,
+            body.source_variation_edge_count,
+            body.boundary_variation_edge_count,
+            body.source_sharp_edge_count,
+            body.boundary_sharp_edge_count,
+            body.source_sub_sharp_variation_edge_count,
+            body.boundary_sub_sharp_variation_edge_count,
+            variation.max_source_to_boundary_midpoint_distance,
+            variation.max_boundary_to_source_midpoint_distance,
+            variation.min_source_to_boundary_direction_alignment_cosine,
+            variation.min_boundary_to_source_direction_alignment_cosine,
+            variation.max_source_to_boundary_dihedral_angle_difference_radians,
+            variation.max_boundary_to_source_dihedral_angle_difference_radians,
+            sharp.max_source_to_boundary_midpoint_distance,
+            sharp.max_boundary_to_source_midpoint_distance,
+            sharp.min_source_to_boundary_direction_alignment_cosine,
+            sharp.min_boundary_to_source_direction_alignment_cosine,
+            sharp.max_source_to_boundary_dihedral_angle_difference_radians,
+            sharp.max_boundary_to_source_dihedral_angle_difference_radians,
             index = index,
         ));
     }
@@ -591,7 +663,7 @@ mod tests {
     fn tetgen_manifest_retains_explicit_policy_and_non_claims() {
         let handoff = synthetic_tetgen_handoff();
         let text = render_tetgen_handoff_provenance(&handoff);
-        assert!(text.contains("format_version\t5"));
+        assert!(text.contains("format_version\t6"));
         assert!(text.contains("contract\tvalidated_external_tetgen_handoff"));
         assert!(text.contains("body_fitted_status\tnot_established"));
         assert!(text.contains("engineering_quality_status\tnot_established"));
@@ -627,9 +699,23 @@ mod tests {
         assert!(text.contains("source_feature_body_0_boundary_feature_edge_count\t6"));
         assert!(text.contains("source_feature_body_0_min_source_to_boundary_direction_alignment_cosine\t1"));
         assert!(text.contains("source_feature_body_0_max_source_to_boundary_dihedral_angle_difference_radians\t0"));
+        assert!(text.contains("source_normal_variation_minimum_angle_radians\t0.1"));
+        assert!(text.contains("source_normal_variation_sharp_cutoff_radians\t0.5"));
+        assert!(text.contains("source_normal_variation_distance_tolerance\t0.000001"));
+        assert!(text.contains("source_normal_variation_minimum_direction_alignment_cosine\t0.999999"));
+        assert!(text.contains("source_normal_variation_maximum_dihedral_angle_difference_radians\t0.000001"));
+        assert!(text.contains("source_normal_variation_max_edge_pair_tests_per_pass\t1000"));
+        assert!(text.contains("source_normal_variation_variation_edge_pair_tests\t72"));
+        assert!(text.contains("source_normal_variation_sharp_edge_pair_tests\t72"));
+        assert!(text.contains("source_normal_variation_total_edge_pair_tests\t144"));
+        assert!(text.contains("source_normal_variation_body_count\t1"));
+        assert!(text.contains("source_normal_variation_body_0_scene_object_id\t42"));
+        assert!(text.contains("source_normal_variation_body_0_source_variation_edge_count\t6"));
+        assert!(text.contains("source_normal_variation_body_0_source_sub_sharp_variation_edge_count\t0"));
+        assert!(text.contains("source_normal_variation_body_0_variation_min_source_to_boundary_direction_alignment_cosine\t1"));
+        assert!(text.contains("source_normal_variation_body_0_sharp_max_source_to_boundary_dihedral_angle_difference_radians\t0"));
         assert!(text.contains("hole_seed_0_scene_object_id\t42"));
         assert!(text.contains("reoriented_tetrahedra\t1"));
-        assert!(!text.contains("source_normal_variation_"));
     }
 
     #[test]
@@ -689,7 +775,10 @@ mod tests {
         assert!(manifest.contains("source_feature_max_edge_pair_tests\t1000"));
         assert!(manifest.contains("source_feature_edge_pair_tests\t72"));
         assert!(manifest.contains("source_feature_body_0_scene_object_id\t42"));
-        assert!(!manifest.contains("source_normal_variation_"));
+        assert!(manifest.contains("source_normal_variation_minimum_angle_radians\t0.1"));
+        assert!(manifest.contains("source_normal_variation_total_edge_pair_tests\t144"));
+        assert!(manifest.contains("source_normal_variation_body_0_scene_object_id\t42"));
+        assert!(manifest.contains("source_normal_variation_body_0_source_sub_sharp_variation_edge_count\t0"));
 
         let second = persist_tetgen_handoff_files(result.clone(), &handoff).unwrap_err();
         assert!(matches!(second, PrepareTetgenValidatedExteriorCaseError::Provenance(_)));
