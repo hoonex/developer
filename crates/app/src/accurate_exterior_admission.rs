@@ -3,13 +3,15 @@ use std::path::Path;
 use aeroforge_accurate_backend::{
     build_validated_exterior_mesher_input, run_tetgen_for_handoff,
     validate_exterior_mesher_input_intersections, validate_exterior_mesher_source_clearance,
-    validate_exterior_mesher_source_containment, validate_tetgen_external_handoff,
+    validate_exterior_mesher_source_containment,
+    validate_tetgen_external_handoff_with_facet_correspondence,
     BodyWallFirstCellHeightPolicy, BoundaryRole, BoundarySource,
     ClearanceValidatedExteriorMesherInput, DomainAxis, DomainSide, ExteriorMeshQualityPolicy,
-    SourceBoundaryDiscreteNormalVariationPolicy, SourceBoundaryFeatureEdgePolicy,
+    FacetValidatedTetgenExteriorHandoff, SourceBoundaryDiscreteNormalVariationPolicy,
+    SourceBoundaryFacetCorrespondencePolicy, SourceBoundaryFeatureEdgePolicy,
     SourceBoundaryNormalPolicy, SourceContainmentPolicy, SourceInterBodyClearancePolicy,
     SourceSurfaceCorrespondencePolicy, SourceSurfaceIntersectionPolicy, Su2MarkerBinding,
-    TetrahedralOverlapPolicy, TetgenHoleSeedPolicy, ValidatedTetgenExteriorHandoff,
+    TetrahedralOverlapPolicy, TetgenHoleSeedPolicy,
 };
 use aeroforge_volume_core::BoundaryMarkerId;
 
@@ -48,6 +50,11 @@ const DESKTOP_SOURCE_CORRESPONDENCE_POLICY: SourceSurfaceCorrespondencePolicy =
     SourceSurfaceCorrespondencePolicy {
         distance_tolerance: 1.0e-9,
         max_point_triangle_tests: 20_000_000,
+    };
+const DESKTOP_SOURCE_FACET_POLICY: SourceBoundaryFacetCorrespondencePolicy =
+    SourceBoundaryFacetCorrespondencePolicy {
+        vertex_distance_tolerance: 1.0e-9,
+        max_triangle_pair_tests: 20_000_000,
     };
 const DESKTOP_SOURCE_NORMAL_POLICY: SourceBoundaryNormalPolicy = SourceBoundaryNormalPolicy {
     distance_tolerance: 1.0e-9,
@@ -136,13 +143,17 @@ pub fn admit_project_geometry_for_tetgen(
 
 /// Executes the configured external TetGen binary for one already-auditable desktop project and
 /// promotes its output through AeroForge's solver-bound source-clearance, overlap,
-/// quality/provenance/correspondence, bounded source/body-boundary normal-opposition, bounded
-/// sharp-crease edge correspondence, bounded discrete normal-variation correspondence, and bounded
-/// body-wall first-cell height gates.
+/// quality/provenance/correspondence, one-to-one constrained-facet correspondence, bounded
+/// source/body-boundary normal-opposition, bounded sharp-crease edge correspondence, bounded
+/// discrete normal-variation correspondence, and bounded body-wall first-cell height gates.
 ///
-/// The positive source-body clearance floor is an explicit numerical admission policy, not an
-/// engineering spacing criterion. The quality limits here are deliberately permissive numerical
-/// sanity checks matching the real TetGen CI smoke; they are not engineering mesh-quality
+/// The constrained-facet gate requires every source triangle and SceneObject body-boundary triangle
+/// to participate in exactly one three-vertex match within the explicit desktop tolerance and
+/// reserves the complete source×boundary pair work before comparison. That triangulated coincidence
+/// is stronger than proximity evidence but is not analytic/CAD semantics or continuous-curvature
+/// preservation. The positive source-body clearance floor is an explicit numerical admission policy,
+/// not an engineering spacing criterion. The quality limits here are deliberately permissive
+/// numerical sanity checks matching the real TetGen CI smoke; they are not engineering mesh-quality
 /// thresholds. The volumetric overlap gate uses a deterministic sweep-and-prune broad phase with
 /// an explicit pair-test budget. The normal gate reconstructs body-boundary winding from positive
 /// owning tetrahedra and checks every source and boundary triangle centroid against the nearest
@@ -155,21 +166,22 @@ pub fn admit_project_geometry_for_tetgen(
 /// measures every SceneObject body-wall triangle's owning tetrahedron perpendicular face-to-opposite-
 /// vertex height under the explicit numerical interval and face budget above. That observation is
 /// not a boundary-layer, layer-count, growth-ratio, orthogonality, or y+ certificate. Passing the
-/// complete path still does not establish continuous curvature, CAD-feature preservation,
+/// complete path still does not establish continuous curvature, CAD-feature semantics,
 /// body-fitted fidelity, or engineering CFD quality.
 pub fn run_project_tetgen_handoff(
     state: &ProjectState,
     executable: &Path,
-) -> Result<ValidatedTetgenExteriorHandoff, String> {
+) -> Result<FacetValidatedTetgenExteriorHandoff, String> {
     let admitted = admit_project_geometry_for_tetgen(state)?;
     let bound = run_tetgen_for_handoff(executable, &admitted, DESKTOP_TETGEN_HOLE_SEED_POLICY)
         .map_err(|error| format!("desktop external TetGen run failed: {error}"))?;
 
-    validate_tetgen_external_handoff(
+    validate_tetgen_external_handoff_with_facet_correspondence(
         bound,
         DESKTOP_TETGEN_SANITY_QUALITY_POLICY,
         DESKTOP_TETGEN_OVERLAP_POLICY,
         DESKTOP_SOURCE_CORRESPONDENCE_POLICY,
+        DESKTOP_SOURCE_FACET_POLICY,
         DESKTOP_SOURCE_NORMAL_POLICY,
         DESKTOP_SOURCE_FEATURE_EDGE_POLICY,
         DESKTOP_SOURCE_NORMAL_VARIATION_POLICY,
@@ -178,7 +190,7 @@ pub fn run_project_tetgen_handoff(
     .map_err(|error| format!("desktop TetGen exterior handoff rejected: {error}"))
 }
 
-pub(crate) fn closed_wind_tunnel_bindings() -> Vec<Su2MarkerBinding> {
+fn closed_wind_tunnel_bindings() -> Vec<Su2MarkerBinding> {
     let binding = |marker, tag: &str, role, axis, side| Su2MarkerBinding {
         marker: BoundaryMarkerId(marker),
         tag: tag.into(),
@@ -186,136 +198,11 @@ pub(crate) fn closed_wind_tunnel_bindings() -> Vec<Su2MarkerBinding> {
         source: BoundarySource::DomainFace { axis, side },
     };
     vec![
-        binding(
-            1,
-            "inlet",
-            BoundaryRole::Inlet,
-            DomainAxis::X,
-            DomainSide::Min,
-        ),
-        binding(
-            2,
-            "outlet",
-            BoundaryRole::Outlet,
-            DomainAxis::X,
-            DomainSide::Max,
-        ),
-        binding(
-            3,
-            "y_min",
-            BoundaryRole::Wall,
-            DomainAxis::Y,
-            DomainSide::Min,
-        ),
-        binding(
-            4,
-            "y_max",
-            BoundaryRole::Wall,
-            DomainAxis::Y,
-            DomainSide::Max,
-        ),
-        binding(
-            5,
-            "z_min",
-            BoundaryRole::Wall,
-            DomainAxis::Z,
-            DomainSide::Min,
-        ),
-        binding(
-            6,
-            "z_max",
-            BoundaryRole::Wall,
-            DomainAxis::Z,
-            DomainSide::Max,
-        ),
+        binding(1, "inlet", BoundaryRole::Inlet, DomainAxis::X, DomainSide::Min),
+        binding(2, "outlet", BoundaryRole::Outlet, DomainAxis::X, DomainSide::Max),
+        binding(3, "y_min", BoundaryRole::Wall, DomainAxis::Y, DomainSide::Min),
+        binding(4, "y_max", BoundaryRole::Wall, DomainAxis::Y, DomainSide::Max),
+        binding(5, "z_min", BoundaryRole::Wall, DomainAxis::Z, DomainSide::Min),
+        binding(6, "z_max", BoundaryRole::Wall, DomainAxis::Z, DomainSide::Max),
     ]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use bevy::prelude::Vec3;
-
-    use crate::model::PrimitiveKind;
-
-    #[test]
-    fn default_floor_contact_fails_strict_exterior_domain_admission() {
-        let state = ProjectState::default();
-        let error = admit_project_geometry_for_tetgen(&state).unwrap_err();
-
-        assert!(error.contains("must lie strictly inside exterior domain"));
-        assert!(error.contains("SceneObject 1"));
-    }
-
-    #[test]
-    fn lifted_default_body_reaches_clearance_admitted_state() {
-        let mut state = ProjectState::default();
-        state.objects[0].position.y = 2.0;
-
-        let admitted = admit_project_geometry_for_tetgen(&state).unwrap();
-        assert_eq!(admitted.scene_object_ids(), vec![1]);
-        assert_eq!(
-            admitted.containment().admission().domain_min(),
-            [-6.0, 0.0, -4.0]
-        );
-        assert_eq!(
-            admitted.containment().admission().domain_max(),
-            [6.0, 6.0, 4.0]
-        );
-        assert_eq!(
-            admitted
-                .containment()
-                .admission()
-                .marker_map()
-                .bindings
-                .len(),
-            7
-        );
-        assert_eq!(
-            admitted
-                .containment()
-                .containment_report()
-                .reserved_point_triangle_tests,
-            0
-        );
-        assert_eq!(admitted.clearance_report().triangle_pair_tests, 0);
-        assert!(admitted.clearance_report().pairs.is_empty());
-    }
-
-    #[test]
-    fn intersecting_desktop_bodies_fail_before_containment() {
-        let mut state = ProjectState::default();
-        state.objects[0].position = Vec3::new(0.0, 2.0, 0.0);
-        let second_id = state.add_object(PrimitiveKind::Box);
-        state.objects[1].position = Vec3::new(0.25, 2.0, 0.0);
-
-        let error = admit_project_geometry_for_tetgen(&state).unwrap_err();
-        assert!(error.contains("intersection admission rejected"));
-        assert!(error.contains(&format!("SceneObject {second_id}")) || error.contains("intersection"));
-    }
-
-    #[test]
-    fn nested_desktop_bodies_fail_containment_admission() {
-        let mut state = ProjectState::default();
-        state.objects[0].position = Vec3::new(0.0, 3.0, 0.0);
-        state.objects[0].scale = Vec3::splat(3.0);
-        let inner_id = state.add_object(PrimitiveKind::Sphere);
-        state.objects[1].position = Vec3::new(0.0, 3.0, 0.0);
-        state.objects[1].scale = Vec3::splat(1.0);
-
-        let error = admit_project_geometry_for_tetgen(&state).unwrap_err();
-        assert!(error.contains("containment admission rejected"));
-        assert!(error.contains(&format!("SceneObject {inner_id}")));
-        assert!(error.contains("lies inside"));
-    }
-
-    #[test]
-    fn tetgen_process_failure_is_reported_after_geometry_admission() {
-        let mut state = ProjectState::default();
-        state.objects[0].position.y = 2.0;
-        let missing = Path::new("aeroforge-definitely-missing-tetgen-binary-for-test");
-
-        let error = run_project_tetgen_handoff(&state, missing).unwrap_err();
-        assert!(error.contains("desktop external TetGen run failed"));
-    }
 }

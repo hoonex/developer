@@ -27,14 +27,13 @@ pub(crate) fn snapshot_project_state(state: &ProjectState) -> ProjectState {
 /// Discovery is explicit: AeroForge uses `TETGEN_EXECUTABLE` or PATH and never downloads/bundles
 /// TetGen. Successful output has already passed strict source admission including bounded positive
 /// source-body clearance, external process parsing, bounded volumetric tetrahedral-overlap
-/// validation, local tetrahedron sanity quality, bounded source correspondence, bounded
-/// source/body-boundary normal-opposition validation, bounded sharp-crease feature-edge
-/// correspondence, bounded triangulated discrete normal-variation correspondence, and bounded
-/// body-wall first-cell geometric-height validation. The returned `AccuratePreparedCase` still
-/// records body-fitted and engineering-quality status as not established and forces TetGen-specific
-/// provenance persistence later. Sharp-crease, discrete normal-variation, and first-cell-height
-/// evidence do not establish continuous-curvature/CAD-feature preservation, a boundary-layer mesh,
-/// y+, or engineering near-wall adequacy.
+/// validation, local tetrahedron sanity quality, bounded source correspondence, one-to-one
+/// constrained source/body facet correspondence, bounded source/body-boundary normal-opposition,
+/// bounded sharp-crease feature-edge correspondence, bounded triangulated discrete normal-variation
+/// correspondence, and bounded body-wall first-cell geometric-height validation. The returned
+/// `AccuratePreparedCase` owns the facet-promoted handoff while body-fitted and engineering-quality
+/// status remain not established. The current sidecar remains v7 until the following dedicated
+/// facet-persistence slice; in-memory ownership is not treated as persisted evidence yet.
 pub(crate) fn prepare_tetgen_from_state(
     state: &ProjectState,
     settings: &AccurateSettings,
@@ -45,10 +44,10 @@ pub(crate) fn prepare_tetgen_from_state(
     })?;
 
     let handoff = run_project_tetgen_handoff(state, &executable)?;
-    let scene_ids = handoff.handoff.exterior.scene_object_ids.clone();
-    let points = handoff.handoff.mesh.points.len();
-    let tetrahedra = handoff.handoff.mesh.cells.len();
-    let boundary_triangles = handoff.handoff.mesh.boundary.len();
+    let scene_ids = handoff.handoff.handoff.exterior.scene_object_ids.clone();
+    let points = handoff.handoff.handoff.mesh.points.len();
+    let tetrahedra = handoff.handoff.handoff.mesh.cells.len();
+    let boundary_triangles = handoff.handoff.handoff.mesh.boundary.len();
 
     let (case, coefficient_reference) = solver_case_for_scene_ids(state, settings, &scene_ids);
     let prepared_case =
@@ -204,6 +203,7 @@ mod tests {
         assert!(tetgen.contains("body_wall_first_cell_body_0_minimum_height\t"));
         assert!(tetgen.contains("body_wall_first_cell_body_0_maximum_height\t"));
         assert!(tetgen.contains("body_wall_first_cell_body_0_mean_height\t"));
+        assert!(!tetgen.contains("source_facet_"));
         assert!(case_dir.join("aeroforge_tetgen_input.poly").is_file());
 
         let fidelity = fs::read_to_string(case_dir.join("aeroforge_mesh_fidelity.tsv")).unwrap();

@@ -4,18 +4,17 @@ use aeroforge_accurate_backend::{
     build_validated_exterior_su2_case_bundle_with_reference,
     prepare_generated_su2_case_directory_with_fidelity,
     prepare_tetgen_validated_exterior_su2_case_directory_with_reference,
-    GeneratedSu2CaseBundle, PreparedGeneratedSu2Case, Su2Case, Su2CoefficientReference,
-    Su2MeshFidelity, ValidatedTetgenExteriorHandoff,
+    FacetValidatedTetgenExteriorHandoff, GeneratedSu2CaseBundle, PreparedGeneratedSu2Case,
+    Su2Case, Su2CoefficientReference, Su2MeshFidelity,
 };
 
 /// One in-memory Accurate-mode case together with the provenance required to persist it honestly.
 ///
 /// The staircase path stores only the already-rendered generated bundle and is always persisted as
 /// `StaircaseVoxelDerived`. The validated TetGen path retains the solver case, explicit coefficient
-/// reference and the complete validated external-TetGen handoff; persistence is forced through the
-/// TetGen-specific sidecar path. This makes it impossible for callers using this type to label a
-/// validated TetGen case as staircase geometry or to persist TetGen mesh/config text without its
-/// retained admission/process/correspondence evidence.
+/// reference and the facet-promoted validated external-TetGen handoff. The current persistence call
+/// still consumes the nested validated TetGen handoff; the facet evidence remains owned in memory
+/// until the dedicated facet provenance schema is promoted in the following persistence slice.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AccuratePreparedCase {
     Staircase {
@@ -25,7 +24,7 @@ pub enum AccuratePreparedCase {
         bundle: GeneratedSu2CaseBundle,
         case: Su2Case,
         coefficient_reference: Su2CoefficientReference,
-        handoff: ValidatedTetgenExteriorHandoff,
+        handoff: FacetValidatedTetgenExteriorHandoff,
     },
 }
 
@@ -34,16 +33,16 @@ impl AccuratePreparedCase {
         Self::Staircase { bundle }
     }
 
-    /// Constructs the solver-visible bundle from the authoritative validated handoff instead of
-    /// accepting independent TetGen mesh/config text from the caller.
+    /// Constructs the solver-visible bundle from the authoritative facet-promoted validated handoff
+    /// instead of accepting independent TetGen mesh/config text from the caller.
     pub fn validated_tetgen(
         case: Su2Case,
         coefficient_reference: Su2CoefficientReference,
-        handoff: ValidatedTetgenExteriorHandoff,
+        handoff: FacetValidatedTetgenExteriorHandoff,
     ) -> Result<Self, String> {
         let bundle = build_validated_exterior_su2_case_bundle_with_reference(
             &case,
-            &handoff.handoff,
+            &handoff.handoff.handoff,
             Some(&coefficient_reference),
         )
         .map_err(|error| format!("validated TetGen SU2 bundle generation failed: {error}"))?;
@@ -75,9 +74,10 @@ impl AccuratePreparedCase {
 
     /// Persists through the provenance path dictated by the variant.
     ///
-    /// TetGen persistence rebuilds the exact solver bundle from the retained `Su2Case` and
-    /// validated handoff and writes the generic exterior + TetGen-specific evidence sidecars. The
-    /// in-memory `bundle` is therefore never sufficient by itself to persist the TetGen variant.
+    /// TetGen persistence currently rebuilds the exact solver bundle from the retained `Su2Case`
+    /// and nested validated handoff and writes the generic exterior + TetGen v7 evidence sidecars.
+    /// The outer facet evidence remains owned by this value and is promoted to persisted provenance
+    /// by the dedicated facet-persistence slice rather than being silently dropped from its claim.
     pub fn persist(
         &self,
         root: &Path,
@@ -100,7 +100,7 @@ impl AccuratePreparedCase {
                 root,
                 case_directory_name,
                 case,
-                handoff,
+                &handoff.handoff,
                 Some(coefficient_reference),
             )
             .map_err(|error| format!("failed to persist validated TetGen SU2 case: {error}")),
