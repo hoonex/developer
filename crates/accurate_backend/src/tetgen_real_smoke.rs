@@ -13,6 +13,7 @@ use crate::source_containment::{
     validate_exterior_mesher_source_containment, SourceContainmentPolicy,
 };
 use crate::source_intersection::SourceSurfaceIntersectionPolicy;
+use crate::source_normal_alignment::SourceBoundaryNormalPolicy;
 use crate::su2_mesh::{
     BoundaryRole, BoundarySource, DomainAxis, DomainSide, Su2MarkerBinding,
 };
@@ -141,6 +142,11 @@ fn configured_real_tetgen_reaches_validated_handoff() {
             distance_tolerance: 1.0e-9,
             max_point_triangle_tests: 10_000_000,
         },
+        SourceBoundaryNormalPolicy {
+            distance_tolerance: 1.0e-9,
+            minimum_opposition_cosine: 0.999_999,
+            max_triangle_pair_tests: 10_000_000,
+        },
     )
     .unwrap();
 
@@ -153,4 +159,8 @@ fn configured_real_tetgen_reaches_validated_handoff() {
     assert!(handoff.reoriented_tetrahedra <= handoff.tetrahedron_ids.len());
     assert_eq!(handoff.handoff.correspondence.bodies.len(), 1);
     assert_eq!(handoff.handoff.correspondence.bodies[0].scene_object_id, 42);
+    assert_eq!(handoff.normal_alignment.bodies.len(), 1);
+    assert_eq!(handoff.normal_alignment.bodies[0].scene_object_id, 42);
+    assert!(handoff.normal_alignment.bodies[0].min_source_to_boundary_opposition_cosine > 0.999_999_999);
+    assert!(handoff.normal_alignment.bodies[0].min_boundary_to_source_opposition_cosine > 0.999_999_999);
 }
