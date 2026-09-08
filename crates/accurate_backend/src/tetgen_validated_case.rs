@@ -56,10 +56,10 @@ impl From<PrepareValidatedExteriorCaseError> for PrepareTetgenValidatedExteriorC
 ///
 /// In addition to the generic validated-exterior sidecar, this path persists the exact deterministic
 /// `.poly` supplied to TetGen plus a bounded metadata manifest covering the explicit hole-seed,
-/// containment and tetrahedral-overlap policies/reports, process exit/switch contract, parser counts
-/// and tetrahedron reorientation count. Raw stdout/stderr are intentionally not persisted because
-/// external tools can emit unbounded text; their byte counts are recorded while the in-memory
-/// handoff retains the content.
+/// containment, tetrahedral-overlap and source/body-boundary normal policies/reports, process
+/// exit/switch contract, parser counts and tetrahedron reorientation count. Raw stdout/stderr are
+/// intentionally not persisted because external tools can emit unbounded text; their byte counts
+/// are recorded while the in-memory handoff retains the content.
 ///
 /// The manifest keeps `body_fitted_status=not_established` and
 /// `engineering_quality_status=not_established`. Passing the current gates must not silently promote
@@ -150,7 +150,7 @@ pub(crate) fn render_tetgen_handoff_provenance(
     let mut output = format!(
         concat!(
             "key\tvalue\n",
-            "format_version\t2\n",
+            "format_version\t3\n",
             "contract\tvalidated_external_tetgen_handoff\n",
             "source_scene_object_ids\t{}\n",
             "body_fitted_status\tnot_established\n",
@@ -180,6 +180,11 @@ pub(crate) fn render_tetgen_handoff_provenance(
             "tetra_overlap_broad_phase_pair_tests\t{}\n",
             "tetra_overlap_aabb_candidate_pairs\t{}\n",
             "tetra_overlap_sat_pair_tests\t{}\n",
+            "source_normal_distance_tolerance\t{}\n",
+            "source_normal_minimum_opposition_cosine\t{}\n",
+            "source_normal_max_triangle_pair_tests\t{}\n",
+            "source_normal_triangle_pair_tests\t{}\n",
+            "source_normal_body_count\t{}\n",
             "parsed_input_node_id_count\t{}\n",
             "parsed_tetrahedron_id_count\t{}\n",
             "parsed_boundary_face_id_count\t{}\n",
@@ -211,6 +216,11 @@ pub(crate) fn render_tetgen_handoff_provenance(
         handoff.overlap.broad_phase_pair_tests,
         handoff.overlap.aabb_candidate_pairs,
         handoff.overlap.sat_pair_tests,
+        handoff.normal_policy.distance_tolerance,
+        handoff.normal_policy.minimum_opposition_cosine,
+        handoff.normal_policy.max_triangle_pair_tests,
+        handoff.normal_alignment.triangle_pair_tests,
+        handoff.normal_alignment.bodies.len(),
         handoff.input_node_ids.len(),
         handoff.tetrahedron_ids.len(),
         handoff.boundary_face_ids.len(),
@@ -224,6 +234,26 @@ pub(crate) fn render_tetgen_handoff_provenance(
             seed.source_triangle,
             seed.inward_offset,
             seed.attempts,
+        ));
+    }
+    for (index, body) in handoff.normal_alignment.bodies.iter().enumerate() {
+        output.push_str(&format!(
+            concat!(
+                "source_normal_body_{index}_scene_object_id\t{}\n",
+                "source_normal_body_{index}_source_triangle_count\t{}\n",
+                "source_normal_body_{index}_boundary_triangle_count\t{}\n",
+                "source_normal_body_{index}_max_source_to_boundary_centroid_distance\t{}\n",
+                "source_normal_body_{index}_max_boundary_to_source_centroid_distance\t{}\n",
+                "source_normal_body_{index}_min_source_to_boundary_opposition_cosine\t{}\n",
+                "source_normal_body_{index}_min_boundary_to_source_opposition_cosine\t{}\n"
+            ),
+            body.scene_object_id,
+            body.source_triangle_count,
+            body.boundary_triangle_count,
+            body.max_source_to_boundary_centroid_distance,
+            body.max_boundary_to_source_centroid_distance,
+            body.min_source_to_boundary_opposition_cosine,
+            body.min_boundary_to_source_opposition_cosine,
         ));
     }
     output
@@ -255,7 +285,7 @@ mod tests {
         SourceSurfaceIntersectionPolicy, SourceSurfaceIntersectionReport,
     };
     use crate::source_normal_alignment::{
-        SourceBoundaryNormalPolicy, SourceBoundaryNormalReport,
+        SourceBoundaryNormalBodyReport, SourceBoundaryNormalPolicy, SourceBoundaryNormalReport,
     };
     use crate::su2_mesh::{
         BoundaryRole, BoundarySource, DomainAxis, DomainSide, Su2MarkerBinding, Su2MarkerMap,
@@ -401,8 +431,16 @@ mod tests {
                 max_triangle_pair_tests: 1_000,
             },
             normal_alignment: SourceBoundaryNormalReport {
-                bodies: Vec::new(),
-                triangle_pair_tests: 0,
+                bodies: vec![SourceBoundaryNormalBodyReport {
+                    scene_object_id: 42,
+                    source_triangle_count: 4,
+                    boundary_triangle_count: 4,
+                    max_source_to_boundary_centroid_distance: 0.0,
+                    max_boundary_to_source_centroid_distance: 0.0,
+                    min_source_to_boundary_opposition_cosine: 1.0,
+                    min_boundary_to_source_opposition_cosine: 1.0,
+                }],
+                triangle_pair_tests: 32,
             },
             tetgen_stdout: "ok\n".into(),
             tetgen_stderr: String::new(),
@@ -419,7 +457,7 @@ mod tests {
     fn tetgen_manifest_retains_explicit_policy_and_non_claims() {
         let handoff = synthetic_tetgen_handoff();
         let text = render_tetgen_handoff_provenance(&handoff);
-        assert!(text.contains("format_version\t2"));
+        assert!(text.contains("format_version\t3"));
         assert!(text.contains("contract\tvalidated_external_tetgen_handoff"));
         assert!(text.contains("body_fitted_status\tnot_established"));
         assert!(text.contains("engineering_quality_status\tnot_established"));
@@ -432,6 +470,13 @@ mod tests {
         assert!(text.contains("tetra_overlap_broad_phase_pair_tests\t0"));
         assert!(text.contains("tetra_overlap_aabb_candidate_pairs\t0"));
         assert!(text.contains("tetra_overlap_sat_pair_tests\t0"));
+        assert!(text.contains("source_normal_distance_tolerance\t0.000001"));
+        assert!(text.contains("source_normal_minimum_opposition_cosine\t0.999999"));
+        assert!(text.contains("source_normal_max_triangle_pair_tests\t1000"));
+        assert!(text.contains("source_normal_triangle_pair_tests\t32"));
+        assert!(text.contains("source_normal_body_count\t1"));
+        assert!(text.contains("source_normal_body_0_scene_object_id\t42"));
+        assert!(text.contains("source_normal_body_0_min_source_to_boundary_opposition_cosine\t1"));
         assert!(text.contains("hole_seed_0_scene_object_id\t42"));
         assert!(text.contains("reoriented_tetrahedra\t1"));
     }
@@ -464,6 +509,8 @@ mod tests {
         assert!(manifest.contains("source_scene_object_ids\t42"));
         assert!(manifest.contains("tetgen_exit_code\t0"));
         assert!(manifest.contains("tetra_overlap_max_pair_tests\t10000"));
+        assert!(manifest.contains("source_normal_max_triangle_pair_tests\t1000"));
+        assert!(manifest.contains("source_normal_body_0_scene_object_id\t42"));
 
         let second = persist_tetgen_handoff_files(result.clone(), &handoff).unwrap_err();
         assert!(matches!(second, PrepareTetgenValidatedExteriorCaseError::Provenance(_)));

@@ -26,10 +26,10 @@ pub(crate) fn snapshot_project_state(state: &ProjectState) -> ProjectState {
 ///
 /// Discovery is explicit: AeroForge uses `TETGEN_EXECUTABLE` or PATH and never downloads/bundles
 /// TetGen. Successful output has already passed strict source admission, external process parsing,
-/// bounded volumetric tetrahedral-overlap validation, local tetrahedron sanity quality and bounded
-/// source correspondence. The returned `AccuratePreparedCase` still records body-fitted and
-/// engineering-quality status as not established and forces TetGen-specific provenance persistence
-/// later.
+/// bounded volumetric tetrahedral-overlap validation, local tetrahedron sanity quality, bounded
+/// source correspondence and bounded source/body-boundary normal-opposition validation. The
+/// returned `AccuratePreparedCase` still records body-fitted and engineering-quality status as not
+/// established and forces TetGen-specific provenance persistence later.
 pub(crate) fn prepare_tetgen_from_state(
     state: &ProjectState,
     settings: &AccurateSettings,
@@ -140,7 +140,7 @@ mod tests {
         assert!(exterior.contains("engineering_quality_status\tnot_established"));
 
         let tetgen = fs::read_to_string(case_dir.join("aeroforge_tetgen_handoff.tsv")).unwrap();
-        assert!(tetgen.contains("format_version\t2"));
+        assert!(tetgen.contains("format_version\t3"));
         assert!(tetgen.contains("contract\tvalidated_external_tetgen_handoff"));
         assert!(tetgen.contains("body_fitted_status\tnot_established"));
         assert!(tetgen.contains("engineering_quality_status\tnot_established"));
@@ -149,6 +149,14 @@ mod tests {
         assert!(tetgen.contains("tetra_overlap_broad_phase_pair_tests\t"));
         assert!(tetgen.contains("tetra_overlap_aabb_candidate_pairs\t"));
         assert!(tetgen.contains("tetra_overlap_sat_pair_tests\t"));
+        assert!(tetgen.contains("source_normal_distance_tolerance\t0.000000001"));
+        assert!(tetgen.contains("source_normal_minimum_opposition_cosine\t0.999999"));
+        assert!(tetgen.contains("source_normal_max_triangle_pair_tests\t20000000"));
+        assert!(tetgen.contains("source_normal_triangle_pair_tests\t"));
+        assert!(tetgen.contains("source_normal_body_count\t1"));
+        assert!(tetgen.contains("source_normal_body_0_scene_object_id\t1"));
+        assert!(tetgen.contains("source_normal_body_0_min_source_to_boundary_opposition_cosine\t"));
+        assert!(tetgen.contains("source_normal_body_0_min_boundary_to_source_opposition_cosine\t"));
         assert!(case_dir.join("aeroforge_tetgen_input.poly").is_file());
 
         let fidelity = fs::read_to_string(case_dir.join("aeroforge_mesh_fidelity.tsv")).unwrap();
