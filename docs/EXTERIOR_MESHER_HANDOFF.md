@@ -38,12 +38,16 @@ The validated exterior SU2 adapter consumes the `VolumeMesh` and `Su2MarkerMap` 
 
 `aeroforge_exterior_handoff.tsv`
 
-The sidecar is format version 1 and records the stable SceneObject IDs plus the exact validation policies and bounded observations that admitted the generic handoff:
+The sidecar is format version 2 and records the stable SceneObject IDs plus the exact validation policies and bounded observations that admitted the generic handoff:
 
-- quality minimum mean-ratio policy and observed minimum;
-- quality maximum edge-length-ratio policy and observed maximum;
+- quality minimum mean-ratio policy, observed minimum, and the cell index where that minimum occurred;
+- quality maximum edge-length-ratio policy, observed maximum, and the cell index where that maximum occurred;
+- the number of quality-audited tetrahedral cells;
 - source-intersection geometric epsilon, triangle-pair budget, executed pair count, and skipped shared-edge count;
-- source-correspondence distance tolerance, point/triangle budget, and executed comparison count.
+- source-correspondence distance tolerance, point/triangle budget, and executed comparison count; and
+- for every admitted body: SceneObject ID, source/boundary triangle counts, source/boundary sample counts, maximum source-to-boundary distance, and maximum boundary-to-source distance.
+
+The body records preserve the deterministic correspondence report order already owned by `ValidatedExteriorMesherHandoff`; they do not recover identity from marker strings or filenames.
 
 The sidecar is created with create-new semantics and `sync_all()`. If that write fails, the just-created case directory is removed and the validated prepare call fails rather than returning a prepared case with missing admission evidence.
 
