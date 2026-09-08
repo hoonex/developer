@@ -25,6 +25,7 @@ mod su2_mesh;
 mod surface_correspondence;
 mod tetra_overlap;
 mod tetgen_facet_handoff;
+mod tetgen_facet_validated_case;
 mod tetgen_handoff;
 mod tetgen_output;
 mod tetgen_plc;
@@ -161,6 +162,10 @@ pub use tetra_overlap::{
 pub use tetgen_facet_handoff::{
     validate_tetgen_external_handoff_with_facet_correspondence,
     FacetValidatedTetgenExteriorHandoff, FacetValidatedTetgenExteriorHandoffError,
+};
+pub use tetgen_facet_validated_case::{
+    prepare_facet_tetgen_validated_exterior_su2_case_directory,
+    prepare_facet_tetgen_validated_exterior_su2_case_directory_with_reference,
 };
 pub use tetgen_handoff::{
     run_tetgen_for_handoff, validate_tetgen_external_handoff, BoundTetgenExternalRun,

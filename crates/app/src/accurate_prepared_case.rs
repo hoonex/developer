@@ -2,19 +2,19 @@ use std::path::Path;
 
 use aeroforge_accurate_backend::{
     build_validated_exterior_su2_case_bundle_with_reference,
-    prepare_generated_su2_case_directory_with_fidelity,
-    prepare_tetgen_validated_exterior_su2_case_directory_with_reference,
-    FacetValidatedTetgenExteriorHandoff, GeneratedSu2CaseBundle, PreparedGeneratedSu2Case,
-    Su2Case, Su2CoefficientReference, Su2MeshFidelity,
+    prepare_facet_tetgen_validated_exterior_su2_case_directory_with_reference,
+    prepare_generated_su2_case_directory_with_fidelity, FacetValidatedTetgenExteriorHandoff,
+    GeneratedSu2CaseBundle, PreparedGeneratedSu2Case, Su2Case, Su2CoefficientReference,
+    Su2MeshFidelity,
 };
 
 /// One in-memory Accurate-mode case together with the provenance required to persist it honestly.
 ///
 /// The staircase path stores only the already-rendered generated bundle and is always persisted as
 /// `StaircaseVoxelDerived`. The validated TetGen path retains the solver case, explicit coefficient
-/// reference and the facet-promoted validated external-TetGen handoff. The current persistence call
-/// still consumes the nested validated TetGen handoff; the facet evidence remains owned in memory
-/// until the dedicated facet provenance schema is promoted in the following persistence slice.
+/// reference and the facet-promoted validated external-TetGen handoff; persistence is forced through
+/// the facet-aware TetGen v8 sidecar path so constrained-facet evidence cannot be dropped while the
+/// solver-visible mesh is retained.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AccuratePreparedCase {
     Staircase {
@@ -74,10 +74,9 @@ impl AccuratePreparedCase {
 
     /// Persists through the provenance path dictated by the variant.
     ///
-    /// TetGen persistence currently rebuilds the exact solver bundle from the retained `Su2Case`
-    /// and nested validated handoff and writes the generic exterior + TetGen v7 evidence sidecars.
-    /// The outer facet evidence remains owned by this value and is promoted to persisted provenance
-    /// by the dedicated facet-persistence slice rather than being silently dropped from its claim.
+    /// TetGen persistence rebuilds the exact solver bundle from the retained `Su2Case` and nested
+    /// generic validated handoff, while the facet-aware path writes the exact PLC plus the complete
+    /// TetGen v8 provenance including one-to-one constrained-facet policy/report evidence.
     pub fn persist(
         &self,
         root: &Path,
@@ -96,14 +95,14 @@ impl AccuratePreparedCase {
                 coefficient_reference,
                 handoff,
                 ..
-            } => prepare_tetgen_validated_exterior_su2_case_directory_with_reference(
+            } => prepare_facet_tetgen_validated_exterior_su2_case_directory_with_reference(
                 root,
                 case_directory_name,
                 case,
-                &handoff.handoff,
+                handoff,
                 Some(coefficient_reference),
             )
-            .map_err(|error| format!("failed to persist validated TetGen SU2 case: {error}")),
+            .map_err(|error| format!("failed to persist facet-validated TetGen SU2 case: {error}")),
         }
     }
 }

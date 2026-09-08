@@ -31,9 +31,8 @@ pub(crate) fn snapshot_project_state(state: &ProjectState) -> ProjectState {
 /// constrained source/body facet correspondence, bounded source/body-boundary normal-opposition,
 /// bounded sharp-crease feature-edge correspondence, bounded triangulated discrete normal-variation
 /// correspondence, and bounded body-wall first-cell geometric-height validation. The returned
-/// `AccuratePreparedCase` owns the facet-promoted handoff while body-fitted and engineering-quality
-/// status remain not established. The current sidecar remains v7 until the following dedicated
-/// facet-persistence slice; in-memory ownership is not treated as persisted evidence yet.
+/// `AccuratePreparedCase` owns the facet-promoted handoff and persists the complete TetGen evidence
+/// as format v8. Body-fitted and engineering-quality status remain not established.
 pub(crate) fn prepare_tetgen_from_state(
     state: &ProjectState,
     settings: &AccurateSettings,
@@ -144,7 +143,7 @@ mod tests {
         assert!(exterior.contains("engineering_quality_status\tnot_established"));
 
         let tetgen = fs::read_to_string(case_dir.join("aeroforge_tetgen_handoff.tsv")).unwrap();
-        assert!(tetgen.contains("format_version\t7"));
+        assert!(tetgen.contains("format_version\t8"));
         assert!(tetgen.contains("contract\tvalidated_external_tetgen_handoff"));
         assert!(tetgen.contains("body_fitted_status\tnot_established"));
         assert!(tetgen.contains("engineering_quality_status\tnot_established"));
@@ -203,7 +202,15 @@ mod tests {
         assert!(tetgen.contains("body_wall_first_cell_body_0_minimum_height\t"));
         assert!(tetgen.contains("body_wall_first_cell_body_0_maximum_height\t"));
         assert!(tetgen.contains("body_wall_first_cell_body_0_mean_height\t"));
-        assert!(!tetgen.contains("source_facet_"));
+        assert!(tetgen.contains("source_facet_vertex_distance_tolerance\t0.000000001"));
+        assert!(tetgen.contains("source_facet_max_triangle_pair_tests\t20000000"));
+        assert!(tetgen.contains("source_facet_triangle_pair_tests\t"));
+        assert!(tetgen.contains("source_facet_body_count\t1"));
+        assert!(tetgen.contains("source_facet_body_0_scene_object_id\t1"));
+        assert!(tetgen.contains("source_facet_body_0_source_triangle_count\t"));
+        assert!(tetgen.contains("source_facet_body_0_boundary_triangle_count\t"));
+        assert!(tetgen.contains("source_facet_body_0_matched_triangle_count\t"));
+        assert!(tetgen.contains("source_facet_body_0_maximum_matched_vertex_distance\t"));
         assert!(case_dir.join("aeroforge_tetgen_input.poly").is_file());
 
         let fidelity = fs::read_to_string(case_dir.join("aeroforge_mesh_fidelity.tsv")).unwrap();
