@@ -5,8 +5,8 @@ use aeroforge_accurate_backend::{
     validate_exterior_mesher_input_intersections, validate_exterior_mesher_source_clearance,
     validate_exterior_mesher_source_containment, validate_tetgen_external_handoff, BoundaryRole,
     BoundarySource, ClearanceValidatedExteriorMesherInput, DomainAxis, DomainSide,
-    ExteriorMeshQualityPolicy, SourceBoundaryNormalPolicy, SourceContainmentPolicy,
-    SourceInterBodyClearancePolicy, SourceSurfaceCorrespondencePolicy,
+    ExteriorMeshQualityPolicy, SourceBoundaryFeatureEdgePolicy, SourceBoundaryNormalPolicy,
+    SourceContainmentPolicy, SourceInterBodyClearancePolicy, SourceSurfaceCorrespondencePolicy,
     SourceSurfaceIntersectionPolicy, Su2MarkerBinding, TetrahedralOverlapPolicy,
     TetgenHoleSeedPolicy, ValidatedTetgenExteriorHandoff,
 };
@@ -53,6 +53,14 @@ const DESKTOP_SOURCE_NORMAL_POLICY: SourceBoundaryNormalPolicy = SourceBoundaryN
     minimum_opposition_cosine: 0.999_999,
     max_triangle_pair_tests: 20_000_000,
 };
+const DESKTOP_SOURCE_FEATURE_EDGE_POLICY: SourceBoundaryFeatureEdgePolicy =
+    SourceBoundaryFeatureEdgePolicy {
+        minimum_feature_angle_radians: 0.5,
+        distance_tolerance: 1.0e-9,
+        minimum_direction_alignment_cosine: 0.999_999,
+        maximum_dihedral_angle_difference_radians: 1.0e-9,
+        max_edge_pair_tests: 20_000_000,
+    };
 
 /// Promotes the current desktop scene to the source-surface admission state required before an
 /// external TetGen run can be attempted.
@@ -112,7 +120,8 @@ pub fn admit_project_geometry_for_tetgen(
 
 /// Executes the configured external TetGen binary for one already-auditable desktop project and
 /// promotes its output through AeroForge's solver-bound source-clearance, overlap,
-/// quality/provenance/correspondence and bounded source/body-boundary normal-opposition gates.
+/// quality/provenance/correspondence, bounded source/body-boundary normal-opposition, and bounded
+/// sharp-crease edge-correspondence gates.
 ///
 /// The positive source-body clearance floor is an explicit numerical admission policy, not an
 /// engineering spacing criterion. The quality limits here are deliberately permissive numerical
@@ -120,9 +129,12 @@ pub fn admit_project_geometry_for_tetgen(
 /// thresholds. The volumetric overlap gate uses a deterministic sweep-and-prune broad phase with
 /// an explicit pair-test budget. The normal gate reconstructs body-boundary winding from positive
 /// owning tetrahedra and checks every source and boundary triangle centroid against the nearest
-/// opposite triangle under explicit distance, opposition-cosine and work limits. Passing these
-/// gates still records body-fitted, feature-preservation and engineering-quality status as not
-/// established.
+/// opposite triangle under explicit distance, opposition-cosine and work limits. The feature gate
+/// independently extracts crease edges above the configured angle and checks bidirectional
+/// midpoint distance, orientation-independent edge direction, dihedral-angle agreement, and work
+/// budget against the exact owned source/body-boundary pair. Passing these gates still does not
+/// establish general feature/curvature/CAD preservation, body-fitted fidelity, or engineering CFD
+/// quality.
 pub fn run_project_tetgen_handoff(
     state: &ProjectState,
     executable: &Path,
@@ -137,6 +149,7 @@ pub fn run_project_tetgen_handoff(
         DESKTOP_TETGEN_OVERLAP_POLICY,
         DESKTOP_SOURCE_CORRESPONDENCE_POLICY,
         DESKTOP_SOURCE_NORMAL_POLICY,
+        DESKTOP_SOURCE_FEATURE_EDGE_POLICY,
     )
     .map_err(|error| format!("desktop TetGen exterior handoff rejected: {error}"))
 }

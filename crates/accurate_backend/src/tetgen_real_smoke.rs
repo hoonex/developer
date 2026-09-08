@@ -15,6 +15,7 @@ use crate::source_clearance::{
 use crate::source_containment::{
     validate_exterior_mesher_source_containment, SourceContainmentPolicy,
 };
+use crate::source_feature_edges::SourceBoundaryFeatureEdgePolicy;
 use crate::source_intersection::SourceSurfaceIntersectionPolicy;
 use crate::source_normal_alignment::SourceBoundaryNormalPolicy;
 use crate::su2_mesh::{
@@ -158,6 +159,13 @@ fn configured_real_tetgen_reaches_validated_handoff() {
             minimum_opposition_cosine: 0.999_999,
             max_triangle_pair_tests: 10_000_000,
         },
+        SourceBoundaryFeatureEdgePolicy {
+            minimum_feature_angle_radians: 0.5,
+            distance_tolerance: 1.0e-9,
+            minimum_direction_alignment_cosine: 0.999_999,
+            maximum_dihedral_angle_difference_radians: 1.0e-9,
+            max_edge_pair_tests: 10_000_000,
+        },
     )
     .unwrap();
 
@@ -177,4 +185,15 @@ fn configured_real_tetgen_reaches_validated_handoff() {
     assert_eq!(handoff.normal_alignment.bodies[0].scene_object_id, 42);
     assert!(handoff.normal_alignment.bodies[0].min_source_to_boundary_opposition_cosine > 0.999_999_999);
     assert!(handoff.normal_alignment.bodies[0].min_boundary_to_source_opposition_cosine > 0.999_999_999);
+    assert_eq!(handoff.feature_edges.bodies.len(), 1);
+    assert_eq!(handoff.feature_edges.bodies[0].scene_object_id, 42);
+    assert_eq!(handoff.feature_edges.bodies[0].source_feature_edge_count, 12);
+    assert_eq!(handoff.feature_edges.bodies[0].boundary_feature_edge_count, 12);
+    assert_eq!(handoff.feature_edges.edge_pair_tests, 288);
+    assert!(handoff.feature_edges.bodies[0].max_source_to_boundary_midpoint_distance <= 1.0e-9);
+    assert!(handoff.feature_edges.bodies[0].max_boundary_to_source_midpoint_distance <= 1.0e-9);
+    assert!(handoff.feature_edges.bodies[0].min_source_to_boundary_direction_alignment_cosine >= 0.999_999);
+    assert!(handoff.feature_edges.bodies[0].min_boundary_to_source_direction_alignment_cosine >= 0.999_999);
+    assert!(handoff.feature_edges.bodies[0].max_source_to_boundary_dihedral_angle_difference_radians <= 1.0e-9);
+    assert!(handoff.feature_edges.bodies[0].max_boundary_to_source_dihedral_angle_difference_radians <= 1.0e-9);
 }

@@ -309,6 +309,10 @@ mod tests {
     use crate::source_containment::{
         validate_exterior_mesher_source_containment, SourceContainmentPolicy,
     };
+    use crate::source_feature_edges::{
+        SourceBoundaryFeatureEdgeBodyReport, SourceBoundaryFeatureEdgePolicy,
+        SourceBoundaryFeatureEdgeReport,
+    };
     use crate::source_intersection::{
         SourceSurfaceIntersectionPolicy, SourceSurfaceIntersectionReport,
     };
@@ -478,6 +482,27 @@ mod tests {
                     min_boundary_to_source_opposition_cosine: 1.0,
                 }],
                 triangle_pair_tests: 32,
+            },
+            feature_policy: SourceBoundaryFeatureEdgePolicy {
+                minimum_feature_angle_radians: 0.5,
+                distance_tolerance: 1.0e-6,
+                minimum_direction_alignment_cosine: 0.999_999,
+                maximum_dihedral_angle_difference_radians: 1.0e-6,
+                max_edge_pair_tests: 1_000,
+            },
+            feature_edges: SourceBoundaryFeatureEdgeReport {
+                bodies: vec![SourceBoundaryFeatureEdgeBodyReport {
+                    scene_object_id: 42,
+                    source_feature_edge_count: 6,
+                    boundary_feature_edge_count: 6,
+                    max_source_to_boundary_midpoint_distance: 0.0,
+                    max_boundary_to_source_midpoint_distance: 0.0,
+                    min_source_to_boundary_direction_alignment_cosine: 1.0,
+                    min_boundary_to_source_direction_alignment_cosine: 1.0,
+                    max_source_to_boundary_dihedral_angle_difference_radians: 0.0,
+                    max_boundary_to_source_dihedral_angle_difference_radians: 0.0,
+                }],
+                edge_pair_tests: 72,
             },
             tetgen_stdout: "ok\n".into(),
             tetgen_stderr: String::new(),
