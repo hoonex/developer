@@ -56,14 +56,16 @@ impl From<PrepareValidatedExteriorCaseError> for PrepareTetgenValidatedExteriorC
 ///
 /// In addition to the generic validated-exterior sidecar, this path persists the exact deterministic
 /// `.poly` supplied to TetGen plus a bounded metadata manifest covering the explicit hole-seed,
-/// source inter-body clearance, containment, tetrahedral-overlap and source/body-boundary normal
-/// policies/reports, process exit/switch contract, parser counts and tetrahedron reorientation
-/// count. Raw stdout/stderr are intentionally not persisted because external tools can emit
-/// unbounded text; their byte counts are recorded while the in-memory handoff retains the content.
+/// source inter-body clearance, containment, tetrahedral-overlap, source/body-boundary normal and
+/// sharp-crease feature-edge policies/reports, process exit/switch contract, parser counts and
+/// tetrahedron reorientation count. Raw stdout/stderr are intentionally not persisted because
+/// external tools can emit unbounded text; their byte counts are recorded while the in-memory
+/// handoff retains the content.
 ///
 /// The manifest keeps `body_fitted_status=not_established` and
 /// `engineering_quality_status=not_established`. Passing the current gates must not silently promote
-/// either claim.
+/// either claim, and feature-edge evidence does not establish smooth-curvature or CAD-feature
+/// preservation.
 pub fn prepare_tetgen_validated_exterior_su2_case_directory(
     root: &Path,
     case_directory_name: &str,
@@ -150,7 +152,7 @@ pub(crate) fn render_tetgen_handoff_provenance(
     let mut output = format!(
         concat!(
             "key\tvalue\n",
-            "format_version\t4\n",
+            "format_version\t5\n",
             "contract\tvalidated_external_tetgen_handoff\n",
             "source_scene_object_ids\t{}\n",
             "body_fitted_status\tnot_established\n",
@@ -189,6 +191,13 @@ pub(crate) fn render_tetgen_handoff_provenance(
             "source_normal_max_triangle_pair_tests\t{}\n",
             "source_normal_triangle_pair_tests\t{}\n",
             "source_normal_body_count\t{}\n",
+            "source_feature_minimum_feature_angle_radians\t{}\n",
+            "source_feature_distance_tolerance\t{}\n",
+            "source_feature_minimum_direction_alignment_cosine\t{}\n",
+            "source_feature_maximum_dihedral_angle_difference_radians\t{}\n",
+            "source_feature_max_edge_pair_tests\t{}\n",
+            "source_feature_edge_pair_tests\t{}\n",
+            "source_feature_body_count\t{}\n",
             "parsed_input_node_id_count\t{}\n",
             "parsed_tetrahedron_id_count\t{}\n",
             "parsed_boundary_face_id_count\t{}\n",
@@ -229,6 +238,13 @@ pub(crate) fn render_tetgen_handoff_provenance(
         handoff.normal_policy.max_triangle_pair_tests,
         handoff.normal_alignment.triangle_pair_tests,
         handoff.normal_alignment.bodies.len(),
+        handoff.feature_policy.minimum_feature_angle_radians,
+        handoff.feature_policy.distance_tolerance,
+        handoff.feature_policy.minimum_direction_alignment_cosine,
+        handoff.feature_policy.maximum_dihedral_angle_difference_radians,
+        handoff.feature_policy.max_edge_pair_tests,
+        handoff.feature_edges.edge_pair_tests,
+        handoff.feature_edges.bodies.len(),
         handoff.input_node_ids.len(),
         handoff.tetrahedron_ids.len(),
         handoff.boundary_face_ids.len(),
@@ -279,6 +295,31 @@ pub(crate) fn render_tetgen_handoff_provenance(
             body.max_boundary_to_source_centroid_distance,
             body.min_source_to_boundary_opposition_cosine,
             body.min_boundary_to_source_opposition_cosine,
+            index = index,
+        ));
+    }
+    for (index, body) in handoff.feature_edges.bodies.iter().enumerate() {
+        output.push_str(&format!(
+            concat!(
+                "source_feature_body_{index}_scene_object_id\t{}\n",
+                "source_feature_body_{index}_source_feature_edge_count\t{}\n",
+                "source_feature_body_{index}_boundary_feature_edge_count\t{}\n",
+                "source_feature_body_{index}_max_source_to_boundary_midpoint_distance\t{}\n",
+                "source_feature_body_{index}_max_boundary_to_source_midpoint_distance\t{}\n",
+                "source_feature_body_{index}_min_source_to_boundary_direction_alignment_cosine\t{}\n",
+                "source_feature_body_{index}_min_boundary_to_source_direction_alignment_cosine\t{}\n",
+                "source_feature_body_{index}_max_source_to_boundary_dihedral_angle_difference_radians\t{}\n",
+                "source_feature_body_{index}_max_boundary_to_source_dihedral_angle_difference_radians\t{}\n"
+            ),
+            body.scene_object_id,
+            body.source_feature_edge_count,
+            body.boundary_feature_edge_count,
+            body.max_source_to_boundary_midpoint_distance,
+            body.max_boundary_to_source_midpoint_distance,
+            body.min_source_to_boundary_direction_alignment_cosine,
+            body.min_boundary_to_source_direction_alignment_cosine,
+            body.max_source_to_boundary_dihedral_angle_difference_radians,
+            body.max_boundary_to_source_dihedral_angle_difference_radians,
             index = index,
         ));
     }
@@ -519,7 +560,7 @@ mod tests {
     fn tetgen_manifest_retains_explicit_policy_and_non_claims() {
         let handoff = synthetic_tetgen_handoff();
         let text = render_tetgen_handoff_provenance(&handoff);
-        assert!(text.contains("format_version\t4"));
+        assert!(text.contains("format_version\t5"));
         assert!(text.contains("contract\tvalidated_external_tetgen_handoff"));
         assert!(text.contains("body_fitted_status\tnot_established"));
         assert!(text.contains("engineering_quality_status\tnot_established"));
@@ -543,6 +584,18 @@ mod tests {
         assert!(text.contains("source_normal_body_count\t1"));
         assert!(text.contains("source_normal_body_0_scene_object_id\t42"));
         assert!(text.contains("source_normal_body_0_min_source_to_boundary_opposition_cosine\t1"));
+        assert!(text.contains("source_feature_minimum_feature_angle_radians\t0.5"));
+        assert!(text.contains("source_feature_distance_tolerance\t0.000001"));
+        assert!(text.contains("source_feature_minimum_direction_alignment_cosine\t0.999999"));
+        assert!(text.contains("source_feature_maximum_dihedral_angle_difference_radians\t0.000001"));
+        assert!(text.contains("source_feature_max_edge_pair_tests\t1000"));
+        assert!(text.contains("source_feature_edge_pair_tests\t72"));
+        assert!(text.contains("source_feature_body_count\t1"));
+        assert!(text.contains("source_feature_body_0_scene_object_id\t42"));
+        assert!(text.contains("source_feature_body_0_source_feature_edge_count\t6"));
+        assert!(text.contains("source_feature_body_0_boundary_feature_edge_count\t6"));
+        assert!(text.contains("source_feature_body_0_min_source_to_boundary_direction_alignment_cosine\t1"));
+        assert!(text.contains("source_feature_body_0_max_source_to_boundary_dihedral_angle_difference_radians\t0"));
         assert!(text.contains("hole_seed_0_scene_object_id\t42"));
         assert!(text.contains("reoriented_tetrahedra\t1"));
     }
@@ -601,6 +654,9 @@ mod tests {
         assert!(manifest.contains("tetra_overlap_max_pair_tests\t10000"));
         assert!(manifest.contains("source_normal_max_triangle_pair_tests\t1000"));
         assert!(manifest.contains("source_normal_body_0_scene_object_id\t42"));
+        assert!(manifest.contains("source_feature_max_edge_pair_tests\t1000"));
+        assert!(manifest.contains("source_feature_edge_pair_tests\t72"));
+        assert!(manifest.contains("source_feature_body_0_scene_object_id\t42"));
 
         let second = persist_tetgen_handoff_files(result.clone(), &handoff).unwrap_err();
         assert!(matches!(second, PrepareTetgenValidatedExteriorCaseError::Provenance(_)));
