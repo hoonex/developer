@@ -32,6 +32,37 @@ pub struct SourceInterBodyClearanceReport {
     pub triangle_pair_tests: usize,
 }
 
+/// Source geometry promoted beyond intersection and containment admission with owned positive
+/// inter-body clearance evidence.
+///
+/// Construction is restricted to [`validate_exterior_mesher_source_clearance`], so callers that
+/// require this type cannot substitute a different policy/report after validation or bypass the
+/// complete pair-distance gate with a containment-only input.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClearanceValidatedExteriorMesherInput {
+    input: ContainmentValidatedExteriorMesherInput,
+    clearance_policy: SourceInterBodyClearancePolicy,
+    clearance_report: SourceInterBodyClearanceReport,
+}
+
+impl ClearanceValidatedExteriorMesherInput {
+    pub fn containment(&self) -> &ContainmentValidatedExteriorMesherInput {
+        &self.input
+    }
+
+    pub fn clearance_policy(&self) -> SourceInterBodyClearancePolicy {
+        self.clearance_policy
+    }
+
+    pub fn clearance_report(&self) -> &SourceInterBodyClearanceReport {
+        &self.clearance_report
+    }
+
+    pub fn scene_object_ids(&self) -> Vec<u64> {
+        self.input.scene_object_ids()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum SourceInterBodyClearanceError {
     InvalidMinimumClearance { value: f64 },
@@ -94,6 +125,20 @@ impl Display for SourceInterBodyClearanceError {
 }
 
 impl Error for SourceInterBodyClearanceError {}
+
+/// Consumes one containment-admitted source state and promotes it to an owned clearance-admitted
+/// state under the exact caller-selected policy.
+pub fn validate_exterior_mesher_source_clearance(
+    input: ContainmentValidatedExteriorMesherInput,
+    policy: SourceInterBodyClearancePolicy,
+) -> Result<ClearanceValidatedExteriorMesherInput, SourceInterBodyClearanceError> {
+    let clearance_report = validate_source_inter_body_clearance(&input, policy)?;
+    Ok(ClearanceValidatedExteriorMesherInput {
+        input,
+        clearance_policy: policy,
+        clearance_report,
+    })
+}
 
 /// Establishes bounded positive surface separation between every pair of distinct source bodies
 /// that has already passed source intersection and containment admission.
@@ -544,6 +589,22 @@ mod tests {
         let report = validate_source_inter_body_clearance(&input, policy(0.5)).unwrap();
         assert_eq!(report.triangle_pair_tests, 0);
         assert!(report.pairs.is_empty());
+    }
+
+    #[test]
+    fn promoted_state_owns_exact_policy_and_report() {
+        let input = containment_admitted(vec![
+            audited(3, [1.0, 1.0, 1.0], [2.0, 2.0, 2.0]),
+            audited(9, [3.0, 1.0, 1.0], [4.0, 2.0, 2.0]),
+        ]);
+        let selected_policy = policy(0.5);
+
+        let promoted =
+            validate_exterior_mesher_source_clearance(input, selected_policy).unwrap();
+        assert_eq!(promoted.scene_object_ids(), vec![3, 9]);
+        assert_eq!(promoted.clearance_policy(), selected_policy);
+        assert_eq!(promoted.clearance_report().triangle_pair_tests, 144);
+        assert!((promoted.clearance_report().pairs[0].minimum_clearance - 1.0).abs() < 1.0e-12);
     }
 
     #[test]

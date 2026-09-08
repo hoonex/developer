@@ -9,6 +9,9 @@ use crate::exterior_quality::ExteriorMeshQualityPolicy;
 use crate::imported_surface::{
     audit_imported_surface_for_accurate_meshing, AccurateImportedSurfacePolicy,
 };
+use crate::source_clearance::{
+    validate_exterior_mesher_source_clearance, SourceInterBodyClearancePolicy,
+};
 use crate::source_containment::{
     validate_exterior_mesher_source_containment, SourceContainmentPolicy,
 };
@@ -103,11 +106,19 @@ fn configured_real_tetgen_reaches_validated_handoff() {
         },
     )
     .unwrap();
-    let admitted = validate_exterior_mesher_source_containment(
+    let contained = validate_exterior_mesher_source_containment(
         intersected,
         SourceContainmentPolicy {
             geometric_epsilon: 1.0e-10,
             max_point_triangle_tests: 100_000,
+        },
+    )
+    .unwrap();
+    let admitted = validate_exterior_mesher_source_clearance(
+        contained,
+        SourceInterBodyClearancePolicy {
+            minimum_clearance: 1.0e-9,
+            max_triangle_pair_tests: 100_000,
         },
     )
     .unwrap();
@@ -152,6 +163,9 @@ fn configured_real_tetgen_reaches_validated_handoff() {
 
     assert_eq!(handoff.handoff.exterior.scene_object_ids, vec![42]);
     assert_eq!(handoff.handoff.exterior.domain_boundary_count, 6);
+    assert_eq!(handoff.clearance_policy.minimum_clearance, 1.0e-9);
+    assert_eq!(handoff.clearance.triangle_pair_tests, 0);
+    assert!(handoff.clearance.pairs.is_empty());
     assert_eq!(handoff.tetgen_switches, TETGEN_BASELINE_SWITCHES);
     assert_eq!(handoff.tetgen_exit_code, Some(0));
     assert!(!handoff.tetrahedron_ids.is_empty());

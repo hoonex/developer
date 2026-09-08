@@ -267,9 +267,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use aeroforge_geometry_core::SurfaceMesh;
-    use aeroforge_volume_core::{
-        BoundaryMarkerId, VolumeMesh, VolumeMeshReport,
-    };
+    use aeroforge_volume_core::{BoundaryMarkerId, VolumeMesh, VolumeMeshReport};
 
     use crate::exterior_handoff::ValidatedExteriorMesherHandoff;
     use crate::exterior_mesh::DeclaredExteriorFluidMeshReport;
@@ -278,6 +276,9 @@ mod tests {
     use crate::exterior_quality::{ExteriorMeshQualityPolicy, ExteriorMeshQualityReport};
     use crate::imported_surface::{
         audit_imported_surface_for_accurate_meshing, AccurateImportedSurfacePolicy,
+    };
+    use crate::source_clearance::{
+        validate_source_inter_body_clearance, SourceInterBodyClearancePolicy,
     };
     use crate::source_containment::{
         validate_exterior_mesher_source_containment, SourceContainmentPolicy,
@@ -351,7 +352,8 @@ mod tests {
             geometric_epsilon: 1.0e-9,
             max_triangle_pair_tests: 10_000,
         };
-        let intersected = validate_exterior_mesher_input_intersections(base, intersection_policy).unwrap();
+        let intersected =
+            validate_exterior_mesher_input_intersections(base, intersection_policy).unwrap();
         let containment_policy = SourceContainmentPolicy {
             geometric_epsilon: 1.0e-9,
             max_point_triangle_tests: 10_000,
@@ -361,6 +363,12 @@ mod tests {
             containment_policy,
         )
         .unwrap();
+        let clearance_policy = SourceInterBodyClearancePolicy {
+            minimum_clearance: 1.0e-6,
+            max_triangle_pair_tests: 1_000,
+        };
+        let clearance =
+            validate_source_inter_body_clearance(&admitted, clearance_policy).unwrap();
         let hole_seed_policy = TetgenHoleSeedPolicy {
             geometric_epsilon: 1.0e-9,
             initial_inward_edge_fraction: 0.05,
@@ -414,6 +422,8 @@ mod tests {
             handoff,
             prepared,
             hole_seed_policy,
+            clearance_policy,
+            clearance,
             containment_policy,
             containment: admitted.containment_report().clone(),
             overlap_policy: TetrahedralOverlapPolicy {

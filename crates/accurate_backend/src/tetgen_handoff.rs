@@ -7,9 +7,11 @@ use crate::exterior_handoff::{
     ValidatedExteriorMesherHandoff,
 };
 use crate::exterior_quality::ExteriorMeshQualityPolicy;
-use crate::source_containment::{
-    ContainmentValidatedExteriorMesherInput, SourceContainmentPolicy, SourceContainmentReport,
+use crate::source_clearance::{
+    ClearanceValidatedExteriorMesherInput, SourceInterBodyClearancePolicy,
+    SourceInterBodyClearanceReport,
 };
+use crate::source_containment::{SourceContainmentPolicy, SourceContainmentReport};
 use crate::source_normal_alignment::{
     validate_source_boundary_normal_alignment, SourceBoundaryNormalError,
     SourceBoundaryNormalPolicy, SourceBoundaryNormalReport,
@@ -27,8 +29,8 @@ use crate::tetgen_runner::{
     run_prepared_tetgen_plc, TetgenExternalRunError, TetgenExternalRunResult,
 };
 
-/// Successful external TetGen execution bound to the exact admitted source state, explicit
-/// hole-seed policy, and deterministic PLC used for process invocation.
+/// Successful external TetGen execution bound to the exact clearance-admitted source state,
+/// explicit hole-seed policy, and deterministic PLC used for process invocation.
 ///
 /// All fields are private and construction is restricted to [`run_tetgen_for_handoff`]. This is
 /// important because two different policies can legitimately render the same `.poly` bytes (for
@@ -41,14 +43,14 @@ use crate::tetgen_runner::{
 /// external process result.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BoundTetgenExternalRun {
-    input: ContainmentValidatedExteriorMesherInput,
+    input: ClearanceValidatedExteriorMesherInput,
     hole_seed_policy: TetgenHoleSeedPolicy,
     prepared: PreparedTetgenPlc,
     run: TetgenExternalRunResult,
 }
 
 impl BoundTetgenExternalRun {
-    pub fn input(&self) -> &ContainmentValidatedExteriorMesherInput {
+    pub fn input(&self) -> &ClearanceValidatedExteriorMesherInput {
         &self.input
     }
 
@@ -101,20 +103,20 @@ impl From<TetgenExternalRunError> for TetgenBoundRunError {
     }
 }
 
-/// Prepares and runs TetGen from one containment-admitted source state while retaining exact input
+/// Prepares and runs TetGen from one clearance-admitted source state while retaining exact input
 /// ownership for the later solver-bound handoff.
 ///
 /// The caller keeps its borrowed admitted input on failure and may decide whether retry is
 /// appropriate. On success this function stores a clone of that immutable promoted state, the
 /// exact explicit hole-seed policy, the deterministic prepared PLC and the runner result in one
 /// private construction. Downstream code therefore cannot pair successful output with a different
-/// scene/domain/marker/containment state or silently replace the policy after execution.
+/// scene/domain/marker/containment/clearance state or silently replace the policy after execution.
 pub fn run_tetgen_for_handoff(
     executable: &Path,
-    input: &ContainmentValidatedExteriorMesherInput,
+    input: &ClearanceValidatedExteriorMesherInput,
     hole_seed_policy: TetgenHoleSeedPolicy,
 ) -> Result<BoundTetgenExternalRun, TetgenBoundRunError> {
-    let prepared = prepare_tetgen_plc(input, hole_seed_policy)?;
+    let prepared = prepare_tetgen_plc(input.containment(), hole_seed_policy)?;
     let run = run_prepared_tetgen_plc(executable, &prepared)?;
     Ok(BoundTetgenExternalRun {
         input: input.clone(),
@@ -127,16 +129,18 @@ pub fn run_tetgen_for_handoff(
 /// Solver-bound exterior handoff admitted from one externally executed TetGen PLC.
 ///
 /// The retained evidence binds together the deterministic prepared PLC, its exact explicit
-/// hole-seed policy, source-containment policy/report, bounded tetrahedral-overlap policy/report,
-/// bounded bidirectional source/body-boundary normal policy/report, TetGen process diagnostics,
-/// parser IDs and tetrahedron reorientation count, plus the generic exterior
-/// provenance/quality/intersection/correspondence handoff. Holding this value is deliberately
-/// **not** a body-fitted, feature-preservation, or engineering CFD certificate.
+/// hole-seed policy, source inter-body clearance policy/report, source-containment policy/report,
+/// bounded tetrahedral-overlap policy/report, bounded bidirectional source/body-boundary normal
+/// policy/report, TetGen process diagnostics, parser IDs and tetrahedron reorientation count, plus
+/// the generic exterior provenance/quality/intersection/correspondence handoff. Holding this value
+/// is deliberately **not** a body-fitted, feature-preservation, or engineering CFD certificate.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValidatedTetgenExteriorHandoff {
     pub handoff: ValidatedExteriorMesherHandoff,
     pub prepared: PreparedTetgenPlc,
     pub hole_seed_policy: TetgenHoleSeedPolicy,
+    pub clearance_policy: SourceInterBodyClearancePolicy,
+    pub clearance: SourceInterBodyClearanceReport,
     pub containment_policy: SourceContainmentPolicy,
     pub containment: SourceContainmentReport,
     pub overlap_policy: TetrahedralOverlapPolicy,
@@ -225,21 +229,23 @@ impl From<SourceBoundaryNormalError> for TetgenExteriorHandoffError {
 /// Promotes one bound external TetGen result through the solver-bound exterior handoff gates
 /// without accepting any independent source input or marker map from the caller.
 ///
-/// The retained admitted input and exact hole-seed policy are first used to regenerate the PLC as
-/// an internal consistency check. Before the generic exterior handoff consumes the parsed mesh,
-/// the exact TetGen output must pass the caller-selected bounded tetrahedral interior-overlap
-/// policy. The generic handoff then checks exterior provenance, local tetrahedron quality, the
-/// already-admitted source-intersection policy and caller-selected bidirectional source
-/// correspondence policy. Finally the exact mesh/marker pair owned by that handoff must pass the
-/// caller-selected bounded bidirectional source/body-boundary normal-opposition policy. The normal
-/// gate canonicalizes boundary winding from positive owning tetrahedra rather than trusting TetGen
-/// `.face` order. Both the normal policy and successful report are retained in the returned value.
+/// The retained clearance-admitted input and exact hole-seed policy are first used to regenerate
+/// the PLC as an internal consistency check. Before the generic exterior handoff consumes the
+/// parsed mesh, the exact TetGen output must pass the caller-selected bounded tetrahedral
+/// interior-overlap policy. The generic handoff then checks exterior provenance, local tetrahedron
+/// quality, the already-admitted source-intersection policy and caller-selected bidirectional
+/// source correspondence policy. Finally the exact mesh/marker pair owned by that handoff must pass
+/// the caller-selected bounded bidirectional source/body-boundary normal-opposition policy. The
+/// normal gate canonicalizes boundary winding from positive owning tetrahedra rather than trusting
+/// TetGen `.face` order. The source clearance, overlap and normal policies and successful reports
+/// are retained in the returned value.
 ///
-/// Source containment is not rerun because the retained `ContainmentValidatedExteriorMesherInput`
-/// is an owned promoted state whose private base input already passed source intersection and
-/// containment validation. No fidelity promotion is performed: overlap freedom and bounded
-/// centroid-local normal opposition are necessary evidence, not a body-fitted, feature-preserving,
-/// or engineering-quality certificate.
+/// Source clearance and containment are not rerun because the retained
+/// `ClearanceValidatedExteriorMesherInput` is an owned promoted state whose nested private input
+/// already passed source intersection and containment validation. No fidelity promotion is
+/// performed: positive caller-selected source separation, overlap freedom and bounded centroid-local
+/// normal opposition are necessary evidence, not a body-fitted, feature-preserving, or
+/// engineering-quality certificate.
 pub fn validate_tetgen_external_handoff(
     bound: BoundTetgenExternalRun,
     quality_policy: ExteriorMeshQualityPolicy,
@@ -247,7 +253,7 @@ pub fn validate_tetgen_external_handoff(
     correspondence_policy: SourceSurfaceCorrespondencePolicy,
     normal_policy: SourceBoundaryNormalPolicy,
 ) -> Result<ValidatedTetgenExteriorHandoff, TetgenExteriorHandoffError> {
-    let expected = prepare_tetgen_plc(&bound.input, bound.hole_seed_policy)?;
+    let expected = prepare_tetgen_plc(bound.input.containment(), bound.hole_seed_policy)?;
     if expected != bound.prepared {
         return Err(TetgenExteriorHandoffError::BoundStateMismatch);
     }
@@ -275,9 +281,12 @@ pub fn validate_tetgen_external_handoff(
 
     let overlap = validate_tetrahedral_interior_overlaps(&mesh, overlap_policy)?;
 
-    let containment_policy = input.containment_policy();
-    let containment = input.containment_report().clone();
-    let admission = input.admission();
+    let clearance_policy = input.clearance_policy();
+    let clearance = input.clearance_report().clone();
+    let containment_input = input.containment();
+    let containment_policy = containment_input.containment_policy();
+    let containment = containment_input.containment_report().clone();
+    let admission = containment_input.admission();
     let handoff = validate_candidate_exterior_mesher_handoff(
         mesh,
         admission.marker_map().clone(),
@@ -297,6 +306,8 @@ pub fn validate_tetgen_external_handoff(
         handoff,
         prepared,
         hole_seed_policy,
+        clearance_policy,
+        clearance,
         containment_policy,
         containment,
         overlap_policy,
@@ -326,6 +337,7 @@ mod tests {
         audit_imported_surface_for_accurate_meshing, AccurateImportedSurfacePolicy,
     };
     use crate::scene_provenance::build_scene_owner_marker_provenance;
+    use crate::source_clearance::validate_exterior_mesher_source_clearance;
     use crate::source_containment::validate_exterior_mesher_source_containment;
     use crate::source_intersection::SourceSurfaceIntersectionPolicy;
     use crate::su2_mesh::{
@@ -390,7 +402,7 @@ mod tests {
     }
 
     fn admitted_fixture() -> (
-        ContainmentValidatedExteriorMesherInput,
+        ClearanceValidatedExteriorMesherInput,
         aeroforge_volume_core::VolumeMesh,
     ) {
         let source = audit_imported_surface_for_accurate_meshing(
@@ -414,7 +426,7 @@ mod tests {
             },
         )
         .unwrap();
-        let admitted = validate_exterior_mesher_source_containment(
+        let contained = validate_exterior_mesher_source_containment(
             intersected,
             SourceContainmentPolicy {
                 geometric_epsilon: 1.0e-10,
@@ -422,6 +434,8 @@ mod tests {
             },
         )
         .unwrap();
+        let admitted =
+            validate_exterior_mesher_source_clearance(contained, clearance_policy()).unwrap();
 
         let provenance = build_scene_owner_marker_provenance(&[42], domain_bindings()).unwrap();
         let mut solid_owner = vec![0_u32; 27];
@@ -433,6 +447,13 @@ mod tests {
         )
         .unwrap();
         (admitted, mesh)
+    }
+
+    fn clearance_policy() -> SourceInterBodyClearancePolicy {
+        SourceInterBodyClearancePolicy {
+            minimum_clearance: 1.0e-9,
+            max_triangle_pair_tests: 100_000,
+        }
     }
 
     fn hole_policy() -> TetgenHoleSeedPolicy {
@@ -474,11 +495,11 @@ mod tests {
     }
 
     fn synthetic_bound_run(
-        input: &ContainmentValidatedExteriorMesherInput,
+        input: &ClearanceValidatedExteriorMesherInput,
         mesh: aeroforge_volume_core::VolumeMesh,
         policy: TetgenHoleSeedPolicy,
     ) -> BoundTetgenExternalRun {
-        let prepared = prepare_tetgen_plc(input, policy).unwrap();
+        let prepared = prepare_tetgen_plc(input.containment(), policy).unwrap();
         BoundTetgenExternalRun {
             input: input.clone(),
             hole_seed_policy: policy,
@@ -513,8 +534,17 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.hole_seed_policy, hole_policy());
-        assert_eq!(result.containment_policy, input.containment_policy());
-        assert_eq!(&result.containment, input.containment_report());
+        assert_eq!(result.clearance_policy, clearance_policy());
+        assert_eq!(result.clearance.triangle_pair_tests, 0);
+        assert!(result.clearance.pairs.is_empty());
+        assert_eq!(
+            result.containment_policy,
+            input.containment().containment_policy()
+        );
+        assert_eq!(
+            &result.containment,
+            input.containment().containment_report()
+        );
         assert_eq!(result.overlap_policy, overlap_policy());
         assert_eq!(result.overlap.cells, result.handoff.mesh.cells.len());
         assert!(result.overlap.broad_phase_pair_tests >= result.overlap.aabb_candidate_pairs);
@@ -563,8 +593,10 @@ mod tests {
             max_point_triangle_tests: 200_000,
             ..original_policy
         };
-        let original_prepared = prepare_tetgen_plc(&input, original_policy).unwrap();
-        let larger_prepared = prepare_tetgen_plc(&input, larger_budget).unwrap();
+        let original_prepared =
+            prepare_tetgen_plc(input.containment(), original_policy).unwrap();
+        let larger_prepared =
+            prepare_tetgen_plc(input.containment(), larger_budget).unwrap();
         assert_eq!(original_prepared, larger_prepared);
         assert_ne!(original_policy, larger_budget);
 
@@ -579,6 +611,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.hole_seed_policy.max_point_triangle_tests, 100_000);
+        assert_eq!(result.clearance_policy, clearance_policy());
         assert_eq!(result.normal_policy, normal_policy());
     }
 

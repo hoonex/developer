@@ -2,10 +2,11 @@ use std::path::Path;
 
 use aeroforge_accurate_backend::{
     build_validated_exterior_mesher_input, run_tetgen_for_handoff,
-    validate_exterior_mesher_input_intersections, validate_exterior_mesher_source_containment,
-    validate_tetgen_external_handoff, BoundaryRole, BoundarySource,
-    ContainmentValidatedExteriorMesherInput, DomainAxis, DomainSide, ExteriorMeshQualityPolicy,
-    SourceBoundaryNormalPolicy, SourceContainmentPolicy, SourceSurfaceCorrespondencePolicy,
+    validate_exterior_mesher_input_intersections, validate_exterior_mesher_source_clearance,
+    validate_exterior_mesher_source_containment, validate_tetgen_external_handoff, BoundaryRole,
+    BoundarySource, ClearanceValidatedExteriorMesherInput, DomainAxis, DomainSide,
+    ExteriorMeshQualityPolicy, SourceBoundaryNormalPolicy, SourceContainmentPolicy,
+    SourceInterBodyClearancePolicy, SourceSurfaceCorrespondencePolicy,
     SourceSurfaceIntersectionPolicy, Su2MarkerBinding, TetrahedralOverlapPolicy,
     TetgenHoleSeedPolicy, ValidatedTetgenExteriorHandoff,
 };
@@ -23,6 +24,11 @@ const DESKTOP_SOURCE_CONTAINMENT_POLICY: SourceContainmentPolicy = SourceContain
     geometric_epsilon: 1.0e-10,
     max_point_triangle_tests: 5_000_000,
 };
+const DESKTOP_SOURCE_CLEARANCE_POLICY: SourceInterBodyClearancePolicy =
+    SourceInterBodyClearancePolicy {
+        minimum_clearance: 1.0e-9,
+        max_triangle_pair_tests: 20_000_000,
+    };
 const DESKTOP_TETGEN_HOLE_SEED_POLICY: TetgenHoleSeedPolicy = TetgenHoleSeedPolicy {
     geometric_epsilon: 1.0e-10,
     initial_inward_edge_fraction: 0.05,
@@ -54,14 +60,16 @@ const DESKTOP_SOURCE_NORMAL_POLICY: SourceBoundaryNormalPolicy = SourceBoundaryN
 /// This adapter intentionally stops before PLC generation or process execution. It owns the exact
 /// desktop wind-tunnel bounds/provenance contract, consumes the shared audited analytic/imported
 /// source shells, rejects any source touching/leaving the outer domain, rejects self/inter-body
-/// shell intersections, and rejects nested solids. The work budgets are explicit and fail closed;
-/// no sampling or silent truncation is permitted.
+/// shell intersections, rejects nested solids, and requires every pair of distinct source bodies
+/// to satisfy an explicit bounded positive separation floor. The desktop `1e-9` clearance is a
+/// numerical admission floor in scene coordinate units, not an engineering spacing standard. All
+/// work budgets are explicit and fail closed; no sampling or silent truncation is permitted.
 ///
 /// Reaching this state does not establish a successful tetrahedralization, source correspondence,
 /// body-fitted fidelity, engineering mesh quality, boundary-layer quality, or CFD accuracy.
 pub fn admit_project_geometry_for_tetgen(
     state: &ProjectState,
-) -> Result<ContainmentValidatedExteriorMesherInput, String> {
+) -> Result<ClearanceValidatedExteriorMesherInput, String> {
     let audited_sources = audit_project_sources_for_exterior_meshing(state)?;
     let domain_size = state.simulation.domain_size_m;
     let domain_min = [
@@ -89,24 +97,32 @@ pub fn admit_project_geometry_for_tetgen(
     )
     .map_err(|error| format!("desktop exterior intersection admission rejected: {error}"))?;
 
-    validate_exterior_mesher_source_containment(
+    let containment_validated = validate_exterior_mesher_source_containment(
         intersection_validated,
         DESKTOP_SOURCE_CONTAINMENT_POLICY,
     )
-    .map_err(|error| format!("desktop exterior containment admission rejected: {error}"))
+    .map_err(|error| format!("desktop exterior containment admission rejected: {error}"))?;
+
+    validate_exterior_mesher_source_clearance(
+        containment_validated,
+        DESKTOP_SOURCE_CLEARANCE_POLICY,
+    )
+    .map_err(|error| format!("desktop exterior clearance admission rejected: {error}"))
 }
 
 /// Executes the configured external TetGen binary for one already-auditable desktop project and
-/// promotes its output through AeroForge's solver-bound overlap/quality/provenance/correspondence
-/// and bounded source/body-boundary normal-opposition gates.
+/// promotes its output through AeroForge's solver-bound source-clearance, overlap,
+/// quality/provenance/correspondence and bounded source/body-boundary normal-opposition gates.
 ///
-/// The quality limits here are deliberately permissive numerical sanity checks matching the real
-/// TetGen CI smoke; they are not engineering mesh-quality thresholds. The volumetric overlap gate
-/// uses a deterministic sweep-and-prune broad phase with an explicit pair-test budget. The normal
-/// gate reconstructs body-boundary winding from positive owning tetrahedra and checks every source
-/// and boundary triangle centroid against the nearest opposite triangle under explicit distance,
-/// opposition-cosine and work limits. Passing these gates still records body-fitted,
-/// feature-preservation and engineering-quality status as not established.
+/// The positive source-body clearance floor is an explicit numerical admission policy, not an
+/// engineering spacing criterion. The quality limits here are deliberately permissive numerical
+/// sanity checks matching the real TetGen CI smoke; they are not engineering mesh-quality
+/// thresholds. The volumetric overlap gate uses a deterministic sweep-and-prune broad phase with
+/// an explicit pair-test budget. The normal gate reconstructs body-boundary winding from positive
+/// owning tetrahedra and checks every source and boundary triangle centroid against the nearest
+/// opposite triangle under explicit distance, opposition-cosine and work limits. Passing these
+/// gates still records body-fitted, feature-preservation and engineering-quality status as not
+/// established.
 pub fn run_project_tetgen_handoff(
     state: &ProjectState,
     executable: &Path,
@@ -195,21 +211,38 @@ mod tests {
     }
 
     #[test]
-    fn lifted_default_body_reaches_containment_admitted_state() {
+    fn lifted_default_body_reaches_clearance_admitted_state() {
         let mut state = ProjectState::default();
         state.objects[0].position.y = 2.0;
 
         let admitted = admit_project_geometry_for_tetgen(&state).unwrap();
         assert_eq!(admitted.scene_object_ids(), vec![1]);
-        assert_eq!(admitted.admission().domain_min(), [-6.0, 0.0, -4.0]);
-        assert_eq!(admitted.admission().domain_max(), [6.0, 6.0, 4.0]);
-        assert_eq!(admitted.admission().marker_map().bindings.len(), 7);
+        assert_eq!(
+            admitted.containment().admission().domain_min(),
+            [-6.0, 0.0, -4.0]
+        );
+        assert_eq!(
+            admitted.containment().admission().domain_max(),
+            [6.0, 6.0, 4.0]
+        );
         assert_eq!(
             admitted
+                .containment()
+                .admission()
+                .marker_map()
+                .bindings
+                .len(),
+            7
+        );
+        assert_eq!(
+            admitted
+                .containment()
                 .containment_report()
                 .reserved_point_triangle_tests,
             0
         );
+        assert_eq!(admitted.clearance_report().triangle_pair_tests, 0);
+        assert!(admitted.clearance_report().pairs.is_empty());
     }
 
     #[test]

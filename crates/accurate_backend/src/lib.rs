@@ -97,7 +97,8 @@ pub use scene_provenance::{
     scene_object_wall_tag, SceneOwnerMarkerProvenance, SceneOwnerProvenanceError,
 };
 pub use source_clearance::{
-    validate_source_inter_body_clearance, SourceInterBodyClearanceError,
+    validate_exterior_mesher_source_clearance, validate_source_inter_body_clearance,
+    ClearanceValidatedExteriorMesherInput, SourceInterBodyClearanceError,
     SourceInterBodyClearancePairReport, SourceInterBodyClearancePolicy,
     SourceInterBodyClearanceReport,
 };
