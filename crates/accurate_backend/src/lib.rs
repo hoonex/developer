@@ -17,6 +17,7 @@ mod source_intersection;
 mod su2;
 mod su2_mesh;
 mod surface_correspondence;
+mod tetra_overlap;
 mod tetgen_handoff;
 mod tetgen_output;
 mod tetgen_plc;
@@ -108,6 +109,10 @@ pub use surface_correspondence::{
     validate_source_surface_correspondence, SourceSurfaceBodyCorrespondence,
     SourceSurfaceCorrespondenceError, SourceSurfaceCorrespondencePolicy,
     SourceSurfaceCorrespondenceReport,
+};
+pub use tetra_overlap::{
+    validate_tetrahedral_interior_overlaps, TetrahedralOverlapError, TetrahedralOverlapPolicy,
+    TetrahedralOverlapReport,
 };
 pub use tetgen_handoff::{
     run_tetgen_for_handoff, validate_tetgen_external_handoff, BoundTetgenExternalRun,
