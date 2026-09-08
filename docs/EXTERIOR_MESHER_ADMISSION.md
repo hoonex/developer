@@ -42,13 +42,15 @@ raw imported/analytic surface
 → deterministic TetGen PLC + external TetGen process
 → candidate VolumeMesh + authoritative marker map
 → ValidatedExteriorMesherHandoff
-→ TetGen-specific overlap / normal / sharp-crease evidence gates
+→ TetGen-specific overlap / normal / sharp-crease / discrete-normal-variation evidence gates
 → ValidatedTetgenExteriorHandoff
 → validated SU2 bundle / persisted case
 ```
 
-The candidate output still must pass declared exterior provenance, local tetrahedron quality, source intersection revalidation, bounded bidirectional source correspondence, TetGen-specific positive-volume tetrahedral non-overlap, bounded bidirectional source/body-boundary normal opposition, and bounded bidirectional sharp-crease edge correspondence. Revalidating source intersections at handoff is deliberate defense in depth against stale or substituted geometry between mesher admission and output validation.
+The candidate output still must pass declared exterior provenance, local tetrahedron quality, source intersection revalidation, bounded bidirectional source correspondence, TetGen-specific positive-volume tetrahedral non-overlap, bounded bidirectional source/body-boundary normal opposition, bounded bidirectional sharp-crease edge correspondence, and bounded triangulated discrete normal-variation correspondence. Revalidating source intersections at handoff is deliberate defense in depth against stale or substituted geometry between mesher admission and output validation.
 
 The sharp-crease gate independently extracts manifold source and output boundary edges whose adjacent-triangle normal angle meets the caller-selected feature threshold, excludes coplanar triangulation diagonals, and compares selected edges bidirectionally under explicit midpoint-distance, direction-alignment, dihedral-difference, and complete pair-work limits.
 
-Positive source-body clearance and bounded sharp-crease correspondence are meaningful geometry evidence, but they do not establish constrained triangle or edge identity, smooth-curvature preservation, CAD-feature preservation, body-fitted fidelity, boundary-layer quality, universal engineering mesh quality, or CFD accuracy.
+`validate_source_boundary_discrete_normal_variation` reuses that edge-correspondence engine in two nested passes. The lower pass selects every manifold edge whose adjacent-triangle normal angle reaches `minimum_variation_angle_radians`; the second pass selects the subset reaching `sharp_feature_cutoff_radians`. Both passes use the same caller-selected distance, direction-alignment and dihedral-difference tolerances and each has its own explicit pair-work bound. The report retains both complete pass reports plus per-body variation/sharp counts and their sub-sharp count difference rather than pretending the extrema are measurements of a continuous smooth band.
+
+A positive sub-sharp count on a rounded triangulated fixture is meaningful **discrete polygonal normal-variation evidence only**. Positive source-body clearance, bounded sharp-crease correspondence, and bounded discrete normal variation do not establish constrained triangle or edge identity, continuous-curvature preservation, CAD-feature preservation, body-fitted fidelity, boundary-layer quality, universal engineering mesh quality, or CFD accuracy.

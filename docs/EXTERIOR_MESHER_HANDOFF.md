@@ -73,7 +73,7 @@ The report retains, per SceneObject:
 - maximum source→boundary and boundary→source centroid distances; and
 - minimum source→boundary and boundary→source opposition cosines.
 
-This establishes **bounded centroid-local normal-opposition evidence only**. It does not establish exact triangle identity, sharp-feature preservation, smooth-curvature preservation, or CAD-feature preservation.
+This establishes **bounded centroid-local normal-opposition evidence only**. It does not establish exact triangle identity, sharp-feature preservation, continuous-curvature preservation, or CAD-feature preservation.
 
 ### Bounded sharp-crease edge correspondence
 
@@ -96,7 +96,24 @@ The report retains, per SceneObject:
 - minimum bidirectional direction-alignment cosines; and
 - maximum bidirectional dihedral-angle differences.
 
-This establishes **bounded sharp-crease correspondence evidence only**. It does not establish exact source/output edge identity, smooth-curvature preservation, CAD-feature semantics, or a general constrained-surface preservation proof.
+This establishes **bounded sharp-crease correspondence evidence only**. It does not establish exact source/output edge identity, continuous-curvature preservation, CAD-feature semantics, or a general constrained-surface preservation proof.
+
+### Bounded triangulated discrete normal variation
+
+`validate_source_boundary_discrete_normal_variation` adds a separate caller-selected evidence policy for below-sharp triangulated normal changes. It does not introduce a new geometric engine; it deliberately runs the proven edge-correspondence validator twice with nested angle selections:
+
+- `minimum_variation_angle_radians` for the lower-threshold pass;
+- `sharp_feature_cutoff_radians`, which must be strictly larger, for the sharp subset;
+- shared `distance_tolerance`;
+- shared `minimum_direction_alignment_cosine`;
+- shared `maximum_dihedral_angle_difference_radians`; and
+- `max_edge_pair_tests_per_pass` for each complete pass.
+
+Because both passes operate on the same fixed source/body surfaces and the sharp cutoff is higher, the sharp-selected edge set must not exceed the variation-selected edge set. The report retains both complete underlying edge-correspondence reports and, per SceneObject, source/boundary variation counts, sharp counts, and the sub-sharp count difference. Total executed edge-pair work is the checked sum of the two pass reports.
+
+The pass extrema remain extrema of the complete lower-threshold and sharp selections. They are intentionally **not** relabeled as measurements isolated to the sub-sharp band.
+
+A positive sub-sharp count on a rounded triangulated fixture establishes **bounded discrete polygonal normal-variation correspondence only**. It does not prove continuous curvature, analytic/CAD feature semantics, exact edge identity, body-fitted fidelity, or engineering CFD accuracy.
 
 ## Owned TetGen handoff
 
@@ -109,41 +126,42 @@ This establishes **bounded sharp-crease correspondence evidence only**. It does 
 - tetrahedral-overlap policy/report;
 - source/body-boundary normal policy/report;
 - source/body-boundary sharp-crease feature-edge policy/report;
+- source/body-boundary discrete normal-variation policy/report;
 - TetGen stdout/stderr, exit code, and switch contract;
 - parsed input-node, tetrahedron, and boundary-face IDs; and
 - tetrahedron reorientation count.
 
-The clearance, normal, and feature-edge evidence are therefore inseparable from the exact source state and solver-bound TetGen mesh/marker pair that passed the complete path.
+The clearance, normal, feature-edge, and discrete normal-variation evidence are therefore inseparable from the exact source state and solver-bound TetGen mesh/marker pair that passed the complete path.
 
 ## Persisted external TetGen provenance
 
-Validated TetGen preparation writes the exact `aeroforge_tetgen_input.poly` and immutable `aeroforge_tetgen_handoff.tsv` **format version 5**.
+Validated TetGen preparation writes the exact `aeroforge_tetgen_input.poly` and immutable `aeroforge_tetgen_handoff.tsv` **format version 6**.
 
-The v5 sidecar retains the prior hole-seed, containment, process/parser, tetrahedral-overlap, source-clearance, and source-normal evidence and adds sharp-crease feature-edge evidence.
+The v6 sidecar retains all prior hole-seed, containment, process/parser, tetrahedral-overlap, source-clearance, source-normal, and sharp-crease feature-edge evidence and adds discrete normal-variation evidence.
 
-Feature evidence includes:
+Variation evidence includes:
 
-- `source_feature_minimum_feature_angle_radians`;
-- `source_feature_distance_tolerance`;
-- `source_feature_minimum_direction_alignment_cosine`;
-- `source_feature_maximum_dihedral_angle_difference_radians`;
-- `source_feature_max_edge_pair_tests`;
-- `source_feature_edge_pair_tests`;
-- `source_feature_body_count`; and
-- per-body SceneObject ID, source/boundary selected edge counts, maximum midpoint distances, minimum direction-alignment cosines, and maximum dihedral-angle differences.
+- lower variation-angle and sharp-cutoff thresholds;
+- shared distance, direction-alignment, and dihedral-difference tolerances;
+- maximum edge-pair work per pass;
+- variation-pass, sharp-pass, and checked-total edge-pair counts;
+- body count; and
+- per-body SceneObject ID, source/boundary variation counts, source/boundary sharp counts, source/boundary sub-sharp count differences, and both passes' complete bidirectional midpoint-distance, direction-alignment, and dihedral-difference extrema.
 
-Clearance evidence continues to include the selected positive floor, maximum/executed pair work, pair count, and per-pair SceneObject IDs, source triangle counts, and observed minimum clearance. Normal evidence continues to include the distance/cosine/work policy, executed pair count, body count, and per-body triangle counts, maximum centroid distances, and minimum bidirectional opposition cosines.
+The sidecar does not create a continuous-curvature or CAD-feature status token from these observations.
+
+Clearance evidence continues to include the selected positive floor, maximum/executed pair work, pair count, and per-pair SceneObject IDs, source triangle counts, and observed minimum clearance. Normal evidence continues to include the distance/cosine/work policy, executed pair count, body count, and per-body triangle counts, maximum centroid distances, and minimum bidirectional opposition cosines. Sharp-crease evidence continues to retain the v5 feature-angle, geometry-tolerance, pair-work, selected-edge-count, and per-body extrema fields.
 
 Raw external stdout/stderr are not copied into the persisted sidecar; their byte counts are recorded while the in-memory handoff retains their text. Persistence continues to state `body_fitted_status=not_established` and `engineering_quality_status=not_established`.
 
 ## Scope of the existing evidence
 
-The external TetGen handoff now establishes more than the generic handoff: it also owns bounded positive inter-body source clearance, bounded positive-volume tetrahedral non-overlap, bounded centroid-local source/body normal-opposition, and bounded sharp-crease edge-correspondence reports. These are meaningful geometry-evidence gates, but they do not justify a body-fitted fidelity state by themselves.
+The external TetGen handoff now establishes more than the generic handoff: it also owns bounded positive inter-body source clearance, bounded positive-volume tetrahedral non-overlap, bounded centroid-local source/body normal-opposition, bounded sharp-crease edge correspondence, and bounded triangulated discrete normal-variation reports. These are meaningful geometry-evidence gates, but they do not justify a body-fitted fidelity state by themselves.
 
 Neither the generic nor external TetGen handoff currently establishes:
 
 - exact source triangle ↔ boundary triangle or source edge ↔ boundary edge coincidence/identity;
-- general smooth-curvature or CAD-feature preservation;
+- continuous-curvature preservation or analytic/CAD feature semantics;
 - a universal engineering minimum body separation beyond the explicit caller-selected numerical clearance floor;
 - boundary-layer quality or wall-normal spacing;
 - globally validated skewness/orthogonality thresholds for an engineering workflow;
@@ -155,4 +173,4 @@ Neither the generic nor external TetGen handoff currently establishes:
 
 ## Remaining higher-fidelity obligations
 
-Before AeroForge makes a body-fitted state representable, the intended meshing workflow still needs evidence appropriate to that claim, including smooth-curvature/CAD-feature preservation beyond the current sharp-crease gate where relevant, boundary-layer evidence for near-wall-resolution claims, pinned SU2 end-to-end reference cases, and independent grid/domain/model/reference validation before engineering-accuracy claims.
+Before AeroForge makes a body-fitted state representable, the intended meshing workflow still needs evidence appropriate to that claim, including continuous-curvature/CAD-feature preservation beyond the current triangulated sharp-crease and discrete-normal-variation gates where relevant, boundary-layer evidence for near-wall-resolution claims, pinned SU2 end-to-end reference cases, and independent grid/domain/model/reference validation before engineering-accuracy claims.

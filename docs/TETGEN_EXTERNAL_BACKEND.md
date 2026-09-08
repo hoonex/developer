@@ -77,45 +77,53 @@ A parsed TetGen mesh is not solver-bound merely because TetGen exited successful
 
 1. bounded positive-volume tetrahedral interior non-overlap using deterministic sweep-and-prune plus tetrahedral SAT;
 2. the generic exterior handoff: declared exterior provenance, caller-selected local tetrahedron quality, bounded source-shell intersection evidence, and bounded bidirectional source-surface proximity;
-3. bounded bidirectional source/body-boundary normal opposition; and
-4. bounded bidirectional sharp-crease feature-edge correspondence.
+3. bounded bidirectional source/body-boundary normal opposition;
+4. bounded bidirectional sharp-crease feature-edge correspondence; and
+5. bounded triangulated discrete normal-variation correspondence.
 
 The normal gate compares every source and body-boundary triangle centroid against the nearest triangle on the opposite surface under explicit distance tolerance, minimum opposition cosine, and triangle-pair work budget. Source normals are outward-from-solid; canonical body-boundary normals are outward-from-fluid (fluid→solid), so a conforming wall is expected to be anti-parallel. Raw external face order cannot make this gate pass or fail by itself.
 
 The feature-edge gate independently builds manifold edge maps for the audited source shell and canonical body boundary. An edge is selected when the unsigned angle between its two adjacent triangle normals reaches the caller-selected minimum feature angle, so coplanar triangulation diagonals are excluded. Every selected edge midpoint scans every selected edge on the opposite surface in both directions. The nearest edge must satisfy explicit midpoint-to-segment distance, orientation-independent direction-alignment cosine, and unsigned dihedral-angle-difference limits. The complete bidirectional edge-pair work is reserved before comparison and budget exhaustion fails closed.
 
-`ValidatedTetgenExteriorHandoff` owns the exact source-clearance, containment, hole-seed, tetrahedral-overlap, normal-alignment, sharp-crease feature-edge, and generic handoff evidence together with the prepared PLC, process evidence, parser IDs, and tetrahedron reorientation count.
+The discrete normal-variation gate runs the same proven edge correspondence engine twice with nested angle thresholds. The first pass selects every manifold edge whose adjacent-triangle normal angle reaches `minimum_variation_angle_radians`; the second pass selects the subset reaching the strictly larger `sharp_feature_cutoff_radians`. Both passes use the same caller-selected distance, direction-alignment and dihedral-difference tolerances and each is independently bounded by `max_edge_pair_tests_per_pass`. The returned report retains both complete pass reports, total work, per-body variation/sharp counts, and the count difference classified as sub-sharp discrete variation.
+
+This two-threshold report is a triangulated-surface proxy. A positive sub-sharp count on a rounded polygonal fixture is useful evidence that nonzero below-cutoff normal variation survived the source→boundary path, but it is not a continuous-curvature or CAD-feature-preservation proof.
+
+`ValidatedTetgenExteriorHandoff` owns the exact source-clearance, containment, hole-seed, tetrahedral-overlap, normal-alignment, sharp-crease feature-edge, discrete normal-variation, and generic handoff evidence together with the prepared PLC, process evidence, parser IDs, and tetrahedron reorientation count.
 
 ## Persistence
 
 Validated external TetGen cases persist:
 
 - `aeroforge_tetgen_input.poly` — the exact deterministic PLC used for the external run; and
-- `aeroforge_tetgen_handoff.tsv` format version 5.
+- `aeroforge_tetgen_handoff.tsv` format version 6.
 
-The v5 sidecar retains the previous hole-seed, source-containment, process/parser, bounded tetrahedral-overlap, bounded normal-opposition, and source-clearance evidence and adds the owned sharp-crease feature-edge evidence:
+The v6 sidecar retains all previous hole-seed, source-containment, process/parser, bounded tetrahedral-overlap, source-clearance, bounded normal-opposition, and sharp-crease feature-edge evidence and adds the owned discrete normal-variation evidence:
 
-- `source_feature_minimum_feature_angle_radians`;
-- `source_feature_distance_tolerance`;
-- `source_feature_minimum_direction_alignment_cosine`;
-- `source_feature_maximum_dihedral_angle_difference_radians`;
-- `source_feature_max_edge_pair_tests`;
-- `source_feature_edge_pair_tests`;
-- `source_feature_body_count`; and
-- per body: stable SceneObject ID, source/boundary selected feature-edge counts, maximum bidirectional midpoint distances, minimum bidirectional direction-alignment cosines, and maximum bidirectional dihedral-angle differences.
+- `source_normal_variation_minimum_angle_radians`;
+- `source_normal_variation_sharp_cutoff_radians`;
+- `source_normal_variation_distance_tolerance`;
+- `source_normal_variation_minimum_direction_alignment_cosine`;
+- `source_normal_variation_maximum_dihedral_angle_difference_radians`;
+- `source_normal_variation_max_edge_pair_tests_per_pass`;
+- variation-pass, sharp-pass, and total edge-pair test counts;
+- `source_normal_variation_body_count`; and
+- per body: stable SceneObject ID; source/boundary variation, sharp, and sub-sharp edge counts; plus the complete variation-pass and sharp-pass bidirectional midpoint-distance, direction-alignment, and dihedral-difference extrema.
 
-Clearance evidence continues to include the caller-selected positive floor/work budget, executed pair count, body-pair count, and per-pair SceneObject IDs, source triangle counts, and observed minimum surface clearance. Normal evidence continues to include the global distance/cosine/work policy, executed pair count, body count, and per-body SceneObject ID, source/boundary triangle counts, maximum centroid distances, and minimum bidirectional opposition cosines.
+The persisted extrema remain the complete lower-threshold and sharp-threshold pass observations. They are not relabeled as smooth-band-only measurements.
+
+Clearance evidence continues to include the caller-selected positive floor/work budget, executed pair count, body-pair count, and per-pair SceneObject IDs, source triangle counts, and observed minimum surface clearance. Normal evidence continues to include the global distance/cosine/work policy, executed pair count, body count, and per-body SceneObject ID, source/boundary triangle counts, maximum centroid distances, and minimum bidirectional opposition cosines. Sharp-crease evidence continues to include the feature-angle, distance, direction-alignment, dihedral-difference, edge-work, selected-edge counts and per-body extrema introduced in v5.
 
 Persistence uses create-new semantics. Failure to write the TetGen provenance removes the just-created case directory rather than returning a partially provenanced prepared case.
 
 ## Current evidence and non-claims
 
-Routine CI exercises a real system-installed TetGen executable through both the backend handoff and desktop prepare/persistence path. The current evidence establishes the implemented source admission, bounded positive inter-body clearance, external invocation/parsing, volumetric overlap, generic handoff, canonical boundary orientation, bounded centroid-local normal opposition, and bounded sharp-crease feature-edge correspondence contracts.
+Routine CI exercises a real system-installed TetGen executable through both the backend handoff and desktop prepare/persistence path. The current evidence establishes the implemented source admission, bounded positive inter-body clearance, external invocation/parsing, volumetric overlap, generic handoff, canonical boundary orientation, bounded centroid-local normal opposition, bounded sharp-crease feature-edge correspondence, and bounded triangulated discrete normal-variation contracts. A rounded real-TetGen fixture exercises a positive sub-sharp variation count while the sharp-cutoff selection remains separate.
 
 It does **not** establish:
 
 - exact source-triangle ↔ boundary-triangle or source-edge ↔ boundary-edge identity/coincidence;
-- general smooth-curvature or CAD-feature preservation;
+- continuous-curvature preservation or analytic/CAD feature semantics;
 - a universal engineering minimum body separation beyond the explicit caller-selected numerical clearance policy;
 - boundary-layer or wall-normal spacing quality;
 - universal engineering mesh-quality thresholds;
