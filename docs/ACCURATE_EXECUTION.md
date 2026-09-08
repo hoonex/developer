@@ -1,24 +1,54 @@
 # Accurate-mode SU2 execution contract
 
-AeroForge accurate mode separates **case preparation** from **solver execution**. Nothing launches automatically.
+AeroForge Accurate mode separates **geometry preparation**, **case persistence**, and **solver execution**. Nothing launches automatically, and solver/process success never upgrades mesh fidelity by itself.
 
 ## 1. Geometry preparation contract
 
-The accurate prepare window converts supported analytic primitives and audited imported surface objects through one deterministic generated-case ownership path:
+Accurate mode currently has two explicit geometry paths.
 
-`stable SceneObject.id → primitive/imported geometry preparation → deterministic mixed compact owner field → cell-center occupancy → staircase tetrahedral fluid mesh → SU2 marker bindings/provenance → generated mesh/config bundle`.
+### Built-in deterministic reference path
 
-Imported surfaces are transformed from object-local to world coordinates and pass the bounded repair/audit gate before rasterization. The current audit requires one connected watertight two-manifold, consistent orientation and positive finite enclosed volume under the declared repair contract. It does **not** prove self-intersection freedom, CAD quality, or body-fitted exterior-fluid meshability.
+```text
+stable SceneObject.id
+→ primitive/imported geometry preparation
+→ deterministic mixed compact owner field
+→ cell-center occupancy
+→ staircase tetrahedral fluid mesh
+→ SU2 marker bindings/provenance
+→ generated mesh/config bundle
+```
 
-Primitive and imported ownership are reconciled in one stable SceneObject table sorted by ID. The lowest stable `SceneObject.id` owns a cell when supported geometry overlaps. Duplicate cross-kind SceneObject IDs fail closed. Only active compact owner labels become generated body markers.
+Imported surfaces are transformed from object-local to world coordinates and pass bounded repair/audit before rasterization. Promotion requires a connected watertight two-manifold with consistent orientation and positive finite enclosed volume. Primitive/imported ownership is reconciled by stable SceneObject ID; duplicate cross-kind IDs fail closed and lowest stable ID owns overlap.
 
-The current generated accurate geometry is deliberately **cell-center/staircase/voxel-derived**. It is not body-fitted and must not be described as engineering-quality surface or volume meshing.
+This built-in path is deliberately **cell-center/staircase/voxel-derived**. It is not body-fitted and must not be described as engineering-quality meshing.
 
-Desktop OBJ/STL/static-glTF/GLB import is connected to this same current staircase path. GLB BIN chunks and base64 glTF buffers are handled by the core parser; external `.gltf` buffers are accepted only through validated local-relative paths inside the document directory. URI schemes, absolute paths, query/fragment references and parent traversal fail closed. Skins and morph targets are rejected because the current CFD contract requires a static surface.
+### Optional external TetGen path
 
-The native preview and generated accurate path share the audited deterministic cell-center ownership adapter. Imported preview currently has an explicit 200,000-cell preparation budget; the requested grid is never silently reduced. CPU preview keeps stable compact owner labels. GPU preview derives a binary solid mask and does not yet provide per-object GPU force attribution.
+A separately installed TetGen executable can consume the audited source triangles directly rather than the staircase occupancy representation. The path is explicit:
 
-Preparation records the current `ProjectState.revision` and a snapshot of the tracked accurate solver settings. Any relevant scene or solver-setting edit invalidates prepared freshness and requires preparation again before execution.
+```text
+validated source/domain/marker provenance
+→ bounded source-shell intersection admission
+→ containment / nested-solid rejection
+→ bounded positive inter-body source clearance
+→ deterministic TetGen PLC + hole seeds
+→ external TetGen -pYzCQ
+→ fail-closed .node/.ele/.face parsing
+→ tetrahedral non-overlap + generic exterior handoff
+→ normal / sharp-crease / discrete-normal-variation / first-cell-height evidence
+→ one-to-one constrained source/body facet correspondence
+→ FacetValidatedTetgenExteriorHandoff
+```
+
+The actual desktop path owns `FacetValidatedTetgenExteriorHandoff`. It contains the complete validated TetGen handoff plus the exact constrained-facet policy/report; downstream case generation cannot silently reconstruct or omit that evidence.
+
+Routine real-TetGen CI demonstrates one-to-one triangulated source-facet ↔ output-body-facet coincidence within explicit numerical tolerance, including a rounded 528-triangle source/output fixture with all 278,784 source×boundary pairs checked.
+
+This does **not** establish analytic/CAD surface identity, CAD patch/curve semantics, continuous curvature independent of source tessellation, exact source/output edge identity, a layered boundary-layer mesh, or engineering-quality CFD.
+
+Desktop OBJ/STL/static-glTF/GLB import feeds both the shared preview/staircase route and, when selected for external TetGen preparation, the audited source-surface route. Static CFD geometry remains mandatory: skins and morph targets fail closed; external glTF buffers must resolve through validated local-relative paths.
+
+Preparation records `ProjectState.revision` and a snapshot of tracked Accurate solver settings. Relevant scene or solver-setting edits invalidate prepared freshness and require preparation again.
 
 ## 2. Coefficient-reference and axis contract
 
@@ -27,7 +57,7 @@ Accurate prepare exposes explicit positive finite SI normalization inputs:
 - `Reference area (m²)` → SU2 `REF_AREA`;
 - `Reference length (m)` → SU2 `REF_LENGTH`.
 
-AeroForge does not infer these denominators from the staircase geometry. The numeric defaults are not statements that those values are physically appropriate for an arbitrary scene.
+AeroForge does not infer these denominators from staircase or TetGen geometry. Defaults are not claims that those values are physically appropriate for an arbitrary scene.
 
 The current generated +X-flow coefficient frame pins:
 
@@ -36,24 +66,24 @@ The current generated +X-flow coefficient frame pins:
 - `SIDESLIP_ANGLE=0°`;
 - moment origin `(0,0,0) m`.
 
-AeroForge is Y-up. At the pinned SU2 zero-angle frame, raw SU2 `CL` corresponds to +Z rather than AeroForge vertical +Y, so the UI retains exact world-axis `CFx/CFy/CFz` and `CMx/CMy/CMz` terminology instead of silently relabeling `CL` as vertical lift.
+AeroForge is Y-up. At the pinned SU2 zero-angle frame, raw SU2 `CL` corresponds to +Z rather than AeroForge vertical +Y, so the UI retains exact world-axis `CFx/CFy/CFz` and `CMx/CMy/CMz` terminology.
 
 Aggregate and per-body values share the same global reference area/length and moment origin. Per-body values are therefore not automatically body-normalized engineering `Cd/Cl` values.
 
 ## 3. Explicit execution
 
-The execute window exposes the explicit action:
+The execute surface exposes:
 
 `Persist + run with SU2 8.5.0`
 
 Before launch AeroForge:
 
-1. requires a fresh prepared bundle for the current scene revision and solver-settings snapshot;
+1. requires a fresh prepared case for the current scene revision and solver-settings snapshot;
 2. discovers `SU2_CFD` through `SU2_RUN` or `PATH`;
 3. probes the executable banner;
 4. rejects runtimes whose banner does not contain `SU2 v8.5.0`;
 5. creates a new non-overwriting case directory;
-6. persists mesh, config and marker provenance;
+6. persists mesh/config plus the provenance dictated by the prepared-case variant;
 7. launches the direct `SU2_CFD` child on a worker thread.
 
 The SU2 8.5.0 gate is intentional because that is the externally evidenced runtime contract.
@@ -64,11 +94,25 @@ Case directories are named:
 
 The persistence layer refuses to overwrite an existing case directory.
 
+### Mesh/provenance persistence by path
+
+The staircase path persists its explicit `staircase_voxel_derived` fidelity state.
+
+The facet-promoted external TetGen path additionally persists:
+
+- exact `aeroforge_tetgen_input.poly`;
+- generic `aeroforge_exterior_handoff.tsv`; and
+- `aeroforge_tetgen_handoff.tsv` **format v8**.
+
+TetGen v8 retains the v7 hole-seed, containment, clearance, process/parser, overlap, normal, sharp-crease, discrete-normal-variation, and first-cell-height evidence, then adds constrained-facet policy/work and per-body source/boundary/matched triangle counts plus maximum matched vertex distance.
+
+The external path remains `unclassified_audited_volume`; `body_fitted_status` and `engineering_quality_status` remain `not_established`.
+
 ## 4. Live lifecycle contract
 
 The Bevy/egui UI remains responsive while the worker thread owns external execution. Lifecycle state has one authoritative owner: `AccurateExecutionStatus`.
 
-Its states are:
+States:
 
 - `Idle`;
 - `Running`;
@@ -77,117 +121,94 @@ Its states are:
 - `Succeeded`;
 - `Failed`.
 
-`AccurateLifecycleRuntime` no longer owns a second status enum. It only retains auxiliary live-run observations: the immutable root snapshot for the active execution, the registered active case path once available, the latest parsed live history quality, whether the cancellation request reached the registered child, and cancellation-sidecar persistence diagnostics.
+`AccurateLifecycleRuntime` keeps only auxiliary observations: immutable run-root identity, registered active case path, latest parsed history quality, cancellation-request state, and cancellation-sidecar diagnostics.
 
-When a new run is observed, the lifecycle controller snapshots the active `(scene revision, run sequence)` and the **case-root path used for that run**. Subsequent edits to the editable Case root field therefore do not retarget live history or cancellation for the already-running execution.
+When a run starts, AeroForge snapshots `(scene revision, run sequence)` and the case-root path. Later edits to the editable root field do not retarget the active run.
 
-The lifecycle controller does not scan the case root and guess which persisted directory is active. The accurate backend exposes a deterministic snapshot of case paths whose direct SU2 child is **currently registered as active**. AeroForge filters only those registered paths by the run-root snapshot plus revision/sequence identity. An old persisted directory that merely shares the same filename prefix is therefore not eligible for live progress or cancellation targeting. Multiple registered matches fail closed as ambiguous instead of selecting one heuristically.
+Live targeting uses the backend registry of actually active direct-child cases rather than filesystem name guessing. Multiple registered matches fail closed as ambiguous.
 
-While the registered direct child is active, AeroForge reads `history.csv` or a deterministic sorted `history*.csv` fallback from that exact case and reuses the production SU2 history parser and quality evaluator to display the latest available iteration and worst recognized RMS residual. This is observational progress sampling only; it does not alter solver state and cannot promote final convergence by itself.
+While the registered direct child is active, AeroForge samples `history.csv` (or deterministic sorted `history*.csv` fallback) from that exact case and reuses the production history parser to expose latest iteration and worst recognized RMS residual. This is observational only.
 
-Pressing Cancel changes the authoritative execution status from `Running` to `Cancelling`. The lifecycle controller then retries a case-scoped cancellation request until the exact registered child becomes available. Cancellation targets only that registered direct `SU2_CFD` child; the backend kills the child when cancellation is observed and waits for it before recording `Su2RunTermination::Cancelled`.
+Cancel moves status from `Running` to `Cancelling`, targets only the registered direct `SU2_CFD` child, kills that child when available, waits for it, and records `Su2RunTermination::Cancelled`.
 
-The execution owner reads completed termination non-destructively to classify normal user cancellation as `Cancelled` rather than temporarily treating a killed process as generic `Failed`. The lifecycle owner then consumes the same recorded termination when persisting cancellation provenance. Genuine higher-level failures, such as failure to persist required run evidence, remain `Failed` and are not overwritten merely because the direct child was cancelled.
-
-This contract does **not** claim process-tree cancellation, launcher/MPI-worker cancellation, pause/resume, checkpoint restart, or crash recovery after the editor process disappears.
+This contract does **not** claim process-tree/MPI-worker cancellation, pause/resume, checkpoint restart, or crash recovery after the editor process disappears.
 
 ## 5. Persisted execution and lifecycle provenance
 
-Each generated case keeps the established run manifest:
+Each generated case keeps `aeroforge_run_manifest.tsv` format v5 with solver/process/history/reference/frame and aggregate/per-body diagnostics, including explicit unavailable/error states when complete evidence cannot be promoted.
 
-`aeroforge_run_manifest.tsv`
-
-Manifest format version 5 retains solver/process/history/reference/frame and aggregate/per-body diagnostic provenance, including:
-
-- scene revision and probed SU2 banner;
-- process success and exit code;
-- `REF_AREA`, `REF_LENGTH`, fixed coefficient frame and origin;
-- requested iteration budget and residual target;
-- structured final history gate;
-- final iteration/residual evidence when available;
-- aggregate exact `CFx/CFy/CFz/CMx/CMy/CMz` diagnostics when complete and finite;
-- exact per-body six-axis diagnostics mapped through authoritative `BoundarySource::SceneObject { scene_object_id }` provenance;
-- explicit unavailable/error fields when complete evidence cannot be promoted.
-
-Lifecycle hardening intentionally does **not** change manifest v5. A confirmed user cancellation additionally writes a separate sidecar in the persisted case directory:
-
-`aeroforge_lifecycle.tsv`
-
-Lifecycle sidecar format version 1 records:
+Confirmed user cancellation additionally writes immutable `aeroforge_lifecycle.tsv` format v1 with:
 
 - `termination=cancelled`;
 - `cancellation_scope=direct_su2_child`;
 - scene revision;
 - run sequence;
-- cancellation-confirmation epoch milliseconds;
-- latest live-observed iteration when available;
-- latest live-observed worst RMS residual when available.
+- cancellation-confirmation time;
+- latest live-observed iteration/residual when available.
 
-The sidecar is written only after the backend confirms `Su2RunTermination::Cancelled`. It uses create-new semantics, so an existing lifecycle sidecar is not silently overwritten, and the new record is flushed with `sync_all()` before the write is considered successful. A sidecar write error is surfaced separately and does not silently convert cancellation into success.
-
-The sidecar is intentionally narrower than a recovery journal. It does not record or imply process-tree state, checkpointability, editor-crash recovery, or resumability.
+It is written only after direct-child cancellation is confirmed, uses create-new semantics, and is flushed with `sync_all()`. It is not a recovery journal and does not imply resumability.
 
 ## 6. Structured history quality
 
-After process completion AeroForge reads the persisted history CSV and evaluates the conservative final quality gate. Recognized iteration fields include `INNER_ITER`, `OUTER_ITER`, `TIME_ITER`, `ITER` and `ITERATION`; RMS fields are recognized from normalized headers containing `RMS`.
+After completion AeroForge evaluates persisted SU2 history conservatively. Recognized iteration fields include `INNER_ITER`, `OUTER_ITER`, `TIME_ITER`, `ITER`, and `ITERATION`; RMS fields are recognized from normalized headers containing `RMS`.
 
-Final quality states remain:
+Final quality states include:
 
 - `residual_target_met`;
 - `iteration_budget_reached`;
 - `incomplete`;
 - `no_history_rows`;
-- `unavailable` when history cannot be read/parsed into the structured contract.
+- `unavailable`.
 
-Process success, residual quality, aggregate diagnostics, per-body diagnostics and user cancellation are separate signals. An exit code of zero does not imply convergence. `residual_target_met` does not imply aerodynamic accuracy. Cancellation does not imply solver convergence or an aerodynamic failure classification.
-
-A partially written live history file may temporarily produce no sample or a live-observation error; that condition does not overwrite final history evidence.
+Process success, residual quality, aggregate diagnostics, per-body diagnostics, cancellation, and mesh fidelity remain separate signals. Exit code zero does not imply convergence; `residual_target_met` does not imply aerodynamic accuracy.
 
 ## 7. World-axis diagnostic boundary
 
-Generated aerodynamic monitoring remains separated from physical tunnel-wall boundaries. `MARKER_MONITORING` is derived from scene-object wall provenance, not from all tunnel walls.
+Generated aerodynamic monitoring is separated from tunnel-wall boundaries. `MARKER_MONITORING` comes from SceneObject body-wall provenance.
 
-AeroForge promotes aggregate diagnostics only from the exact final-row headers `CFx`, `CFy`, `CFz`, `CMx`, `CMy`, and `CMz`, and requires all six to be present and finite.
+Aggregate promotion requires complete finite final-row `CFx`, `CFy`, `CFz`, `CMx`, `CMy`, and `CMz` fields.
 
-SU2 8.5.0 per-surface values use exact parenthesized names such as `CFx(body_3)`. Per-body promotion is independently fail-closed: every monitored SceneObject marker must have a complete finite six-axis set. Stable SceneObject attribution comes from the persisted marker binding and `BoundarySource::SceneObject`; AeroForge does not recover IDs by reverse-parsing marker names.
+SU2 8.5.0 per-surface fields use exact parenthesized names such as `CFx(body_3)`. Every monitored SceneObject must have a complete finite six-axis set for per-body promotion. SceneObject attribution comes from authoritative persisted marker bindings, never reverse-parsing marker text.
 
-These values are diagnostics. Neither finite fields, aggregate/surface consistency, process success nor residual-target success establishes engineering-valid aerodynamic coefficients.
+These are diagnostics, not automatically engineering-valid coefficients.
 
 ## 8. Evidence checkpoints
 
-Relevant checkpoints include:
+Representative runtime checkpoints:
 
-- **#253** — official upstream SU2 8.5.0 incompressible laminar-cylinder regression through AeroForge's adapter/process path;
-- **#433 / `su2-generated-one-shot`** — pinned SU2 8.5.0 archive SHA256 `aadc800cd9df34deff99d4725f5897f620c9f2979f62ab235313311bf501f09b` and generated reference-aware cases;
-- **#465** — generated monitored-body case with finite aggregate world-axis diagnostics `CF=(1.057443042,-0.07758861071,-0.07758861071)`, `CM≈(0,2.83920088,-2.83920088)`;
-- **#489** — exact parenthesized `AERO_COEFF_SURF` ingestion for bodies 3 and 9; all six surface sums matched aggregate with `max_surface_sum_error=5e-10`;
-- **#513** — pinned SU2 8.5.0 execution of the audited in-memory imported-`SurfaceMesh` staircase path, with aggregate/surface sum error `0` for the fixture;
-- **#517** — OBJ bytes composed through parser → audit → imported raster → generated staircase marker/provenance;
-- **#555** — desktop glTF/GLB import plus imported preview integration, routine core/app/GPU GREEN;
-- **#561** — imported viewport picking/gizmo/inspector, routine core/app/GPU GREEN;
-- **#589** — cancellable runner, live-history lifecycle controller and desktop cancel UI, routine core/app/GPU GREEN;
-- **#591 / `su2-cancel-one-shot`** — pinned SU2 8.5.0 generated case produced live history at `iteration=0`, worst RMS `-1.38245327`, then the registered direct child was cancelled; `1 passed; 0 failed`, with no numeric Linux exit code after kill;
-- **#593** — temporary cancellation evidence job removed; routine core/app/GPU GREEN with the real-SU2 cancellation test retained as ignored evidence-only coverage;
-- **#599** — active root snapshot, lifecycle `Running/Cancelling/Cancelled` state and cancellation-sidecar provenance compiled and unit-tested on Windows while routine core and all three GPU parity smokes remained GREEN;
-- **#603** — immutable create-new + `sync_all()` cancellation sidecar behavior compiled/unit-tested while routine core/app/GPU stayed GREEN;
-- **#607** — non-consuming completed-termination lookup and later consuming lifecycle lookup passed routine core/app/GPU GREEN;
-- **#609** — cancellation was promoted into `AccurateExecutionStatus`/completion classification; routine core/app/GPU completed GREEN;
-- **#615** — duplicate lifecycle status ownership and filesystem case guessing were removed; live targeting now uses the backend active-case registry, with routine core, Windows app compile/unit tests and all GPU parity smokes GREEN.
+- **#253** — official upstream SU2 8.5.0 incompressible laminar-cylinder regression through AeroForge adapter/process path;
+- **#433** — reference-aware generated cases through pinned SU2 8.5.0;
+- **#465** — generated monitored-body aggregate six-axis diagnostics;
+- **#489** — exact per-surface six-axis ingestion for two bodies with surface sums matching aggregate within `5e-10`;
+- **#513 / #517** — audited imported-surface staircase runtime and actual OBJ parser→audit→staircase marker/provenance composition;
+- **#555 / #561** — static glTF/GLB desktop import, preview, picking, gizmo and inspector integration;
+- **#589–#615** — live-history, direct-child cancellation, lifecycle status/provenance, active-case registry ownership;
+- **#849–#855** — bounded source clearance ownership/persistence/docs for the TetGen path;
+- **#857–#863** — sharp-crease correspondence ownership/persistence/docs;
+- **#865–#871** — discrete triangulated normal-variation evidence and persistence;
+- **#873–#885** — body-wall first-cell-height evidence and provenance v7;
+- **#887** — standalone one-to-one constrained-facet validator;
+- **#889** — actual TetGen cube: 12↔12 body facets, 144 complete pair tests;
+- **#903** — facet-owned wrapper plus rounded actual-TetGen 528↔528 / 278,784-pair proof;
+- **#905** — desktop Accurate preparation owns the facet-promoted handoff;
+- **#911 / run `34243197775`** — TetGen provenance v8, real desktop prepare+persistence, 4/4 GREEN;
+- **#913 / run `34243969877`** — v8 documentation reconciliation, 4/4 GREEN.
 
-The external coefficient values above are smoke-fixture diagnostics, not trusted aerodynamic reference data. In particular, #513 starts from an in-memory `SurfaceMesh`; it is not filesystem OBJ/STL/glTF/GLB UI E2E evidence. #591 proves only live persisted-history observation plus registered **direct-child** cancellation for the evidenced run.
+Smoke-fixture aerodynamic values remain diagnostics, not trusted dimensional reference data.
 
-## 9. Current non-claims and next lifecycle step
+## 9. Current non-claims and next engineering steps
 
 AeroForge does not currently claim:
 
-- body-fitted or engineering-quality generated meshing;
-- imported self-intersection freedom or mesher-grade CAD validity;
+- body-fitted fidelity as a persisted AeroForge classification;
+- analytic/CAD surface or feature identity;
+- continuous-curvature preservation independent of source triangulation;
+- exact source/output edge identity;
+- a layered boundary-layer mesh, growth control, orthogonality, or y+ suitability;
+- universal engineering mesh-quality thresholds;
+- formal grid/domain/model convergence or GCI for the external Accurate path;
+- engineering-valid aerodynamic coefficients merely from process success, finite diagnostics, or residual-target success;
 - GPU per-object force attribution;
-- formal grid/domain convergence or GCI for generated/native body cases;
-- engineering-valid aerodynamic coefficients from successful SU2 execution, finite diagnostics, or `residual_target_met`;
-- process-tree/MPI cancellation;
-- pause/resume, checkpoint restart, or crash recovery.
+- process-tree/MPI cancellation, pause/resume, checkpoint restart, or crash recovery.
 
-Cancellation now uses one authoritative `AccurateExecutionStatus` state machine, exact backend-registered active-case targeting, and immutable bounded lifecycle-sidecar provenance. The remaining lifecycle work is explicit crash/restart recovery design; that must be treated separately from direct-child cancellation and must not imply checkpoint/resume semantics unless those are actually implemented and evidenced.
-
-The next geometry/accurate-path milestone remains a declared higher-fidelity/body-fitted **exterior-fluid** meshing path that consumes audited imported surfaces while preserving stable marker/source provenance. That distinct path will require its own real-SU2 E2E evidence and later independent grid/domain/model/reference validation before engineering claims are permitted.
+The external TetGen path has materially closed the former source-surface-conformance gap at the **triangulated facet** level. The next geometry work should therefore not reimplement another proximity proxy. If analytic/CAD fidelity is required, the source data model must gain semantic patch/curve/feature identity or an equivalent CAD-aware import path. Near-wall engineering claims require an actual boundary-layer strategy beyond first-cell observation. Engineering accuracy then requires explicit mesh-quality criteria plus trusted dimensional reference and grid/domain/model sensitivity evidence.
