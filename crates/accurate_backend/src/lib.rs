@@ -15,6 +15,7 @@ mod primitive_voxel;
 mod scene_provenance;
 mod source_containment;
 mod source_intersection;
+mod source_normal_alignment;
 mod su2;
 mod su2_mesh;
 mod surface_correspondence;
@@ -101,6 +102,11 @@ pub use source_containment::{
 pub use source_intersection::{
     validate_source_surface_intersections, SourceSurfaceIntersectionError,
     SourceSurfaceIntersectionPolicy, SourceSurfaceIntersectionReport,
+};
+pub use source_normal_alignment::{
+    validate_source_boundary_normal_alignment, NormalComparisonDirection,
+    SourceBoundaryNormalBodyReport, SourceBoundaryNormalError, SourceBoundaryNormalPolicy,
+    SourceBoundaryNormalReport,
 };
 pub use su2::{
     discover_su2, probe_su2_banner, run_su2_case, FlowModel, InletBoundary, Su2Case,
