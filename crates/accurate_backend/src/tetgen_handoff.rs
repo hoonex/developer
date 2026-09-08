@@ -13,6 +13,7 @@ use crate::source_containment::{
 use crate::surface_correspondence::SourceSurfaceCorrespondencePolicy;
 use crate::tetra_overlap::{
     validate_tetrahedral_interior_overlaps, TetrahedralOverlapError, TetrahedralOverlapPolicy,
+    TetrahedralOverlapReport,
 };
 use crate::tetgen_output::ParsedTetgenVolumeMesh;
 use crate::tetgen_plc::{
@@ -122,10 +123,10 @@ pub fn run_tetgen_for_handoff(
 /// Solver-bound exterior handoff admitted from one externally executed TetGen PLC.
 ///
 /// The retained evidence binds together the deterministic prepared PLC, its exact explicit
-/// hole-seed policy, the source-containment policy/report, TetGen process diagnostics, parser IDs
-/// and tetrahedron reorientation count, plus the generic exterior provenance/quality/intersection/
-/// correspondence handoff. Holding this value is deliberately **not** a body-fitted or engineering
-/// CFD certificate.
+/// hole-seed policy, the source-containment policy/report, the exact bounded tetrahedral overlap
+/// policy/report, TetGen process diagnostics, parser IDs and tetrahedron reorientation count, plus
+/// the generic exterior provenance/quality/intersection/correspondence handoff. Holding this value
+/// is deliberately **not** a body-fitted or engineering CFD certificate.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValidatedTetgenExteriorHandoff {
     pub handoff: ValidatedExteriorMesherHandoff,
@@ -133,6 +134,8 @@ pub struct ValidatedTetgenExteriorHandoff {
     pub hole_seed_policy: TetgenHoleSeedPolicy,
     pub containment_policy: SourceContainmentPolicy,
     pub containment: SourceContainmentReport,
+    pub overlap_policy: TetrahedralOverlapPolicy,
+    pub overlap: TetrahedralOverlapReport,
     pub tetgen_stdout: String,
     pub tetgen_stderr: String,
     pub tetgen_exit_code: Option<i32>,
@@ -206,7 +209,8 @@ impl From<ExteriorMesherHandoffError> for TetgenExteriorHandoffError {
 /// The retained admitted input and exact hole-seed policy are first used to regenerate the PLC as
 /// an internal consistency check. Before the generic exterior handoff consumes the parsed mesh,
 /// the exact TetGen output must also pass the caller-selected bounded tetrahedral interior-overlap
-/// policy. The generic handoff then checks exterior provenance, local tetrahedron quality, the
+/// policy. The successful overlap report and exact policy are retained in the returned handoff.
+/// The generic handoff then checks exterior provenance, local tetrahedron quality, the
 /// already-admitted source-intersection policy and caller-selected bidirectional source
 /// correspondence policy.
 ///
@@ -246,7 +250,7 @@ pub fn validate_tetgen_external_handoff(
         reoriented_tetrahedra,
     } = parsed;
 
-    validate_tetrahedral_interior_overlaps(&mesh, overlap_policy)?;
+    let overlap = validate_tetrahedral_interior_overlaps(&mesh, overlap_policy)?;
 
     let containment_policy = input.containment_policy();
     let containment = input.containment_report().clone();
@@ -266,6 +270,8 @@ pub fn validate_tetgen_external_handoff(
         hole_seed_policy,
         containment_policy,
         containment,
+        overlap_policy,
+        overlap,
         tetgen_stdout: stdout,
         tetgen_stderr: stderr,
         tetgen_exit_code: exit_code,
@@ -469,6 +475,10 @@ mod tests {
         assert_eq!(result.hole_seed_policy, hole_policy());
         assert_eq!(result.containment_policy, input.containment_policy());
         assert_eq!(&result.containment, input.containment_report());
+        assert_eq!(result.overlap_policy, overlap_policy());
+        assert_eq!(result.overlap.cells, result.handoff.mesh.cells.len());
+        assert!(result.overlap.broad_phase_pair_tests >= result.overlap.aabb_candidate_pairs);
+        assert_eq!(result.overlap.aabb_candidate_pairs, result.overlap.sat_pair_tests);
         assert_eq!(result.tetgen_exit_code, Some(0));
         assert_eq!(result.tetgen_switches, TETGEN_BASELINE_SWITCHES);
         assert_eq!(result.input_node_ids, vec![0, 1, 2, 3]);

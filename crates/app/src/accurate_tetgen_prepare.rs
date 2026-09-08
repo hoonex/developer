@@ -26,9 +26,10 @@ pub(crate) fn snapshot_project_state(state: &ProjectState) -> ProjectState {
 ///
 /// Discovery is explicit: AeroForge uses `TETGEN_EXECUTABLE` or PATH and never downloads/bundles
 /// TetGen. Successful output has already passed strict source admission, external process parsing,
-/// local tetrahedron sanity quality and bounded source correspondence. The returned
-/// `AccuratePreparedCase` still records body-fitted and engineering-quality status as not
-/// established and forces TetGen-specific provenance persistence later.
+/// bounded volumetric tetrahedral-overlap validation, local tetrahedron sanity quality and bounded
+/// source correspondence. The returned `AccuratePreparedCase` still records body-fitted and
+/// engineering-quality status as not established and forces TetGen-specific provenance persistence
+/// later.
 pub(crate) fn prepare_tetgen_from_state(
     state: &ProjectState,
     settings: &AccurateSettings,
@@ -139,9 +140,15 @@ mod tests {
         assert!(exterior.contains("engineering_quality_status\tnot_established"));
 
         let tetgen = fs::read_to_string(case_dir.join("aeroforge_tetgen_handoff.tsv")).unwrap();
+        assert!(tetgen.contains("format_version\t2"));
         assert!(tetgen.contains("contract\tvalidated_external_tetgen_handoff"));
         assert!(tetgen.contains("body_fitted_status\tnot_established"));
         assert!(tetgen.contains("engineering_quality_status\tnot_established"));
+        assert!(tetgen.contains("tetra_overlap_max_pair_tests\t20000000"));
+        assert!(tetgen.contains("tetra_overlap_cells\t"));
+        assert!(tetgen.contains("tetra_overlap_broad_phase_pair_tests\t"));
+        assert!(tetgen.contains("tetra_overlap_aabb_candidate_pairs\t"));
+        assert!(tetgen.contains("tetra_overlap_sat_pair_tests\t"));
         assert!(case_dir.join("aeroforge_tetgen_input.poly").is_file());
 
         let fidelity = fs::read_to_string(case_dir.join("aeroforge_mesh_fidelity.tsv")).unwrap();

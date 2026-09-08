@@ -55,10 +55,11 @@ impl From<PrepareValidatedExteriorCaseError> for PrepareTetgenValidatedExteriorC
 /// Builds and persists a solver-bound SU2 case from a validated external-TetGen handoff.
 ///
 /// In addition to the generic validated-exterior sidecar, this path persists the exact deterministic
-/// `.poly` supplied to TetGen plus a bounded metadata manifest covering the explicit hole-seed and
-/// containment policies, process exit/switch contract, parser counts and tetrahedron reorientation
-/// count. Raw stdout/stderr are intentionally not persisted because external tools can emit
-/// unbounded text; their byte counts are recorded while the in-memory handoff retains the content.
+/// `.poly` supplied to TetGen plus a bounded metadata manifest covering the explicit hole-seed,
+/// containment and tetrahedral-overlap policies/reports, process exit/switch contract, parser counts
+/// and tetrahedron reorientation count. Raw stdout/stderr are intentionally not persisted because
+/// external tools can emit unbounded text; their byte counts are recorded while the in-memory
+/// handoff retains the content.
 ///
 /// The manifest keeps `body_fitted_status=not_established` and
 /// `engineering_quality_status=not_established`. Passing the current gates must not silently promote
@@ -149,7 +150,7 @@ pub(crate) fn render_tetgen_handoff_provenance(
     let mut output = format!(
         concat!(
             "key\tvalue\n",
-            "format_version\t1\n",
+            "format_version\t2\n",
             "contract\tvalidated_external_tetgen_handoff\n",
             "source_scene_object_ids\t{}\n",
             "body_fitted_status\tnot_established\n",
@@ -173,6 +174,12 @@ pub(crate) fn render_tetgen_handoff_provenance(
             "containment_max_point_triangle_tests\t{}\n",
             "containment_reserved_point_triangle_tests\t{}\n",
             "containment_executed_point_triangle_tests\t{}\n",
+            "tetra_overlap_geometric_epsilon\t{}\n",
+            "tetra_overlap_max_pair_tests\t{}\n",
+            "tetra_overlap_cells\t{}\n",
+            "tetra_overlap_broad_phase_pair_tests\t{}\n",
+            "tetra_overlap_aabb_candidate_pairs\t{}\n",
+            "tetra_overlap_sat_pair_tests\t{}\n",
             "parsed_input_node_id_count\t{}\n",
             "parsed_tetrahedron_id_count\t{}\n",
             "parsed_boundary_face_id_count\t{}\n",
@@ -198,6 +205,12 @@ pub(crate) fn render_tetgen_handoff_provenance(
         handoff.containment_policy.max_point_triangle_tests,
         handoff.containment.reserved_point_triangle_tests,
         handoff.containment.executed_point_triangle_tests,
+        handoff.overlap_policy.geometric_epsilon,
+        handoff.overlap_policy.max_tetrahedron_pair_tests,
+        handoff.overlap.cells,
+        handoff.overlap.broad_phase_pair_tests,
+        handoff.overlap.aabb_candidate_pairs,
+        handoff.overlap.sat_pair_tests,
         handoff.input_node_ids.len(),
         handoff.tetrahedron_ids.len(),
         handoff.boundary_face_ids.len(),
@@ -247,6 +260,7 @@ mod tests {
     use crate::surface_correspondence::{
         SourceSurfaceCorrespondencePolicy, SourceSurfaceCorrespondenceReport,
     };
+    use crate::tetra_overlap::{TetrahedralOverlapPolicy, TetrahedralOverlapReport};
     use crate::tetgen_plc::{prepare_tetgen_plc, TetgenHoleSeedPolicy, TETGEN_BASELINE_SWITCHES};
 
     fn temp_root(label: &str) -> std::path::PathBuf {
@@ -368,6 +382,16 @@ mod tests {
             hole_seed_policy,
             containment_policy,
             containment: admitted.containment_report().clone(),
+            overlap_policy: TetrahedralOverlapPolicy {
+                geometric_epsilon: 1.0e-9,
+                max_tetrahedron_pair_tests: 10_000,
+            },
+            overlap: TetrahedralOverlapReport {
+                cells: 1,
+                broad_phase_pair_tests: 0,
+                aabb_candidate_pairs: 0,
+                sat_pair_tests: 0,
+            },
             tetgen_stdout: "ok\n".into(),
             tetgen_stderr: String::new(),
             tetgen_exit_code: Some(0),
@@ -383,12 +407,19 @@ mod tests {
     fn tetgen_manifest_retains_explicit_policy_and_non_claims() {
         let handoff = synthetic_tetgen_handoff();
         let text = render_tetgen_handoff_provenance(&handoff);
+        assert!(text.contains("format_version\t2"));
         assert!(text.contains("contract\tvalidated_external_tetgen_handoff"));
         assert!(text.contains("body_fitted_status\tnot_established"));
         assert!(text.contains("engineering_quality_status\tnot_established"));
         assert!(text.contains("tetgen_switches\t-pYzCQ"));
         assert!(text.contains("hole_seed_max_point_triangle_tests\t10000"));
         assert!(text.contains("containment_max_point_triangle_tests\t10000"));
+        assert!(text.contains("tetra_overlap_geometric_epsilon\t0.000000001"));
+        assert!(text.contains("tetra_overlap_max_pair_tests\t10000"));
+        assert!(text.contains("tetra_overlap_cells\t1"));
+        assert!(text.contains("tetra_overlap_broad_phase_pair_tests\t0"));
+        assert!(text.contains("tetra_overlap_aabb_candidate_pairs\t0"));
+        assert!(text.contains("tetra_overlap_sat_pair_tests\t0"));
         assert!(text.contains("hole_seed_0_scene_object_id\t42"));
         assert!(text.contains("reoriented_tetrahedra\t1"));
     }
@@ -420,6 +451,7 @@ mod tests {
         .unwrap();
         assert!(manifest.contains("source_scene_object_ids\t42"));
         assert!(manifest.contains("tetgen_exit_code\t0"));
+        assert!(manifest.contains("tetra_overlap_max_pair_tests\t10000"));
 
         let second = persist_tetgen_handoff_files(result.clone(), &handoff).unwrap_err();
         assert!(matches!(second, PrepareTetgenValidatedExteriorCaseError::Provenance(_)));
