@@ -62,10 +62,13 @@ impl From<PrepareValidatedExteriorCaseError> for PrepareTetgenValidatedExteriorC
 /// intentionally not persisted because external tools can emit unbounded text; their byte counts
 /// are recorded while the in-memory handoff retains the content.
 ///
-/// The manifest keeps `body_fitted_status=not_established` and
+/// The in-memory handoff now also owns bounded body-wall first-cell-height policy/report evidence.
+/// That evidence is intentionally not persisted by format v6; provenance versioning for it is a
+/// separate change. The manifest keeps `body_fitted_status=not_established` and
 /// `engineering_quality_status=not_established`. Passing the current gates must not silently promote
-/// either claim. Sharp-crease and discrete normal-variation evidence do not establish continuous
-/// curvature or CAD-feature preservation.
+/// either claim. Sharp-crease, discrete normal-variation, and first-cell-height evidence do not
+/// establish continuous curvature, CAD-feature preservation, a boundary-layer mesh, y+, or
+/// engineering near-wall adequacy.
 pub fn prepare_tetgen_validated_exterior_su2_case_directory(
     root: &Path,
     case_directory_name: &str,
@@ -446,6 +449,10 @@ mod tests {
     };
     use crate::tetra_overlap::{TetrahedralOverlapPolicy, TetrahedralOverlapReport};
     use crate::tetgen_plc::{prepare_tetgen_plc, TetgenHoleSeedPolicy, TETGEN_BASELINE_SWITCHES};
+    use crate::wall_normal_spacing::{
+        BodyWallFirstCellHeightBodyReport, BodyWallFirstCellHeightPolicy,
+        BodyWallFirstCellHeightReport,
+    };
 
     fn temp_root(label: &str) -> std::path::PathBuf {
         let nonce = SystemTime::now()
@@ -648,6 +655,21 @@ mod tests {
                 sharp: feature_report,
                 total_edge_pair_tests: 144,
             },
+            wall_height_policy: BodyWallFirstCellHeightPolicy {
+                minimum_height: 1.0e-6,
+                maximum_height: 10.0,
+                max_body_boundary_faces: 1_000,
+            },
+            wall_heights: BodyWallFirstCellHeightReport {
+                bodies: vec![BodyWallFirstCellHeightBodyReport {
+                    scene_object_id: 42,
+                    boundary_face_count: 4,
+                    minimum_height: 0.25,
+                    maximum_height: 0.75,
+                    mean_height: 0.5,
+                }],
+                boundary_face_count: 4,
+            },
             tetgen_stdout: "ok\n".into(),
             tetgen_stderr: String::new(),
             tetgen_exit_code: Some(0),
@@ -716,6 +738,7 @@ mod tests {
         assert!(text.contains("source_normal_variation_body_0_sharp_max_source_to_boundary_dihedral_angle_difference_radians\t0"));
         assert!(text.contains("hole_seed_0_scene_object_id\t42"));
         assert!(text.contains("reoriented_tetrahedra\t1"));
+        assert!(!text.contains("body_wall_first_cell_"));
     }
 
     #[test]
@@ -779,6 +802,7 @@ mod tests {
         assert!(manifest.contains("source_normal_variation_total_edge_pair_tests\t144"));
         assert!(manifest.contains("source_normal_variation_body_0_scene_object_id\t42"));
         assert!(manifest.contains("source_normal_variation_body_0_source_sub_sharp_variation_edge_count\t0"));
+        assert!(!manifest.contains("body_wall_first_cell_"));
 
         let second = persist_tetgen_handoff_files(result.clone(), &handoff).unwrap_err();
         assert!(matches!(second, PrepareTetgenValidatedExteriorCaseError::Provenance(_)));

@@ -3,13 +3,13 @@ use std::path::Path;
 use aeroforge_accurate_backend::{
     build_validated_exterior_mesher_input, run_tetgen_for_handoff,
     validate_exterior_mesher_input_intersections, validate_exterior_mesher_source_clearance,
-    validate_exterior_mesher_source_containment, validate_tetgen_external_handoff, BoundaryRole,
-    BoundarySource, ClearanceValidatedExteriorMesherInput, DomainAxis, DomainSide,
-    ExteriorMeshQualityPolicy, SourceBoundaryDiscreteNormalVariationPolicy,
-    SourceBoundaryFeatureEdgePolicy, SourceBoundaryNormalPolicy, SourceContainmentPolicy,
-    SourceInterBodyClearancePolicy, SourceSurfaceCorrespondencePolicy,
-    SourceSurfaceIntersectionPolicy, Su2MarkerBinding, TetrahedralOverlapPolicy,
-    TetgenHoleSeedPolicy, ValidatedTetgenExteriorHandoff,
+    validate_exterior_mesher_source_containment, validate_tetgen_external_handoff,
+    BodyWallFirstCellHeightPolicy, BoundaryRole, BoundarySource,
+    ClearanceValidatedExteriorMesherInput, DomainAxis, DomainSide, ExteriorMeshQualityPolicy,
+    SourceBoundaryDiscreteNormalVariationPolicy, SourceBoundaryFeatureEdgePolicy,
+    SourceBoundaryNormalPolicy, SourceContainmentPolicy, SourceInterBodyClearancePolicy,
+    SourceSurfaceCorrespondencePolicy, SourceSurfaceIntersectionPolicy, Su2MarkerBinding,
+    TetrahedralOverlapPolicy, TetgenHoleSeedPolicy, ValidatedTetgenExteriorHandoff,
 };
 use aeroforge_volume_core::BoundaryMarkerId;
 
@@ -71,6 +71,12 @@ const DESKTOP_SOURCE_NORMAL_VARIATION_POLICY: SourceBoundaryDiscreteNormalVariat
         maximum_dihedral_angle_difference_radians: 1.0e-9,
         max_edge_pair_tests_per_pass: 20_000_000,
     };
+const DESKTOP_BODY_WALL_FIRST_CELL_HEIGHT_POLICY: BodyWallFirstCellHeightPolicy =
+    BodyWallFirstCellHeightPolicy {
+        minimum_height: 1.0e-12,
+        maximum_height: 1.0e6,
+        max_body_boundary_faces: 20_000_000,
+    };
 
 /// Promotes the current desktop scene to the source-surface admission state required before an
 /// external TetGen run can be attempted.
@@ -131,7 +137,8 @@ pub fn admit_project_geometry_for_tetgen(
 /// Executes the configured external TetGen binary for one already-auditable desktop project and
 /// promotes its output through AeroForge's solver-bound source-clearance, overlap,
 /// quality/provenance/correspondence, bounded source/body-boundary normal-opposition, bounded
-/// sharp-crease edge correspondence, and bounded discrete normal-variation correspondence gates.
+/// sharp-crease edge correspondence, bounded discrete normal-variation correspondence, and bounded
+/// body-wall first-cell height gates.
 ///
 /// The positive source-body clearance floor is an explicit numerical admission policy, not an
 /// engineering spacing criterion. The quality limits here are deliberately permissive numerical
@@ -144,9 +151,12 @@ pub fn admit_project_geometry_for_tetgen(
 /// midpoint distance, orientation-independent edge direction, dihedral-angle agreement, and work
 /// budget against the exact owned source/body-boundary pair. The discrete normal-variation gate
 /// reuses that edge correspondence contract at a lower positive angle and at the sharp cutoff,
-/// retaining both reports and the sub-sharp selected-edge count difference. This is evidence about
-/// the triangulated surfaces only; passing does not establish continuous curvature, CAD-feature
-/// preservation, body-fitted fidelity, or engineering CFD quality.
+/// retaining both reports and the sub-sharp selected-edge count difference. The first-cell gate
+/// measures every SceneObject body-wall triangle's owning tetrahedron perpendicular face-to-opposite-
+/// vertex height under the explicit numerical interval and face budget above. That observation is
+/// not a boundary-layer, layer-count, growth-ratio, orthogonality, or y+ certificate. Passing the
+/// complete path still does not establish continuous curvature, CAD-feature preservation,
+/// body-fitted fidelity, or engineering CFD quality.
 pub fn run_project_tetgen_handoff(
     state: &ProjectState,
     executable: &Path,
@@ -163,6 +173,7 @@ pub fn run_project_tetgen_handoff(
         DESKTOP_SOURCE_NORMAL_POLICY,
         DESKTOP_SOURCE_FEATURE_EDGE_POLICY,
         DESKTOP_SOURCE_NORMAL_VARIATION_POLICY,
+        DESKTOP_BODY_WALL_FIRST_CELL_HEIGHT_POLICY,
     )
     .map_err(|error| format!("desktop TetGen exterior handoff rejected: {error}"))
 }

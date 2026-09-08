@@ -27,6 +27,7 @@ use crate::tetra_overlap::TetrahedralOverlapPolicy;
 use crate::tetgen_handoff::{run_tetgen_for_handoff, validate_tetgen_external_handoff};
 use crate::tetgen_plc::{TetgenHoleSeedPolicy, TETGEN_BASELINE_SWITCHES};
 use crate::tetgen_runner::discover_tetgen;
+use crate::wall_normal_spacing::BodyWallFirstCellHeightPolicy;
 
 fn cube_surface(min: [f64; 3], max: [f64; 3]) -> SurfaceMesh {
     let [x0, y0, z0] = min;
@@ -137,6 +138,14 @@ fn normal_variation_policy() -> SourceBoundaryDiscreteNormalVariationPolicy {
     }
 }
 
+fn wall_height_policy() -> BodyWallFirstCellHeightPolicy {
+    BodyWallFirstCellHeightPolicy {
+        minimum_height: 1.0e-12,
+        maximum_height: 1.0e6,
+        max_body_boundary_faces: 20_000_000,
+    }
+}
+
 #[test]
 fn configured_real_tetgen_reaches_validated_handoff() {
     let required = env::var_os("AEROFORGE_REQUIRE_REAL_TETGEN").is_some();
@@ -229,6 +238,7 @@ fn configured_real_tetgen_reaches_validated_handoff() {
             max_edge_pair_tests: 10_000_000,
         },
         normal_variation_policy(),
+        wall_height_policy(),
     )
     .unwrap();
 
@@ -264,6 +274,15 @@ fn configured_real_tetgen_reaches_validated_handoff() {
     assert_eq!(handoff.normal_variation.bodies[0].scene_object_id, 42);
     assert_eq!(handoff.normal_variation.bodies[0].source_sub_sharp_variation_edge_count, 0);
     assert_eq!(handoff.normal_variation.bodies[0].boundary_sub_sharp_variation_edge_count, 0);
+    assert_eq!(handoff.wall_height_policy, wall_height_policy());
+    assert_eq!(handoff.wall_heights.boundary_face_count, 12);
+    assert_eq!(handoff.wall_heights.bodies.len(), 1);
+    assert_eq!(handoff.wall_heights.bodies[0].scene_object_id, 42);
+    assert_eq!(handoff.wall_heights.bodies[0].boundary_face_count, 12);
+    assert!(handoff.wall_heights.bodies[0].minimum_height >= wall_height_policy().minimum_height);
+    assert!(handoff.wall_heights.bodies[0].maximum_height <= wall_height_policy().maximum_height);
+    assert!(handoff.wall_heights.bodies[0].mean_height >= handoff.wall_heights.bodies[0].minimum_height);
+    assert!(handoff.wall_heights.bodies[0].mean_height <= handoff.wall_heights.bodies[0].maximum_height);
 }
 
 #[test]
@@ -352,6 +371,7 @@ fn configured_real_tetgen_exhibits_bounded_sub_sharp_normal_variation_on_rounded
             max_edge_pair_tests: 20_000_000,
         },
         normal_variation_policy(),
+        wall_height_policy(),
     )
     .unwrap();
 
@@ -371,4 +391,10 @@ fn configured_real_tetgen_exhibits_bounded_sub_sharp_normal_variation_on_rounded
         handoff.normal_variation.total_edge_pair_tests,
         handoff.normal_variation.variation.edge_pair_tests
     );
+    assert_eq!(handoff.wall_height_policy, wall_height_policy());
+    assert_eq!(handoff.wall_heights.bodies.len(), 1);
+    assert_eq!(handoff.wall_heights.bodies[0].scene_object_id, 42);
+    assert!(handoff.wall_heights.bodies[0].boundary_face_count > 0);
+    assert!(handoff.wall_heights.bodies[0].minimum_height >= wall_height_policy().minimum_height);
+    assert!(handoff.wall_heights.bodies[0].maximum_height <= wall_height_policy().maximum_height);
 }

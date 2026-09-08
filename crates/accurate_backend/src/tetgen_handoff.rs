@@ -38,6 +38,10 @@ use crate::tetgen_plc::{
 use crate::tetgen_runner::{
     run_prepared_tetgen_plc, TetgenExternalRunError, TetgenExternalRunResult,
 };
+use crate::wall_normal_spacing::{
+    validate_body_wall_first_cell_heights, BodyWallFirstCellHeightError,
+    BodyWallFirstCellHeightPolicy, BodyWallFirstCellHeightReport,
+};
 
 /// Successful external TetGen execution bound to the exact clearance-admitted source state,
 /// explicit hole-seed policy, and deterministic PLC used for process invocation.
@@ -142,10 +146,11 @@ pub fn run_tetgen_for_handoff(
 /// hole-seed policy, source inter-body clearance policy/report, source-containment policy/report,
 /// bounded tetrahedral-overlap policy/report, bounded bidirectional source/body-boundary normal
 /// policy/report, bounded sharp-crease edge correspondence policy/report, bounded triangulated
-/// discrete normal-variation policy/report, TetGen process diagnostics, parser IDs and tetrahedron
-/// reorientation count, plus the generic exterior provenance/quality/intersection/correspondence
-/// handoff. Holding this value is deliberately **not** a body-fitted, continuous-curvature,
-/// CAD-feature-preservation, or engineering CFD certificate.
+/// discrete normal-variation policy/report, bounded body-wall first-cell height policy/report,
+/// TetGen process diagnostics, parser IDs and tetrahedron reorientation count, plus the generic
+/// exterior provenance/quality/intersection/correspondence handoff. Holding this value is
+/// deliberately **not** a body-fitted, continuous-curvature, CAD-feature-preservation,
+/// boundary-layer, y+, or engineering CFD certificate.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValidatedTetgenExteriorHandoff {
     pub handoff: ValidatedExteriorMesherHandoff,
@@ -163,6 +168,8 @@ pub struct ValidatedTetgenExteriorHandoff {
     pub feature_edges: SourceBoundaryFeatureEdgeReport,
     pub normal_variation_policy: SourceBoundaryDiscreteNormalVariationPolicy,
     pub normal_variation: SourceBoundaryDiscreteNormalVariationReport,
+    pub wall_height_policy: BodyWallFirstCellHeightPolicy,
+    pub wall_heights: BodyWallFirstCellHeightReport,
     pub tetgen_stdout: String,
     pub tetgen_stderr: String,
     pub tetgen_exit_code: Option<i32>,
@@ -182,6 +189,7 @@ pub enum TetgenExteriorHandoffError {
     NormalAlignment(SourceBoundaryNormalError),
     FeatureEdges(SourceBoundaryFeatureEdgeError),
     NormalVariation(SourceBoundaryDiscreteNormalVariationError),
+    WallHeight(BodyWallFirstCellHeightError),
 }
 
 impl Display for TetgenExteriorHandoffError {
@@ -212,6 +220,10 @@ impl Display for TetgenExteriorHandoffError {
                 f,
                 "TetGen output source/body-boundary discrete normal-variation validation failed: {error}"
             ),
+            Self::WallHeight(error) => write!(
+                f,
+                "TetGen output body-wall first-cell height validation failed: {error}"
+            ),
         }
     }
 }
@@ -225,6 +237,7 @@ impl Error for TetgenExteriorHandoffError {
             Self::NormalAlignment(error) => Some(error),
             Self::FeatureEdges(error) => Some(error),
             Self::NormalVariation(error) => Some(error),
+            Self::WallHeight(error) => Some(error),
             Self::BoundStateMismatch => None,
         }
     }
@@ -266,6 +279,12 @@ impl From<SourceBoundaryDiscreteNormalVariationError> for TetgenExteriorHandoffE
     }
 }
 
+impl From<BodyWallFirstCellHeightError> for TetgenExteriorHandoffError {
+    fn from(value: BodyWallFirstCellHeightError) -> Self {
+        Self::WallHeight(value)
+    }
+}
+
 /// Promotes one bound external TetGen result through the solver-bound exterior handoff gates
 /// without accepting any independent source input or marker map from the caller.
 ///
@@ -276,18 +295,19 @@ impl From<SourceBoundaryDiscreteNormalVariationError> for TetgenExteriorHandoffE
 /// quality, the already-admitted source-intersection policy and caller-selected bidirectional
 /// source correspondence policy. Finally the exact mesh/marker/source triplet owned by that handoff
 /// must pass caller-selected bounded bidirectional source/body-boundary normal-opposition,
-/// sharp-crease edge-correspondence, and discrete normal-variation policies. These gates
-/// canonicalize volume-side boundary winding rather than trusting TetGen `.face` order. The source
-/// clearance, overlap, normal, feature-edge and discrete normal-variation policies and successful
-/// reports are retained in the returned value.
+/// sharp-crease edge-correspondence, discrete normal-variation, and body-wall first-cell height
+/// policies. These gates canonicalize volume-side boundary winding rather than trusting TetGen
+/// `.face` order. The source clearance, overlap, normal, feature-edge, discrete normal-variation,
+/// and first-cell-height policies and successful reports are retained in the returned value.
 ///
 /// Source clearance and containment are not rerun because the retained
 /// `ClearanceValidatedExteriorMesherInput` is an owned promoted state whose nested private input
 /// already passed source intersection and containment validation. No fidelity promotion is
 /// performed: positive caller-selected source separation, overlap freedom, bounded centroid-local
-/// normal opposition, bounded sharp-crease correspondence and bounded triangulated normal
-/// variation are necessary evidence, not a body-fitted, continuous-curvature/CAD-preserving, or
-/// engineering-quality certificate.
+/// normal opposition, bounded sharp-crease correspondence, bounded triangulated normal variation,
+/// and bounded first-cell wall-normal height observations are necessary evidence, not a
+/// body-fitted, continuous-curvature/CAD-preserving, boundary-layer/y+, or engineering-quality
+/// certificate.
 pub fn validate_tetgen_external_handoff(
     bound: BoundTetgenExternalRun,
     quality_policy: ExteriorMeshQualityPolicy,
@@ -296,6 +316,7 @@ pub fn validate_tetgen_external_handoff(
     normal_policy: SourceBoundaryNormalPolicy,
     feature_policy: SourceBoundaryFeatureEdgePolicy,
     normal_variation_policy: SourceBoundaryDiscreteNormalVariationPolicy,
+    wall_height_policy: BodyWallFirstCellHeightPolicy,
 ) -> Result<ValidatedTetgenExteriorHandoff, TetgenExteriorHandoffError> {
     let expected = prepare_tetgen_plc(bound.input.containment(), bound.hole_seed_policy)?;
     if expected != bound.prepared {
@@ -357,6 +378,11 @@ pub fn validate_tetgen_external_handoff(
         admission.audited_sources(),
         normal_variation_policy,
     )?;
+    let wall_heights = validate_body_wall_first_cell_heights(
+        &handoff.mesh,
+        &handoff.marker_map,
+        wall_height_policy,
+    )?;
 
     Ok(ValidatedTetgenExteriorHandoff {
         handoff,
@@ -374,6 +400,8 @@ pub fn validate_tetgen_external_handoff(
         feature_edges,
         normal_variation_policy,
         normal_variation,
+        wall_height_policy,
+        wall_heights,
         tetgen_stdout: stdout,
         tetgen_stderr: stderr,
         tetgen_exit_code: exit_code,
@@ -575,6 +603,14 @@ mod tests {
         }
     }
 
+    fn wall_height_policy() -> BodyWallFirstCellHeightPolicy {
+        BodyWallFirstCellHeightPolicy {
+            minimum_height: 1.0e-12,
+            maximum_height: 10.0,
+            max_body_boundary_faces: 100_000,
+        }
+    }
+
     fn synthetic_bound_run(
         input: &ClearanceValidatedExteriorMesherInput,
         mesh: aeroforge_volume_core::VolumeMesh,
@@ -613,6 +649,7 @@ mod tests {
             normal_policy(),
             feature_policy(),
             normal_variation_policy(),
+            wall_height_policy(),
         )
         .unwrap();
 
@@ -659,6 +696,15 @@ mod tests {
         assert_eq!(result.normal_variation.bodies[0].source_sub_sharp_variation_edge_count, 0);
         assert_eq!(result.normal_variation.bodies[0].boundary_sub_sharp_variation_edge_count, 0);
         assert_eq!(result.normal_variation.total_edge_pair_tests, 576);
+        assert_eq!(result.wall_height_policy, wall_height_policy());
+        assert_eq!(result.wall_heights.boundary_face_count, 12);
+        assert_eq!(result.wall_heights.bodies.len(), 1);
+        assert_eq!(result.wall_heights.bodies[0].scene_object_id, 42);
+        assert_eq!(result.wall_heights.bodies[0].boundary_face_count, 12);
+        assert!(result.wall_heights.bodies[0].minimum_height >= wall_height_policy().minimum_height);
+        assert!(result.wall_heights.bodies[0].maximum_height <= wall_height_policy().maximum_height);
+        assert!(result.wall_heights.bodies[0].mean_height >= result.wall_heights.bodies[0].minimum_height);
+        assert!(result.wall_heights.bodies[0].mean_height <= result.wall_heights.bodies[0].maximum_height);
         assert_eq!(result.tetgen_exit_code, Some(0));
         assert_eq!(result.tetgen_switches, TETGEN_BASELINE_SWITCHES);
         assert_eq!(result.input_node_ids, vec![0, 1, 2, 3]);
@@ -684,6 +730,7 @@ mod tests {
             normal_policy(),
             feature_policy(),
             normal_variation_policy(),
+            wall_height_policy(),
         )
         .unwrap_err();
         assert!(matches!(
@@ -717,6 +764,7 @@ mod tests {
             normal_policy(),
             feature_policy(),
             normal_variation_policy(),
+            wall_height_policy(),
         )
         .unwrap();
         assert_eq!(result.hole_seed_policy.max_point_triangle_tests, 100_000);
@@ -724,6 +772,7 @@ mod tests {
         assert_eq!(result.normal_policy, normal_policy());
         assert_eq!(result.feature_policy, feature_policy());
         assert_eq!(result.normal_variation_policy, normal_variation_policy());
+        assert_eq!(result.wall_height_policy, wall_height_policy());
     }
 
     #[test]
@@ -740,6 +789,7 @@ mod tests {
             normal_policy(),
             feature_policy(),
             normal_variation_policy(),
+            wall_height_policy(),
         )
         .unwrap_err();
         assert!(matches!(error, TetgenExteriorHandoffError::Handoff(_)));
@@ -759,6 +809,7 @@ mod tests {
             normal_policy(),
             feature_policy(),
             normal_variation_policy(),
+            wall_height_policy(),
         )
         .unwrap_err();
         assert_eq!(error, TetgenExteriorHandoffError::BoundStateMismatch);
