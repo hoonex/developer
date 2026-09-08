@@ -15,6 +15,7 @@ mod primitive_voxel;
 mod scene_provenance;
 mod source_clearance;
 mod source_containment;
+mod source_feature_edges;
 mod source_intersection;
 mod source_normal_alignment;
 mod su2;
@@ -105,6 +106,11 @@ pub use source_clearance::{
 pub use source_containment::{
     validate_exterior_mesher_source_containment, ContainmentValidatedExteriorMesherInput,
     SourceContainmentError, SourceContainmentPolicy, SourceContainmentReport,
+};
+pub use source_feature_edges::{
+    validate_source_boundary_feature_edges, FeatureEdgeComparisonDirection,
+    FeatureEdgeSurface, SourceBoundaryFeatureEdgeBodyReport, SourceBoundaryFeatureEdgeError,
+    SourceBoundaryFeatureEdgePolicy, SourceBoundaryFeatureEdgeReport,
 };
 pub use source_intersection::{
     validate_source_surface_intersections, SourceSurfaceIntersectionError,
