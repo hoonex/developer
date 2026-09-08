@@ -36,14 +36,17 @@ The validated external TetGen desktop path intentionally remains in this class e
 - deterministic PLC and external-process/parser provenance;
 - caller-selected local tetrahedral quality;
 - bounded bidirectional source-surface proximity;
-- bounded positive-volume tetrahedral non-overlap; and
-- bounded bidirectional centroid-local source/body-boundary normal opposition using canonical outward-from-fluid boundary winding.
+- bounded positive-volume tetrahedral non-overlap;
+- bounded bidirectional centroid-local source/body-boundary normal opposition using canonical outward-from-fluid boundary winding; and
+- bounded bidirectional sharp-crease edge correspondence under explicit feature-angle, distance, direction, dihedral-difference, and pair-work policies.
 
-Those additional facts are retained in the owned TetGen handoff. The exact PLC and TetGen-specific evidence are persisted in `aeroforge_tetgen_input.poly` and `aeroforge_tetgen_handoff.tsv` **format version 4**. The v4 sidecar includes clearance policy/report evidence, overlap policy/report evidence, and the normal distance/cosine/work policy plus aggregate/per-body normal observations.
+Those additional facts are retained in the owned TetGen handoff. The exact PLC and TetGen-specific evidence are persisted in `aeroforge_tetgen_input.poly` and `aeroforge_tetgen_handoff.tsv` **format version 5**. The v5 sidecar includes clearance policy/report evidence, overlap policy/report evidence, normal distance/cosine/work evidence, and sharp-crease feature-edge policy plus aggregate/per-body observations.
 
 The clearance report records the complete checked work count and, for each distinct SceneObject pair, source triangle counts and the observed minimum Euclidean surface distance. This establishes only the caller-selected positive numerical floor; it is not a universal engineering-clearance certification. Single-body scenes have no inter-body pair observation.
 
-These gates improve evidence without changing the fidelity label. In particular, positive source clearance plus centroid-local normal opposition is not equivalent to exact source/output triangle coincidence or general sharp-feature, curvature, CAD-feature, or constrained-surface preservation proof.
+The feature-edge report independently classifies source and body-boundary manifold edges by a caller-selected minimum adjacent-normal angle. Coplanar triangulation diagonals are not features. Selected edges are compared bidirectionally by midpoint-to-segment distance, orientation-independent direction alignment, and unsigned dihedral-angle difference with complete pair work bounded up front.
+
+These gates improve evidence without changing the fidelity label. In particular, positive source clearance, centroid-local normal opposition, and bounded sharp-crease correspondence are not equivalent to exact source/output triangle or edge identity, smooth-curvature preservation, CAD-feature preservation, or a general constrained-surface preservation proof.
 
 ### `StaircaseVoxelDerived`
 
@@ -75,8 +78,8 @@ At minimum, a future body-fitted classification needs a coherent set of evidence
 9. real pinned-SU2 end-to-end reference evidence; and
 10. independent grid/domain/model/reference validation before engineering aerodynamic claims.
 
-The external TetGen path now contributes to items 1–7: it constructs an exterior PLC, preserves stable marker/source ownership, validates the output volume, owns bounded overlap/proximity evidence, owns bounded centroid-local normal-opposition evidence, and owns bounded positive inter-body source clearance under an explicit policy. It still does not establish exact source/output triangle identity, general feature/curvature preservation, boundary-layer suitability, or the remaining solver/engineering obligations, so body-fitted status remains not established.
+The external TetGen path now contributes substantial evidence toward items 1–7: it constructs an exterior PLC, preserves stable marker/source ownership, validates the output volume, owns bounded overlap/proximity evidence, owns bounded centroid-local normal-opposition evidence, owns bounded positive inter-body source clearance, and now owns bounded sharp-crease edge correspondence. It still does not establish exact source/output triangle or edge identity, smooth-curvature/CAD-feature preservation, boundary-layer suitability, or the remaining solver/engineering obligations, so body-fitted status remains not established.
 
 ## Evidence boundary
 
-Routine CI can prove that the fidelity and mesher-admission sidecars contain the intended tokens, that the staircase path stays explicitly staircase-derived, and that the real external-TetGen desktop path retains/persists its implemented clearance, overlap, and normal evidence without fidelity promotion. CI does not by itself prove rendered UI quality, body-fitted geometry, boundary-layer suitability, grid convergence, or engineering aerodynamic accuracy.
+Routine CI can prove that the fidelity and mesher-admission sidecars contain the intended tokens, that the staircase path stays explicitly staircase-derived, and that the real external-TetGen desktop path retains/persists its implemented clearance, overlap, normal, and sharp-crease feature evidence without fidelity promotion. CI does not by itself prove rendered UI quality, body-fitted geometry, smooth-curvature/CAD-feature preservation, boundary-layer suitability, grid convergence, or engineering aerodynamic accuracy.

@@ -73,7 +73,30 @@ The report retains, per SceneObject:
 - maximum source→boundary and boundary→source centroid distances; and
 - minimum source→boundary and boundary→source opposition cosines.
 
-This establishes **bounded centroid-local normal-opposition evidence only**. It does not establish exact triangle identity, sharp-feature preservation, curvature preservation, or CAD-feature preservation.
+This establishes **bounded centroid-local normal-opposition evidence only**. It does not establish exact triangle identity, sharp-feature preservation, smooth-curvature preservation, or CAD-feature preservation.
+
+### Bounded sharp-crease edge correspondence
+
+`validate_source_boundary_feature_edges` adds an independent external-TetGen evidence gate with an explicit `SourceBoundaryFeatureEdgePolicy`:
+
+- `minimum_feature_angle_radians`;
+- `distance_tolerance`;
+- `minimum_direction_alignment_cosine`;
+- `maximum_dihedral_angle_difference_radians`; and
+- `max_edge_pair_tests`.
+
+For each body, source and canonical body-boundary triangles are independently converted to manifold edge maps. An edge is selected as a sharp crease when the unsigned angle between its two adjacent triangle normals meets the configured minimum. Coplanar triangulation diagonals therefore do not become features merely because they are triangle edges.
+
+Every selected source edge scans every selected boundary edge and vice versa. The nearest opposite edge is selected by midpoint-to-segment distance with deterministic first-record tie behavior. The selected pair must also satisfy orientation-independent edge-direction alignment and unsigned dihedral-angle agreement. Complete bidirectional edge-pair work is reserved before comparison; overflow or budget exhaustion fails closed.
+
+The report retains, per SceneObject:
+
+- source and boundary selected feature-edge counts;
+- maximum bidirectional midpoint distances;
+- minimum bidirectional direction-alignment cosines; and
+- maximum bidirectional dihedral-angle differences.
+
+This establishes **bounded sharp-crease correspondence evidence only**. It does not establish exact source/output edge identity, smooth-curvature preservation, CAD-feature semantics, or a general constrained-surface preservation proof.
 
 ## Owned TetGen handoff
 
@@ -85,43 +108,42 @@ This establishes **bounded centroid-local normal-opposition evidence only**. It 
 - source inter-body clearance policy/report;
 - tetrahedral-overlap policy/report;
 - source/body-boundary normal policy/report;
+- source/body-boundary sharp-crease feature-edge policy/report;
 - TetGen stdout/stderr, exit code, and switch contract;
 - parsed input-node, tetrahedron, and boundary-face IDs; and
 - tetrahedron reorientation count.
 
-The clearance and normal evidence are therefore inseparable from the exact source state and solver-bound TetGen mesh/marker pair that passed the complete path.
+The clearance, normal, and feature-edge evidence are therefore inseparable from the exact source state and solver-bound TetGen mesh/marker pair that passed the complete path.
 
 ## Persisted external TetGen provenance
 
-Validated TetGen preparation writes the exact `aeroforge_tetgen_input.poly` and immutable `aeroforge_tetgen_handoff.tsv` **format version 4**.
+Validated TetGen preparation writes the exact `aeroforge_tetgen_input.poly` and immutable `aeroforge_tetgen_handoff.tsv` **format version 5**.
 
-The v4 sidecar includes the prior hole-seed, containment, process/parser, tetrahedral-overlap and source-normal evidence plus:
+The v5 sidecar retains the prior hole-seed, containment, process/parser, tetrahedral-overlap, source-clearance, and source-normal evidence and adds sharp-crease feature-edge evidence.
 
-- `source_clearance_minimum_clearance`;
-- `source_clearance_max_triangle_pair_tests`;
-- `source_clearance_triangle_pair_tests`;
-- `source_clearance_body_pair_count`; and
-- per body pair: stable first/second SceneObject IDs, source triangle counts, and observed minimum clearance.
+Feature evidence includes:
 
-Normal evidence continues to include:
+- `source_feature_minimum_feature_angle_radians`;
+- `source_feature_distance_tolerance`;
+- `source_feature_minimum_direction_alignment_cosine`;
+- `source_feature_maximum_dihedral_angle_difference_radians`;
+- `source_feature_max_edge_pair_tests`;
+- `source_feature_edge_pair_tests`;
+- `source_feature_body_count`; and
+- per-body SceneObject ID, source/boundary selected edge counts, maximum midpoint distances, minimum direction-alignment cosines, and maximum dihedral-angle differences.
 
-- `source_normal_distance_tolerance`;
-- `source_normal_minimum_opposition_cosine`;
-- `source_normal_max_triangle_pair_tests`;
-- `source_normal_triangle_pair_tests`;
-- `source_normal_body_count`; and
-- per-body SceneObject ID, source/boundary triangle counts, maximum centroid distances, and minimum bidirectional opposition cosines.
+Clearance evidence continues to include the selected positive floor, maximum/executed pair work, pair count, and per-pair SceneObject IDs, source triangle counts, and observed minimum clearance. Normal evidence continues to include the distance/cosine/work policy, executed pair count, body count, and per-body triangle counts, maximum centroid distances, and minimum bidirectional opposition cosines.
 
 Raw external stdout/stderr are not copied into the persisted sidecar; their byte counts are recorded while the in-memory handoff retains their text. Persistence continues to state `body_fitted_status=not_established` and `engineering_quality_status=not_established`.
 
 ## Scope of the existing evidence
 
-The external TetGen handoff now establishes more than the generic handoff: it also owns bounded positive inter-body source clearance, bounded positive-volume tetrahedral non-overlap, and bounded centroid-local source/body normal-opposition reports. These are meaningful geometry-evidence gates, but they do not justify a body-fitted fidelity state by themselves.
+The external TetGen handoff now establishes more than the generic handoff: it also owns bounded positive inter-body source clearance, bounded positive-volume tetrahedral non-overlap, bounded centroid-local source/body normal-opposition, and bounded sharp-crease edge-correspondence reports. These are meaningful geometry-evidence gates, but they do not justify a body-fitted fidelity state by themselves.
 
 Neither the generic nor external TetGen handoff currently establishes:
 
-- exact source triangle ↔ boundary triangle coincidence/identity;
-- general sharp-feature, curvature, or CAD-feature preservation;
+- exact source triangle ↔ boundary triangle or source edge ↔ boundary edge coincidence/identity;
+- general smooth-curvature or CAD-feature preservation;
 - a universal engineering minimum body separation beyond the explicit caller-selected numerical clearance floor;
 - boundary-layer quality or wall-normal spacing;
 - globally validated skewness/orthogonality thresholds for an engineering workflow;
@@ -133,4 +155,4 @@ Neither the generic nor external TetGen handoff currently establishes:
 
 ## Remaining higher-fidelity obligations
 
-Before AeroForge makes a body-fitted state representable, the intended meshing workflow still needs evidence appropriate to that claim, including stronger exact/source-feature or curvature preservation where relevant, boundary-layer evidence for near-wall-resolution claims, pinned SU2 end-to-end reference cases, and independent grid/domain/model/reference validation before engineering-accuracy claims.
+Before AeroForge makes a body-fitted state representable, the intended meshing workflow still needs evidence appropriate to that claim, including smooth-curvature/CAD-feature preservation beyond the current sharp-crease gate where relevant, boundary-layer evidence for near-wall-resolution claims, pinned SU2 end-to-end reference cases, and independent grid/domain/model/reference validation before engineering-accuracy claims.
