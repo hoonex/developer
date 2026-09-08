@@ -254,6 +254,9 @@ mod tests {
     use crate::source_intersection::{
         SourceSurfaceIntersectionPolicy, SourceSurfaceIntersectionReport,
     };
+    use crate::source_normal_alignment::{
+        SourceBoundaryNormalPolicy, SourceBoundaryNormalReport,
+    };
     use crate::su2_mesh::{
         BoundaryRole, BoundarySource, DomainAxis, DomainSide, Su2MarkerBinding, Su2MarkerMap,
     };
@@ -391,6 +394,15 @@ mod tests {
                 broad_phase_pair_tests: 0,
                 aabb_candidate_pairs: 0,
                 sat_pair_tests: 0,
+            },
+            normal_policy: SourceBoundaryNormalPolicy {
+                distance_tolerance: 1.0e-6,
+                minimum_opposition_cosine: 0.999_999,
+                max_triangle_pair_tests: 1_000,
+            },
+            normal_alignment: SourceBoundaryNormalReport {
+                bodies: Vec::new(),
+                triangle_pair_tests: 0,
             },
             tetgen_stdout: "ok\n".into(),
             tetgen_stderr: String::new(),
