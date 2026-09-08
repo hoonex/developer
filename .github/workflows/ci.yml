@@ -52,8 +52,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-tetgen-smoke-cargo-${{ hashFiles('**/Cargo.toml') }}
+          key: ${{ runner.os }}-tetgen-desktop-v2-cargo-${{ hashFiles('**/Cargo.toml') }}
           restore-keys: |
+            ${{ runner.os }}-tetgen-desktop-v2-cargo-
+            ${{ runner.os }}-tetgen-smoke-cargo-
             ${{ runner.os }}-cargo-
       - name: Validate real TetGen PLC to exterior handoff
         env:
