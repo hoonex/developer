@@ -1,3 +1,4 @@
+mod boundary_orientation;
 mod cancellable_su2;
 mod exterior_handoff;
 mod exterior_mesh;
@@ -30,6 +31,10 @@ mod voxel_mesh;
 #[cfg(test)]
 mod tetgen_real_smoke;
 
+pub use boundary_orientation::{
+    orient_exterior_boundary_triangles, BoundaryOrientationError,
+    OrientedExteriorBoundaryTriangle,
+};
 pub use cancellable_su2::{
     active_su2_case_paths, peek_su2_case_termination, request_su2_case_cancellation,
     run_su2_case_cancellable, run_su2_case_registered, take_su2_case_termination,
