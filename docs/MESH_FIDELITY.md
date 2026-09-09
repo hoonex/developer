@@ -40,10 +40,11 @@ The validated external TetGen desktop path deliberately remains in this class ev
 - bounded centroid-local source/body normal opposition from canonical outward-from-fluid winding;
 - bounded sharp-crease edge correspondence;
 - bounded triangulated discrete normal-variation correspondence;
-- bounded body-wall first-cell geometric-height observations; and
+- bounded body-wall first-cell geometric-height observations;
+- complete six-internal-dihedral-per-tetrahedron observations under an explicit numerical policy; and
 - bounded **one-to-one triangulated source-facet ↔ output body-facet coincidence** under an explicit vertex tolerance and complete triangle-pair work budget.
 
-The actual desktop path owns `FacetValidatedTetgenExteriorHandoff`, which retains the complete base TetGen handoff plus the constrained-facet policy/report.
+The actual desktop path owns `FacetValidatedTetgenExteriorHandoff`, which retains the complete base TetGen handoff plus the exact tetrahedral-dihedral policy/report and constrained-facet policy/report.
 
 ### Surface-facet evidence
 
@@ -54,6 +55,12 @@ The report retains source, boundary, and matched triangle counts and the maximum
 Routine real-TetGen CI includes both a 12-triangle cube and a rounded 528-triangle fixture; the rounded proof evaluates all 278,784 triangle pairs and passes under a `1e-12` smoke-test tolerance.
 
 This establishes triangulated facet coincidence. It does **not** establish analytic-surface or CAD-patch identity, CAD curve/feature semantics, exact source/output edge identity, or continuous curvature independent of the input triangulation.
+
+### Local tetrahedral-dihedral evidence
+
+`validate_tetrahedral_dihedral_quality` evaluates all six internal dihedral angles of every solver-bound tetrahedron. The report retains the exact cell/angle-test counts plus observed minimum/maximum angles and the cell/tetra-local edge that produced each extreme.
+
+The desktop policy uses a deliberately permissive numerical interval from `1e-12` radians through `π`. The rounded real-TetGen smoke observed 612 cells and exactly 3,672 angle tests, with extrema approximately `0.041458813292730747` rad and `2.5376468437737896` rad. These numbers are fixture observations and the policy is a numerical sanity gate; neither constitutes a universal engineering-quality criterion.
 
 ### Clearance, crease, normal variation, and near-wall evidence
 
@@ -70,11 +77,11 @@ The first-cell-height report observes the tetrahedron directly adjacent to each 
 The exact PLC and TetGen-specific evidence are persisted as:
 
 - `aeroforge_tetgen_input.poly`; and
-- `aeroforge_tetgen_handoff.tsv` **format version 8**.
+- `aeroforge_tetgen_handoff.tsv` **format version 9**.
 
-Version 8 retains the complete v7 evidence set and adds the constrained-facet policy, complete pair work, and per-body source/boundary/matched triangle counts plus maximum matched vertex distance.
+Version 9 preserves the complete v8 constrained-facet evidence set and the full v7 base, then adds the tetrahedral-dihedral policy, complete work count, observed extrema, and extrema cell/local-edge provenance.
 
-The v7 base already contains source clearance, tetrahedral overlap, normal opposition, sharp-crease, discrete normal-variation, first-cell-height, hole-seed, containment, process/parser, and related provenance evidence.
+The v8 field set retains constrained-facet policy/work plus per-body source/boundary/matched triangle counts and maximum matched vertex distance. The v7 base already contains source clearance, tetrahedral overlap, normal opposition, sharp-crease, discrete normal-variation, first-cell-height, hole-seed, containment, process/parser, and related provenance evidence.
 
 None of these fields rewrite the separate mesh-fidelity classification.
 
@@ -95,9 +102,9 @@ Its body boundary follows voxel occupancy rather than the original source surfac
 
 There is still **no `BodyFitted` fidelity enum variant**. This is intentional. Introducing the state before AeroForge has a coherent definition and complete evidence for that definition would make an unsupported persisted claim representable.
 
-The external TetGen path now closes an important former gap: it has direct one-to-one triangulated source/output facet coincidence evidence rather than proximity-only evidence. That materially strengthens source-surface conformance.
+The external TetGen path now closes an important former gap: it has direct one-to-one triangulated source/output facet coincidence evidence rather than proximity-only evidence. It also owns complete local tetrahedral internal-dihedral observations instead of relying only on generic tetrahedral validity. Those additions materially strengthen geometry evidence but do not define a product-level body-fitted or engineering-quality class.
 
-However a future body-fitted classification still needs a definition that addresses the remaining obligations relevant to the intended product claim, including:
+A future body-fitted classification still needs a definition that addresses the remaining obligations relevant to the intended product claim, including:
 
 1. exterior-fluid volume and stable source/body ownership;
 2. complete domain-boundary semantics;
@@ -106,7 +113,7 @@ However a future body-fitted classification still needs a definition that addres
 5. analytic/CAD feature and curvature semantics where the product intends to claim them;
 6. positive-clearance evidence where required by the geometry contract;
 7. actual boundary-layer generation/evidence when near-wall resolution is claimed, beyond a single first-cell-height observation;
-8. engineering mesh-quality criteria appropriate to the solver/model;
+8. engineering mesh-quality criteria appropriate to the solver/model, beyond the current permissive local dihedral sanity interval;
 9. pinned SU2 end-to-end reference evidence; and
 10. independent grid/domain/model/reference validation before engineering aerodynamic claims.
 
@@ -114,7 +121,7 @@ Because the current source representation is fundamentally triangulated, the con
 
 ## Evidence boundary
 
-Routine CI can prove that the staircase path remains staircase-derived and that the real external-TetGen desktop path owns and persists its clearance, overlap, normal, sharp-crease, discrete normal-variation, first-cell-height, and one-to-one triangulated facet evidence without fidelity promotion.
+Routine CI can prove that the staircase path remains staircase-derived and that the real external-TetGen desktop path owns and persists its clearance, overlap, normal, sharp-crease, discrete normal-variation, first-cell-height, complete internal-dihedral, and one-to-one triangulated facet evidence without fidelity promotion.
 
 CI does not by itself prove analytic/CAD geometry fidelity, continuous curvature independent of tessellation, exact edge identity, boundary-layer suitability, engineering mesh-quality adequacy, grid convergence, or aerodynamic accuracy.
 

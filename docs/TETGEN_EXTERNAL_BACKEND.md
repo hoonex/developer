@@ -98,43 +98,48 @@ For every SceneObject body-wall face, the unique owning tetrahedron supplies its
 
 This is not a boundary-layer generator or y+ claim.
 
-## One-to-one constrained-facet evidence
+## Complete internal-dihedral + constrained-facet promotion
 
 After the base handoff passes, `validate_tetgen_external_handoff_with_facet_correspondence` produces `FacetValidatedTetgenExteriorHandoff`.
 
-For each SceneObject, `validate_source_boundary_facet_correspondence` requires equal source/body-boundary triangle counts and checks every source triangle against every body triangle under `max_triangle_pair_tests`. A pair matches only when the complete three-vertex sets coincide within `vertex_distance_tolerance`, independent of winding/order. Every triangle on both sides must participate in exactly one match.
+Before source-facet promotion, the exact solver-bound `VolumeMesh` passes `validate_tetrahedral_dihedral_quality`. Every tetrahedron contributes all six internal dihedral angles. The caller supplies an explicit finite minimum/maximum interval, and the report retains cell count, complete angle-test count, observed minimum/maximum angles, and the tetrahedron plus tetra-local edge slots that produced each extreme.
 
-The report owns source, boundary, and matched triangle counts plus maximum matched vertex distance per body.
+The desktop policy uses `minimum_dihedral_angle_radians=1e-12` and `maximum_dihedral_angle_radians=π`. Those values are intentionally permissive numerical sanity bounds; they are not validated engineering mesh-quality criteria. In the rounded real-TetGen smoke, 612 tetrahedra produced 3,672 complete angle evaluations with observed extrema approximately `0.041458813292730747` rad and `2.5376468437737896` rad. These are fixture observations, not acceptance thresholds.
+
+For each SceneObject, `validate_source_boundary_facet_correspondence` then requires equal source/body-boundary triangle counts and checks every source triangle against every body triangle under `max_triangle_pair_tests`. A pair matches only when the complete three-vertex sets coincide within `vertex_distance_tolerance`, independent of winding/order. Every triangle on both sides must participate in exactly one match.
+
+The facet report owns source, boundary, and matched triangle counts plus maximum matched vertex distance per body.
 
 Routine real-TetGen CI now exercises:
 
 - a cube with 12 source ↔ 12 body triangles and the complete 144-pair scan; and
 - a rounded 528-triangle source/output fixture with the complete 278,784-pair scan.
 
-Both pass under a `1e-12` smoke-test vertex tolerance. The desktop production policy uses its own explicit numerical tolerance/work budget and retains both policy and report.
+Both facet fixtures pass under a `1e-12` smoke-test vertex tolerance. The desktop production facet policy uses its own explicit numerical tolerance/work budget and retains both policy and report.
 
-This evidence demonstrates **one-to-one triangulated source-facet ↔ output body-facet coincidence**. It does not reconstruct analytic/CAD surfaces, CAD feature topology, or continuous curvature independent of the source triangulation, and it does not establish exact source/output edge identity.
+This evidence demonstrates **one-to-one triangulated source-facet ↔ output body-facet coincidence** plus complete solver-bound internal-dihedral observations. It does not reconstruct analytic/CAD surfaces, CAD feature topology, or continuous curvature independent of the source triangulation, does not establish exact source/output edge identity, and does not promote engineering mesh quality.
 
 ## Owned desktop handoff
 
-The actual desktop TetGen preparation path consumes `FacetValidatedTetgenExteriorHandoff`, not just the older base handoff. The stronger wrapper owns the complete base TetGen evidence plus the constrained-facet policy/report, so facet evidence cannot be silently reconstructed or dropped before case generation.
+The actual desktop TetGen preparation path consumes `FacetValidatedTetgenExteriorHandoff`, not just the older base handoff. The stronger wrapper owns the complete base TetGen evidence plus the exact tetrahedral-dihedral policy/report and constrained-facet policy/report, so neither evidence layer can be silently reconstructed or dropped before case generation.
 
 ## Persistence
 
 Facet-promoted external TetGen cases persist:
 
 - `aeroforge_tetgen_input.poly` — the exact deterministic PLC used for the external run; and
-- `aeroforge_tetgen_handoff.tsv` **format version 8**.
+- `aeroforge_tetgen_handoff.tsv` **format version 9**.
 
-Version 8 verifies and retains the complete v7 manifest, then appends:
+Version 9 preserves the full v8 constrained-facet field set and the full v7 base, then appends:
 
-- `source_facet_vertex_distance_tolerance`;
-- `source_facet_max_triangle_pair_tests`;
-- `source_facet_triangle_pair_tests`;
-- `source_facet_body_count`; and
-- per-body SceneObject ID, source triangle count, boundary triangle count, matched triangle count, and maximum matched vertex distance.
+- `tetra_dihedral_policy_minimum_angle_radians`;
+- `tetra_dihedral_policy_maximum_angle_radians`;
+- `tetra_dihedral_cells`;
+- `tetra_dihedral_angle_tests`;
+- observed minimum angle, cell, and tetra-local edge start/end; and
+- observed maximum angle, cell, and tetra-local edge start/end.
 
-The v7 base still retains hole-seed, source-containment, process/parser, tetrahedral-overlap, source-clearance, normal-opposition, sharp-crease, discrete normal-variation, and first-cell-height evidence. Persistence uses create-new semantics and removes the newly created case directory if TetGen provenance cannot be written.
+The v8 set retains constrained-facet policy/work and per-body source/boundary/matched triangle evidence. The v7 base still retains hole-seed, source-containment, process/parser, tetrahedral-overlap, source-clearance, normal-opposition, sharp-crease, discrete normal-variation, and first-cell-height evidence. Persistence uses create-new semantics and removes the newly created case directory if TetGen provenance cannot be written.
 
 The sidecar continues to state:
 
@@ -145,7 +150,7 @@ engineering_quality_status not_established
 
 ## Current evidence and non-claims
 
-Routine CI exercises a real system-installed TetGen executable through backend handoff and desktop prepare/persistence paths. The current evidence establishes the implemented source admission, clearance, process/parser, volume overlap, generic handoff, canonical normal, crease, discrete variation, first-cell height, and one-to-one triangulated facet contracts.
+Routine CI exercises a real system-installed TetGen executable through backend handoff and desktop prepare/persistence paths. The current evidence establishes the implemented source admission, clearance, process/parser, volume overlap, generic handoff, canonical normal, crease, discrete variation, first-cell height, complete internal-dihedral, and one-to-one triangulated facet contracts.
 
 It does **not** establish:
 

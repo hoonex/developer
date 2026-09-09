@@ -101,6 +101,7 @@ ValidatedExteriorMesherInput
 → sharp-crease correspondence
 → discrete triangulated normal-variation correspondence
 → body-wall first-cell-height evidence
+→ complete six-internal-dihedral-per-tetrahedron evaluation
 → one-to-one constrained source/body facet correspondence
 → FacetValidatedTetgenExteriorHandoff
 ```
@@ -109,16 +110,17 @@ Only the clearance-promoted source state can reach the external runner. The desk
 
 The parser requires finite 3D nodes, four-node tetrahedra, valid references, positive boundary markers, and non-zero finite tetrahedral volumes. Negative orientation is repaired by one deterministic vertex swap and counted. Raw `.face` winding is not trusted; canonical exterior orientation is rebuilt from each face's unique positive owning tetrahedron.
 
-The final desktop ownership type is `FacetValidatedTetgenExteriorHandoff`, which contains the complete TetGen handoff plus the exact constrained-facet policy/report. This prevents downstream code from reconstructing or silently omitting source-facet evidence.
+The final desktop ownership type is `FacetValidatedTetgenExteriorHandoff`, which contains the complete base TetGen handoff plus the exact tetrahedral-dihedral policy/report and the exact constrained-facet policy/report. This prevents downstream code from reconstructing or silently omitting either local tetrahedral-shape evidence or source-facet evidence.
 
 Routine real-TetGen CI includes:
 
 - cube: 12 source body facets ↔ 12 output body facets, all 144 source×boundary triangle pairs checked;
-- rounded fixture: 528 ↔ 528 facets, all 278,784 pairs checked.
+- rounded fixture: 528 ↔ 528 facets, all 278,784 pairs checked;
+- rounded solver-bound volume: every tetrahedron contributes exactly six internal-dihedral evaluations under the explicit smoke policy.
 
-The constrained-facet gate requires equal per-body triangle counts and exactly one coordinate-matching opposite facet on both sides under an explicit numerical tolerance. Missing, extra, duplicate, or ambiguous facets fail closed.
+The constrained-facet gate requires equal per-body triangle counts and exactly one coordinate-matching opposite facet on both sides under an explicit numerical tolerance. Missing, extra, duplicate, or ambiguous facets fail closed. The dihedral gate evaluates all six local-edge dihedral angles for every audited solver-bound tetrahedron and retains total work plus observed extrema and the tetrahedron/local-edge that produced each extreme.
 
-This establishes **one-to-one coincidence of the input triangulated source facets and output body-boundary facets within the selected numerical tolerance**. It does not establish analytic/CAD surface identity, CAD patch/curve semantics, continuous curvature independent of source tessellation, or exact source/output edge identity.
+This establishes **one-to-one coincidence of the input triangulated source facets and output body-boundary facets within the selected numerical tolerance**, together with complete bounded internal-dihedral evidence for the solver-bound tetrahedra. It does not establish analytic/CAD surface identity, CAD patch/curve semantics, continuous curvature independent of source tessellation, exact source/output edge identity, or engineering mesh quality.
 
 ### External TetGen persisted evidence
 
@@ -126,9 +128,9 @@ The external path persists:
 
 - exact `aeroforge_tetgen_input.poly`;
 - generic `aeroforge_exterior_handoff.tsv`;
-- `aeroforge_tetgen_handoff.tsv` format **v8**.
+- `aeroforge_tetgen_handoff.tsv` format **v9**.
 
-V8 retains the prior containment, hole-seed, process/parser, clearance, tetrahedral-overlap, normal, sharp-crease, discrete-normal-variation, and first-cell-height evidence, then adds constrained-facet policy/work and per-body source/boundary/matched triangle counts plus maximum matched vertex distance.
+V9 preserves the complete v8 constrained-facet evidence set and the full v7 base, then appends the exact tetrahedral-dihedral policy, cell count, complete angle-test count, observed minimum/maximum angles, and the cell/local-edge location of each observed extreme.
 
 The external path still persists `mesh_fidelity=unclassified_audited_volume`, `body_fitted_status=not_established`, and `engineering_quality_status=not_established`. `Su2MeshFidelity` intentionally has no `BodyFitted` variant yet.
 
@@ -205,10 +207,11 @@ Accurate evidence currently includes:
 - canonical body-boundary orientation and normal opposition;
 - sharp-crease and discrete triangulated normal-variation correspondence;
 - body-wall first-cell-height observation;
+- complete six-internal-dihedral-per-tetrahedron evidence under an explicit numerical policy;
 - one-to-one triangulated source/body facet coincidence;
-- persisted TetGen provenance v8 through the real desktop prepare path.
+- persisted TetGen provenance v9 through the real desktop prepare path.
 
-Remaining engineering obligations are materially different from another proximity/conformance proxy. They include CAD/analytic semantics where required, an actual boundary-layer strategy when near-wall resolution is claimed, explicit engineering mesh-quality criteria, trusted dimensional reference cases, and independent grid/domain/model sensitivity or convergence evidence.
+The dihedral policy used by the desktop is deliberately permissive numerical sanity evidence, not a validated engineering skewness/orthogonality/aspect/quality specification. Remaining engineering obligations are materially different from another proximity/conformance proxy. They include CAD/analytic semantics where required, an actual boundary-layer strategy when near-wall resolution is claimed, explicit engineering mesh-quality criteria, trusted dimensional reference cases, and independent grid/domain/model sensitivity or convergence evidence.
 
 Existing cylinder/grid/domain studies remain diagnostic and do not establish formal GCI. Successful SU2 exit, finite coefficients, aggregate/surface consistency, or `residual_target_met` do not by themselves establish aerodynamic accuracy.
 

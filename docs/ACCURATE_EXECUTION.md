@@ -36,15 +36,16 @@ validated source/domain/marker provenance
 → fail-closed .node/.ele/.face parsing
 → tetrahedral non-overlap + generic exterior handoff
 → normal / sharp-crease / discrete-normal-variation / first-cell-height evidence
+→ complete six-internal-dihedral-per-tetrahedron evidence
 → one-to-one constrained source/body facet correspondence
 → FacetValidatedTetgenExteriorHandoff
 ```
 
-The actual desktop path owns `FacetValidatedTetgenExteriorHandoff`. It contains the complete validated TetGen handoff plus the exact constrained-facet policy/report; downstream case generation cannot silently reconstruct or omit that evidence.
+The actual desktop path owns `FacetValidatedTetgenExteriorHandoff`. It contains the complete validated TetGen handoff plus the exact tetrahedral-dihedral policy/report and constrained-facet policy/report; downstream case generation cannot silently reconstruct or omit either evidence layer.
 
-Routine real-TetGen CI demonstrates one-to-one triangulated source-facet ↔ output-body-facet coincidence within explicit numerical tolerance, including a rounded 528-triangle source/output fixture with all 278,784 source×boundary pairs checked.
+Routine real-TetGen CI demonstrates one-to-one triangulated source-facet ↔ output-body-facet coincidence within explicit numerical tolerance, including a rounded 528-triangle source/output fixture with all 278,784 source×boundary pairs checked. The same rounded solver-bound handoff evaluates exactly six internal dihedral angles per output tetrahedron under an explicit smoke policy and retains complete extrema/work evidence.
 
-This does **not** establish analytic/CAD surface identity, CAD patch/curve semantics, continuous curvature independent of source tessellation, exact source/output edge identity, a layered boundary-layer mesh, or engineering-quality CFD.
+This does **not** establish analytic/CAD surface identity, CAD patch/curve semantics, continuous curvature independent of source tessellation, exact source/output edge identity, a layered boundary-layer mesh, or engineering-quality CFD. The desktop dihedral interval is deliberately permissive numerical sanity evidence, not an engineering mesh-quality specification.
 
 Desktop OBJ/STL/static-glTF/GLB import feeds both the shared preview/staircase route and, when selected for external TetGen preparation, the audited source-surface route. Static CFD geometry remains mandatory: skins and morph targets fail closed; external glTF buffers must resolve through validated local-relative paths.
 
@@ -102,9 +103,9 @@ The facet-promoted external TetGen path additionally persists:
 
 - exact `aeroforge_tetgen_input.poly`;
 - generic `aeroforge_exterior_handoff.tsv`; and
-- `aeroforge_tetgen_handoff.tsv` **format v8**.
+- `aeroforge_tetgen_handoff.tsv` **format v9**.
 
-TetGen v8 retains the v7 hole-seed, containment, clearance, process/parser, overlap, normal, sharp-crease, discrete-normal-variation, and first-cell-height evidence, then adds constrained-facet policy/work and per-body source/boundary/matched triangle counts plus maximum matched vertex distance.
+TetGen v9 preserves the complete v8 constrained-facet evidence set and the full v7 base, then appends the exact tetrahedral-dihedral policy, tetrahedron count, complete angle-test count, observed minimum/maximum angles, and the tetrahedron/local-edge location of each observed extreme.
 
 The external path remains `unclassified_audited_volume`; `body_fitted_status` and `engineering_quality_status` remain `not_established`.
 
@@ -123,7 +124,7 @@ States:
 
 `AccurateLifecycleRuntime` keeps only auxiliary observations: immutable run-root identity, registered active case path, latest parsed history quality, cancellation-request state, and cancellation-sidecar diagnostics.
 
-When a run starts, AeroForge snapshots `(scene revision, run sequence)` and the case-root path. Later edits to the editable root field do not retarget the active run.
+When a run starts AeroForge snapshots `(scene revision, run sequence)` and the case-root path. Later edits to the editable root field do not retarget the active run.
 
 Live targeting uses the backend registry of actually active direct-child cases rather than filesystem name guessing. Multiple registered matches fail closed as ambiguous.
 
@@ -192,7 +193,11 @@ Representative runtime checkpoints:
 - **#903** — facet-owned wrapper plus rounded actual-TetGen 528↔528 / 278,784-pair proof;
 - **#905** — desktop Accurate preparation owns the facet-promoted handoff;
 - **#911 / run `34243197775`** — TetGen provenance v8, real desktop prepare+persistence, 4/4 GREEN;
-- **#913 / run `34243969877`** — v8 documentation reconciliation, 4/4 GREEN.
+- **#913 / run `34243969877`** — v8 documentation reconciliation, 4/4 GREEN;
+- **#927 / run `34298181967` at `1a077ddee4c130faacf0b9f88dc331d91354bee7`** — `FacetValidatedTetgenExteriorHandoff` owns complete six-angle-per-tetrahedron dihedral evidence; rounded real-TetGen ownership plus desktop path, 4/4 GREEN;
+- **#929 / run `34315349508` at `cc948cead8c11f1d733bcd391fb80ee34a1fbdd9`** — TetGen provenance v9 persists dihedral policy/work/extrema through the real desktop prepare path; 4/4 GREEN.
+
+The rounded real-TetGen smoke observed 612 tetrahedra and therefore 3,672 internal-dihedral evaluations, with observed extrema approximately `0.041458813292730747` rad and `2.5376468437737896` rad. Those are fixture observations, not engineering acceptance thresholds.
 
 Smoke-fixture aerodynamic values remain diagnostics, not trusted dimensional reference data.
 
@@ -211,4 +216,4 @@ AeroForge does not currently claim:
 - GPU per-object force attribution;
 - process-tree/MPI cancellation, pause/resume, checkpoint restart, or crash recovery.
 
-The external TetGen path has materially closed the former source-surface-conformance gap at the **triangulated facet** level. The next geometry work should therefore not reimplement another proximity proxy. If analytic/CAD fidelity is required, the source data model must gain semantic patch/curve/feature identity or an equivalent CAD-aware import path. Near-wall engineering claims require an actual boundary-layer strategy beyond first-cell observation. Engineering accuracy then requires explicit mesh-quality criteria plus trusted dimensional reference and grid/domain/model sensitivity evidence.
+Complete tetrahedral internal-dihedral evidence is a bounded local shape contract, not an engineering-quality promotion. The external TetGen path has materially closed the former source-surface-conformance gap at the **triangulated facet** level. The next geometry work should therefore not reimplement another proximity proxy. If analytic/CAD fidelity is required, the source data model must gain semantic patch/curve/feature identity or an equivalent CAD-aware import path. Near-wall engineering claims require an actual boundary-layer strategy beyond first-cell observation. Engineering accuracy then requires explicit mesh-quality criteria plus trusted dimensional reference and grid/domain/model sensitivity evidence.

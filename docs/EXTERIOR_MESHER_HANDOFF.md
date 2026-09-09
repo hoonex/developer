@@ -57,15 +57,24 @@ A positive sub-sharp count on a rounded triangulated fixture is discrete polygon
 
 This observes only the first adjacent tetrahedron. It does not establish a layered boundary-layer mesh, growth ratio, orthogonality, y+, or engineering near-wall adequacy.
 
-## One-to-one constrained-facet promotion
+## Dihedral + one-to-one constrained-facet promotion
 
-After the base TetGen handoff passes, `validate_tetgen_external_handoff_with_facet_correspondence` promotes it to `FacetValidatedTetgenExteriorHandoff`.
+After the base TetGen handoff passes, `validate_tetgen_external_handoff_with_facet_correspondence` promotes it to `FacetValidatedTetgenExteriorHandoff` in two additional fail-closed steps over the exact retained solver-bound mesh.
 
-The promotion runs `validate_source_boundary_facet_correspondence` on the **exact** retained admitted source state and the **exact** solver-bound output mesh/marker pair. For every SceneObject it requires equal source/body-boundary triangle counts and evaluates the complete source×boundary triangle pair set under an explicit budget.
+First, `validate_tetrahedral_dihedral_quality` evaluates **all six internal dihedral angles of every tetrahedron**. The caller provides an explicit finite minimum/maximum interval. The report retains:
+
+- tetrahedron count;
+- exact angle-test count (`6 * cells`);
+- observed minimum internal dihedral angle plus its tetrahedron index and tetra-local edge slots; and
+- observed maximum internal dihedral angle plus its tetrahedron index and tetra-local edge slots.
+
+The local edge slots identify vertices `0..=3` inside the tetrahedron; they are not global point IDs. The desktop interval is deliberately permissive numerical sanity evidence. It is not a validated engineering skewness, orthogonality, aspect, or solver-adequacy criterion.
+
+Second, the promotion runs `validate_source_boundary_facet_correspondence` on the **exact** retained admitted source state and the **exact** solver-bound output mesh/marker pair. For every SceneObject it requires equal source/body-boundary triangle counts and evaluates the complete source×boundary triangle pair set under an explicit budget.
 
 A pair matches only when all three triangle vertices can be paired within `vertex_distance_tolerance`; winding and vertex order are ignored. Every source triangle and every boundary triangle must participate in exactly one match. Missing, extra, duplicate, or ambiguous facets fail closed.
 
-The retained report includes per body:
+The retained facet report includes per body:
 
 - SceneObject ID;
 - source triangle count;
@@ -73,9 +82,9 @@ The retained report includes per body:
 - matched triangle count; and
 - maximum matched vertex distance.
 
-This is **one-to-one triangulated facet coincidence evidence**. Routine real-TetGen smoke covers both a cube and a rounded 528-triangle fixture; the rounded fixture performs the full 528×528 comparison set and passes under a `1e-12` test tolerance.
+This is **one-to-one triangulated facet coincidence evidence** plus complete local internal-dihedral evidence. Routine real-TetGen smoke covers both a cube and a rounded 528-triangle fixture; the rounded fixture performs the full 528×528 comparison set and passes under a `1e-12` facet smoke tolerance. The rounded solver-bound output contained 612 tetrahedra, so exactly 3,672 dihedral angles were evaluated; observed extrema were approximately `0.041458813292730747` rad and `2.5376468437737896` rad. Those values are fixture observations, not engineering acceptance thresholds.
 
-The stronger wrapper still does not establish analytic/CAD surface identity, CAD patch/curve semantics, continuous curvature independent of triangulation, or exact source/output edge identity.
+The stronger wrapper still does not establish analytic/CAD surface identity, CAD patch/curve semantics, continuous curvature independent of triangulation, exact source/output edge identity, boundary-layer quality, engineering mesh quality, or aerodynamic accuracy.
 
 ## Owned TetGen handoff hierarchy
 
@@ -93,30 +102,37 @@ The stronger wrapper still does not establish analytic/CAD surface identity, CAD
 - parsed node/tetrahedron/boundary-face IDs; and
 - tetrahedron reorientation count.
 
-`FacetValidatedTetgenExteriorHandoff` owns that complete handoff plus the constrained-facet policy/report. The desktop Accurate TetGen path consumes this stronger wrapper rather than reconstructing facet evidence downstream.
+`FacetValidatedTetgenExteriorHandoff` owns that complete base handoff plus the exact tetrahedral-dihedral policy/report and the exact constrained-facet policy/report. The desktop Accurate TetGen path consumes this stronger wrapper rather than reconstructing either evidence layer downstream.
 
 ## Persisted external TetGen provenance
 
 The desktop facet-promoted path persists:
 
 - exact `aeroforge_tetgen_input.poly`; and
-- immutable `aeroforge_tetgen_handoff.tsv` **format version 8**.
+- immutable `aeroforge_tetgen_handoff.tsv` **format version 9**.
 
-Version 8 retains the entire v7 manifest as its authoritative base, then appends:
+Version 9 preserves the entire v8 constrained-facet field set and the complete v7 base, then appends:
 
-- `source_facet_vertex_distance_tolerance`;
-- `source_facet_max_triangle_pair_tests`;
-- `source_facet_triangle_pair_tests`;
-- `source_facet_body_count`; and
-- per-body SceneObject ID, source triangle count, boundary triangle count, matched triangle count, and maximum matched vertex distance.
+- `tetra_dihedral_policy_minimum_angle_radians`;
+- `tetra_dihedral_policy_maximum_angle_radians`;
+- `tetra_dihedral_cells`;
+- `tetra_dihedral_angle_tests`;
+- `tetra_dihedral_observed_minimum_angle_radians`;
+- `tetra_dihedral_observed_minimum_cell`;
+- `tetra_dihedral_observed_minimum_local_edge_start`;
+- `tetra_dihedral_observed_minimum_local_edge_end`;
+- `tetra_dihedral_observed_maximum_angle_radians`;
+- `tetra_dihedral_observed_maximum_cell`;
+- `tetra_dihedral_observed_maximum_local_edge_start`; and
+- `tetra_dihedral_observed_maximum_local_edge_end`.
 
-The v7 base still contains hole-seed, containment, source-clearance, external-process/parser, tetrahedral-overlap, normal, sharp-crease, discrete-normal-variation, and first-cell-height evidence. Raw external stdout/stderr remain in memory; only byte counts are persisted.
+The v8 field set still contains the constrained-facet policy/work and per-body SceneObject/source/boundary/matched-triangle evidence. The v7 base still contains hole-seed, containment, source-clearance, external-process/parser, tetrahedral-overlap, normal, sharp-crease, discrete-normal-variation, and first-cell-height evidence. Raw external stdout/stderr remain in memory; only byte counts are persisted.
 
-The facet-aware renderer refuses to promote an unexpected base manifest: it requires the exact format-v7 prefix before constructing v8. Persistence retains `body_fitted_status=not_established` and `engineering_quality_status=not_established`.
+The facet-aware renderer refuses to promote an unexpected base manifest: it requires the exact format-v7 prefix before constructing v9. Persistence retains `body_fitted_status=not_established` and `engineering_quality_status=not_established`.
 
 ## Current evidence boundary
 
-The external TetGen path now establishes significantly stronger geometry evidence than the generic handoff, including **one-to-one source-triangle ↔ output-body-triangle coincidence within an explicit tolerance**.
+The external TetGen path now establishes significantly stronger geometry evidence than the generic handoff, including **one-to-one source-triangle ↔ output-body-triangle coincidence within an explicit tolerance** and complete six-angle-per-cell internal-dihedral observations under an explicit numerical policy.
 
 It still does not establish:
 
