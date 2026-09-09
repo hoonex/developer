@@ -12,58 +12,21 @@ The product deliberately separates **interactive responsiveness**, **solver exec
 
 `aeroforge-flow-core` provides the CPU correctness/reference kernel. The desktop can run the same field model through the experimental WGSL GPU compute path where supported.
 
-Preview contracts include:
+Preview contracts include D3Q19 BGK collision/streaming, periodic/no-slip/moving-wall boundaries, NEQ velocity/pressure open boundaries, AeroForge's prescribed free-stream `FarField` primitive, deterministic solid ownership preparation, CPU per-object momentum-exchange provenance, and controlled CPU/GPU parity smokes.
 
-- D3Q19 BGK collision/streaming;
-- periodic and no-slip/moving-wall boundaries;
-- NEQ velocity/pressure open boundaries;
-- AeroForge's prescribed free-stream `FarField` primitive;
-- deterministic primitive/imported solid ownership preparation;
-- CPU per-object momentum-exchange provenance;
-- GPU parity smokes against the exact app WGSL.
-
-`FarField` is prescribed free-stream NEQ. It is not a generic characteristic, convective, absorbing, or non-reflecting boundary.
-
-Preview remains a voxel/cell-centered representation. BGK Mach/relaxation limitations and physical-scaling diagnostics remain authoritative. The GPU path currently consumes a binary solid mask and does not provide per-object GPU force attribution.
+`FarField` is prescribed free-stream NEQ. It is not a generic characteristic, convective, absorbing, or non-reflecting boundary. Preview remains voxel/cell-centered and is not a validated high-fidelity CFD replacement.
 
 ## Accurate solve: pinned SU2 adapter
 
-The current Accurate numerical backend delegates the finite-volume solve to **SU2_CFD 8.5.0 Harrier** rather than recreating an industrial RANS stack inside AeroForge.
+The current Accurate numerical backend delegates the finite-volume solve to **SU2_CFD 8.5.0 Harrier**. AeroForge owns geometry revision/freshness, mesh/source/marker provenance, generated configuration, SI coefficient references and frame, runtime discovery, persistence, execution/cancellation lifecycle, history parsing, and aggregate/per-surface diagnostics. SU2 owns the numerical flow solve.
 
-AeroForge owns:
-
-- geometry revision and prepared-case freshness;
-- mesh/source/marker provenance;
-- SU2 configuration generation;
-- explicit positive finite SI `REF_AREA` / `REF_LENGTH`;
-- the pinned +X-flow coefficient frame and moment origin;
-- runtime discovery/banner checking;
-- case persistence;
-- process execution and direct-child cancellation;
-- live/final history parsing;
-- aggregate and exact per-surface six-axis diagnostics;
-- immutable execution/lifecycle provenance.
-
-SU2 owns the numerical flow solve.
-
-A source being representable in the preview editor does not imply a physically valid one-to-one SU2 translation. Unsupported forcing/source models must remain unsupported or acquire an explicit physical model.
-
-### Accurate coefficient frame
-
-The generated SU2 contract pins:
-
-- `SYSTEM_MEASUREMENTS= SI`;
-- `AOA=0`;
-- `SIDESLIP_ANGLE=0`;
-- moment origin `(0,0,0)`.
-
-AeroForge is Y-up, so the UI retains exact world-axis `CFx/CFy/CFz/CMx/CMy/CMz` terminology instead of silently relabeling raw SU2 `CL` as AeroForge vertical lift. Aggregate and per-body values use the same global reference area/length and origin; per-body values are not automatically body-normalized engineering `Cd/Cl`.
+The generated coefficient contract pins SI measurements, `AOA=0`, `SIDESLIP_ANGLE=0`, and moment origin `(0,0,0)`. AeroForge is Y-up, so the UI retains exact world-axis `CFx/CFy/CFz/CMx/CMy/CMz` terminology.
 
 ## Accurate geometry paths
 
-Accurate mode has **two distinct geometry preparation paths**. Their evidence and fidelity states must never be conflated.
+Accurate mode has two deliberately distinct geometry preparation paths.
 
-### 1. Built-in deterministic staircase reference path
+### 1. Built-in staircase reference path
 
 ```text
 stable SceneObject.id
@@ -76,15 +39,11 @@ stable SceneObject.id
 → SU2 case
 ```
 
-Analytic primitives and audited imported surfaces share the same stable SceneObject namespace. Lowest stable ID owns overlap; duplicate cross-kind IDs fail closed.
-
-Imported surfaces are transformed from object-local to world coordinates and pass bounded repair/audit before rasterization. Static glTF/GLB is a CFD-surface contract: skins and morph targets fail closed, and external `.gltf` buffers are accepted only through validated local-relative paths.
-
-This path is explicitly `staircase_voxel_derived`. Its body boundary follows occupancy, not the original source surface. It is **not body-fitted** and is not engineering-quality meshing.
+Analytic primitives and audited imported surfaces share the stable SceneObject namespace. Imported geometry is transformed into world coordinates and repaired/audited before rasterization. This path is `staircase_voxel_derived`; its body boundary follows occupancy, not the original source surface, and it is **not body-fitted**.
 
 ### 2. Optional external TetGen source-surface path
 
-A separately installed TetGen executable can consume the audited triangulated source surfaces directly.
+A separately installed TetGen executable consumes the admitted triangulated source surfaces directly:
 
 ```text
 ValidatedExteriorMesherInput
@@ -104,119 +63,63 @@ ValidatedExteriorMesherInput
 → complete six-internal-dihedral-per-tetrahedron evaluation
 → one-to-one constrained source/body facet correspondence
 → FacetValidatedTetgenExteriorHandoff
+→ complete unique-face centroid/normal orthogonality evaluation
+→ OrthogonalityValidatedTetgenExteriorHandoff
 ```
 
-Only the clearance-promoted source state can reach the external runner. The desktop clearance floor is a numerical admission floor, not a universal engineering separation requirement.
+Only clearance-promoted source state reaches the runner. The parser requires finite 3D nodes, four-node tetrahedra, valid references, positive boundary markers, and non-zero finite tetrahedral volumes. Negative finite orientation is repaired deterministically and counted. Raw `.face` winding is not trusted; canonical exterior orientation is rebuilt from positive owning tetrahedra.
 
-The parser requires finite 3D nodes, four-node tetrahedra, valid references, positive boundary markers, and non-zero finite tetrahedral volumes. Negative orientation is repaired by one deterministic vertex swap and counted. Raw `.face` winding is not trusted; canonical exterior orientation is rebuilt from each face's unique positive owning tetrahedron.
+### Ownership hierarchy
 
-The final desktop ownership type is `FacetValidatedTetgenExteriorHandoff`, which contains the complete base TetGen handoff plus the exact tetrahedral-dihedral policy/report and the exact constrained-facet policy/report. This prevents downstream code from reconstructing or silently omitting either local tetrahedral-shape evidence or source-facet evidence.
+`ValidatedTetgenExteriorHandoff` owns the base source/volume/process/parser geometry evidence. `FacetValidatedTetgenExteriorHandoff` adds complete six-angle-per-cell internal-dihedral evidence and exact constrained-facet policy/report. `OrthogonalityValidatedTetgenExteriorHandoff` is the final desktop-owned wrapper; it contains the facet wrapper plus complete unique-face orthogonality policy/report produced from the exact same retained solver-bound mesh.
 
-Routine real-TetGen CI includes:
+This layering keeps evidence additive and prevents downstream code from silently reconstructing or dropping a stronger proof layer.
 
-- cube: 12 source body facets ↔ 12 output body facets, all 144 source×boundary triangle pairs checked;
-- rounded fixture: 528 ↔ 528 facets, all 278,784 pairs checked;
-- rounded solver-bound volume: every tetrahedron contributes exactly six internal-dihedral evaluations under the explicit smoke policy.
+### Triangulated facet evidence
 
-The constrained-facet gate requires equal per-body triangle counts and exactly one coordinate-matching opposite facet on both sides under an explicit numerical tolerance. Missing, extra, duplicate, or ambiguous facets fail closed. The dihedral gate evaluates all six local-edge dihedral angles for every audited solver-bound tetrahedron and retains total work plus observed extrema and the tetrahedron/local-edge that produced each extreme.
+For each SceneObject, the constrained-facet gate requires equal source/output body triangle counts and evaluates the complete source×boundary pair set. A match requires the complete three-vertex sets to coincide within `vertex_distance_tolerance`, independent of winding/order, and each triangle on both sides must have exactly one match.
 
-This establishes **one-to-one coincidence of the input triangulated source facets and output body-boundary facets within the selected numerical tolerance**, together with complete bounded internal-dihedral evidence for the solver-bound tetrahedra. It does not establish analytic/CAD surface identity, CAD patch/curve semantics, continuous curvature independent of source tessellation, exact source/output edge identity, or engineering mesh quality.
+Routine real-TetGen CI includes a 12↔12 cube (144 complete pairs) and a rounded 528↔528 fixture (278,784 complete pairs), with the rounded smoke passing under a `1e-12` vertex tolerance.
+
+This establishes triangulated facet coincidence. It does not manufacture analytic/CAD patch, curve, feature, or continuous-curvature semantics that are absent from the source model, and it does not establish exact source/output edge identity.
+
+### Local tetrahedral shape evidence
+
+`validate_tetrahedral_dihedral_quality` evaluates all six internal dihedral angles of every solver-bound tetrahedron. The desktop interval `[1e-12, π]` radians is deliberately permissive numerical sanity policy. The rounded real-TetGen fixture contains 612 tetrahedra and therefore 3,672 complete angle tests; observed extrema were `0.041458813292730747` and `2.5376468437737896` radians. These are fixture observations, not engineering thresholds.
+
+`validate_tetrahedral_face_orthogonality` evaluates every unique tetrahedral face. Interior faces compare the face normal with the vector joining the two owner-cell centroids. Boundary faces compare the face normal with the owner-cell-centroid → face-centroid vector. The absolute cosine is retained (`1` normal-aligned, `0` tangential).
+
+The desktop face policy uses `1e-12` minimum cosine for both interior and boundary faces plus a 20,000,000-face complete-work budget. The rounded real-TetGen fixture observed 954 interior faces and 540 boundary faces, 1,494 total face tests, minimum interior cosine `0.3927105399869913`, and minimum boundary cosine `0.5161688582468765`. The policy and observations are numerical evidence only; neither is a solver-specific engineering mesh-quality criterion or a layered wall-orthogonality certificate.
 
 ### External TetGen persisted evidence
 
-The external path persists:
+The external path persists the exact PLC, generic exterior handoff, and `aeroforge_tetgen_handoff.tsv` **format v10**.
 
-- exact `aeroforge_tetgen_input.poly`;
-- generic `aeroforge_exterior_handoff.tsv`;
-- `aeroforge_tetgen_handoff.tsv` format **v9**.
+The persistence chain is additive:
 
-V9 preserves the complete v8 constrained-facet evidence set and the full v7 base, then appends the exact tetrahedral-dihedral policy, cell count, complete angle-test count, observed minimum/maximum angles, and the cell/local-edge location of each observed extreme.
+- v7 base: containment, clearance, process/parser, overlap, normal, crease, discrete normal variation, first-cell height, and related evidence;
+- v8: one-to-one constrained-facet evidence;
+- v9: complete internal-dihedral policy/report;
+- v10: complete unique-face orthogonality policy/report.
 
-The external path still persists `mesh_fidelity=unclassified_audited_volume`, `body_fitted_status=not_established`, and `engineering_quality_status=not_established`. `Su2MeshFidelity` intentionally has no `BodyFitted` variant yet.
+The v10 renderer requires the exact v9 manifest prefix before promotion. Optional interior-face extrema are represented explicitly as `unavailable` where a valid mesh has no interior faces; they are never guessed.
 
-## Desktop workspace
+The external path remains `mesh_fidelity=unclassified_audited_volume`, `body_fitted_status=not_established`, and `engineering_quality_status=not_established`. `Su2MeshFidelity` intentionally has no `BodyFitted` variant.
 
-The desktop editor uses one viewport-first shell:
+## Desktop workspace and execution ownership
 
-- resizable Scene panel on the left;
-- resizable Inspector on the right;
-- one shared Geometry selection model for analytic/imported objects;
-- import as an on-demand operation rather than a second object editor;
-- shared viewport picking and W/E/R transform-gizmo interaction;
-- preview-only controls/diagnostics hidden from Accurate mode.
+The desktop uses one viewport-first shell with resizable Scene/Inspector panels, shared Geometry editing, viewport picking/gizmos, and Accurate `Viewport / Prepare / Run / Results` ownership. While SU2 is running/cancelling, Run/Results remains authoritative so polling and cancellation ownership cannot disappear behind a workspace switch.
 
-Accurate mode uses one central surface with explicit `Viewport / Prepare / Run / Results` ownership. Prepare and Run/Results replace the viewport rather than opening competing solve windows.
+`AccurateExecutionStatus` is the single lifecycle owner: `Idle / Running / Cancelling / Cancelled / Succeeded / Failed`. Cancellation targets only the registered direct `SU2_CFD` child; no process-tree/MPI cancellation, pause/resume, checkpoint restart, or crash-recovery claim is made.
 
-While SU2 is `Running` or `Cancelling`, Run/Results stays authoritative so completion polling and cancellation ownership cannot disappear behind a workspace switch.
+## Geometry model and fidelity boundary
 
-`AccurateExecutionStatus` is the single lifecycle state owner:
+The editor currently has analytic Box/Sphere/Cylinder primitives and imported triangle `SurfaceMesh` objects. Both use stable SceneObject IDs. There is no CAD patch/curve/feature semantic model. A future CAD-aware fidelity claim requires new source semantics rather than relabeling triangle evidence.
 
-`Idle / Running / Cancelling / Cancelled / Succeeded / Failed`.
-
-Live targeting uses the backend registry of actually active direct-child cases, bounded by the immutable run-root snapshot, scene revision, and sequence. It does not select an old directory by filename similarity. Ambiguous matches fail closed.
-
-Cancellation targets only the registered direct `SU2_CFD` child. There is no process-tree/MPI-worker cancellation, pause/resume, checkpoint restart, or crash-recovery claim. Confirmed cancellation may persist immutable `aeroforge_lifecycle.tsv`; that sidecar is not a recovery journal.
-
-## Geometry model
-
-The editor currently has two source representations:
-
-1. analytic Box / Sphere / Cylinder primitives;
-2. imported triangle `SurfaceMesh` objects from OBJ/STL/static glTF/GLB.
-
-Both use stable `SceneObject.id` provenance. Editing/storage remains primitive/triangle-mesh based; there is currently no CAD patch/curve/feature semantic model.
-
-That absence matters for fidelity claims: although the external TetGen path now proves one-to-one triangulated facet coincidence, the source model contains no CAD topology from which AeroForge could prove CAD-feature preservation. A future CAD-aware claim requires new source semantics rather than relabeling triangle evidence.
-
-Next geometry work should focus on capabilities not already covered by the current facet proof:
-
-- acceleration/caching for imported preview occupancy;
-- CSG/profile/airfoil authoring where useful;
-- richer source semantic feature/patch identity if analytic/CAD fidelity is required;
-- an actual near-wall boundary-layer generation strategy if layered near-wall claims are intended.
-
-## Result and provenance contract
-
-Every Accurate result keeps enough identity to avoid presenting stale/incomparable data as current:
-
-- solver backend/version;
-- geometry revision;
-- source definitions/translation decisions;
-- mesh/provenance identity;
-- fluid/numerical settings;
-- coefficient reference area/length and frame/origin;
-- execution termination;
-- structured convergence/history quality;
-- aggregate/per-body diagnostics where complete.
-
-Process success, convergence quality, diagnostics, and mesh fidelity are separate signals. Successful TetGen/SU2 execution cannot rewrite mesh fidelity.
+Likewise, first-cell height and generic tetrahedral face orthogonality do not constitute a layered boundary-layer mesh. A near-wall claim requires an actual boundary-layer strategy, layer/growth evidence, wall-model/y+ criteria where applicable, and solver/model-specific engineering validation.
 
 ## Validation ladder
 
-Numerical claims require evidence, not screenshots.
+Current Accurate evidence includes pinned SU2 reference execution, generated/imported staircase runtime cases, aggregate/per-surface diagnostics, source admission/process/parser evidence, positive source clearance and tetrahedral non-overlap, canonical boundary orientation and normal opposition, crease/discrete variation correspondence, first-cell height, complete internal dihedrals, one-to-one triangulated facets, complete unique-face orthogonality, and persisted TetGen provenance v10 through the desktop path.
 
-Preview/reference evidence includes conservation/parity regressions, Poiseuille, Couette, cavity, open/far-field behavior, cylinder shedding, and grid/domain sensitivity studies. These do not constitute general engineering validation.
-
-Accurate evidence currently includes:
-
-- pinned upstream SU2 8.5.0 reference execution;
-- generated/imported staircase runtime cases;
-- exact aggregate/per-surface diagnostics with stable SceneObject attribution;
-- external TetGen source admission/process/parser evidence;
-- bounded source clearance and tetrahedral non-overlap;
-- canonical body-boundary orientation and normal opposition;
-- sharp-crease and discrete triangulated normal-variation correspondence;
-- body-wall first-cell-height observation;
-- complete six-internal-dihedral-per-tetrahedron evidence under an explicit numerical policy;
-- one-to-one triangulated source/body facet coincidence;
-- persisted TetGen provenance v9 through the real desktop prepare path.
-
-The dihedral policy used by the desktop is deliberately permissive numerical sanity evidence, not a validated engineering skewness/orthogonality/aspect/quality specification. Remaining engineering obligations are materially different from another proximity/conformance proxy. They include CAD/analytic semantics where required, an actual boundary-layer strategy when near-wall resolution is claimed, explicit engineering mesh-quality criteria, trusted dimensional reference cases, and independent grid/domain/model sensitivity or convergence evidence.
-
-Existing cylinder/grid/domain studies remain diagnostic and do not establish formal GCI. Successful SU2 exit, finite coefficients, aggregate/surface consistency, or `residual_target_met` do not by themselves establish aerodynamic accuracy.
-
-UI screenshots are evidence for editor/visualization behavior only. They are never CFD validation.
-
-## Future native accurate backend
-
-A native pressure-based finite-volume backend may be added later behind the same project/result interface. It is not required for the current evidenced SU2-backed Accurate workflow.
+These are implementation/numerical geometry contracts. Engineering aerodynamic claims still require trusted dimensional reference cases and independent mesh/domain/model/reference sensitivity or convergence evidence. Successful TetGen/SU2 execution or finite coefficients cannot promote those claims.

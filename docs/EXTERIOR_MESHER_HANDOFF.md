@@ -6,144 +6,102 @@ AeroForge has an explicit solver-bound validation boundary for candidate exterio
 
 `ValidatedExteriorMesherHandoff` owns the candidate `VolumeMesh`, authoritative `Su2MarkerMap`, successful declared-exterior report, and exact policies/reports that admitted the mesh.
 
-`validate_candidate_exterior_mesher_handoff` requires:
+`validate_candidate_exterior_mesher_handoff` requires declared exterior provenance, caller-selected local tetrahedral mean-ratio/edge-ratio sanity limits, bounded source-shell intersection evidence, and bounded bidirectional source-surface proximity. There is no random downsampling, silent budget reduction, marker-string identity recovery, or fidelity inference at this boundary.
 
-1. **Declared exterior provenance** — valid tetrahedral volume, complete boundary-marker binding, explicit outer-domain provenance, and stable `SceneObject.id` body-wall provenance.
-2. **Local tetrahedral quality** — caller-selected minimum mean ratio and maximum edge-length ratio. AeroForge does not embed a universal engineering threshold here.
-3. **Bounded source-shell intersection** — complete bounded self/inter-body triangle intersection evidence under an explicit epsilon.
-4. **Bounded source-surface proximity** — all used source/body-boundary vertices and triangle centroids checked bidirectionally against the opposite surface under an explicit distance tolerance and work budget.
+Generic persistence writes `aeroforge_exterior_handoff.tsv` format v2 and keeps `body_fitted_status=not_established` and `engineering_quality_status=not_established`.
 
-There is no random downsampling, silent budget reduction, marker-string identity recovery, or fidelity inference at this boundary.
+## External TetGen base handoff
 
-Generic validated exterior persistence writes `aeroforge_exterior_handoff.tsv` format version 2 and keeps `body_fitted_status=not_established` and `engineering_quality_status=not_established`.
+TetGen execution requires `ClearanceValidatedExteriorMesherInput`. The source state has already passed source-shell intersections, nesting/containment checks, and bounded positive inter-body surface clearance. `BoundTetgenExternalRun` retains that admitted state, the exact hole-seed policy, deterministic PLC, and external process/parser result.
 
-## External TetGen additions
+`validate_tetgen_external_handoff` regenerates the PLC from retained state before promotion and requires:
 
-The external TetGen route adds stronger source admission, external-process provenance, output-volume evidence, and source/body geometry evidence around the generic handoff.
+- positive-volume tetrahedral non-overlap under a complete bounded pair policy;
+- the generic exterior handoff;
+- canonical exterior boundary winding from each positive owning tetrahedron;
+- bounded bidirectional source/body normal opposition;
+- bounded sharp-crease edge correspondence;
+- bounded triangulated discrete normal-variation correspondence; and
+- bounded body-wall first-cell geometric-height evidence.
 
-### Clearance-promoted input and process binding
+The first-cell measurement is only the perpendicular wall-face-plane distance to the opposite vertex of the unique adjacent tetrahedron. It is not a layered boundary mesh, growth-ratio, wall-model, y+, or engineering near-wall certificate.
 
-TetGen execution requires `ClearanceValidatedExteriorMesherInput`. The source state has already passed source-shell intersections, nesting/containment checks, and bounded positive inter-body surface clearance. `BoundTetgenExternalRun` then retains the admitted source state, exact hole-seed policy, deterministic PLC, and external process/parser result.
+## Facet + dihedral promotion
 
-`validate_tetgen_external_handoff` regenerates the PLC from the retained state before promotion; mismatch fails closed.
+`validate_tetgen_external_handoff_with_facet_correspondence` promotes the base handoff to `FacetValidatedTetgenExteriorHandoff`.
 
-### Positive-volume tetrahedral non-overlap
+Before constrained-facet promotion, `validate_tetrahedral_dihedral_quality` evaluates **all six internal dihedral angles of every solver-bound tetrahedron**. The caller supplies an explicit finite interval and the report retains cells, exact `6*cells` work, observed min/max angles, and the tetrahedron plus tetra-local edge producing each extreme.
 
-`validate_tetrahedral_interior_overlaps` applies the exact caller-selected policy before the parsed mesh reaches the generic handoff. Deterministic broad-phase filtering and tetrahedral SAT allow boundary contact but reject positive-volume interior overlap. Complete work is explicitly bounded.
+The desktop interval is `[1e-12, π]` radians. It is deliberately permissive numerical sanity policy, not an engineering mesh-quality criterion. The rounded real-TetGen fixture observed 612 tetrahedra, 3,672 angle tests, minimum `0.041458813292730747` rad, and maximum `2.5376468437737896` rad.
 
-### Canonical body-boundary orientation
+`validate_source_boundary_facet_correspondence` then requires equal source/body-boundary triangle counts per SceneObject and evaluates the complete source×boundary pair set. A pair matches only when all three triangle vertices can be paired within `vertex_distance_tolerance`; winding/order are irrelevant. Every source triangle and every output body triangle must participate in exactly one match. Missing, extra, duplicate, or ambiguous facets fail closed.
 
-Raw external `.face` winding is not trusted. `orient_exterior_boundary_triangles` resolves each labeled exterior face to its unique positive owning tetrahedron and orients the normal outward from the fluid cell. On a body wall this points fluid→solid, opposite the audited source shell's outward-from-solid normal.
+Routine real-TetGen evidence includes a 12↔12 cube with 144 pair tests and a rounded 528↔528 fixture with 278,784 pair tests under a `1e-12` smoke tolerance. This establishes one-to-one **triangulated facet** coincidence, not CAD/analytic semantics or exact source/output edge identity.
 
-### Bounded normal opposition
+## Unique-face orthogonality promotion
 
-`validate_source_boundary_normal_alignment` compares every source and canonical body-boundary triangle centroid bidirectionally under explicit distance, minimum opposition cosine, and complete triangle-pair work limits. It retains per-body triangle counts, maximum centroid distances, and minimum opposition cosines.
+`validate_tetgen_external_handoff_with_face_orthogonality` promotes the facet/dihedral handoff again to `OrthogonalityValidatedTetgenExteriorHandoff`.
 
-### Bounded sharp-crease correspondence
+`validate_tetrahedral_face_orthogonality` evaluates every unique tetrahedral face of the exact retained solver-bound `VolumeMesh`:
 
-`validate_source_boundary_feature_edges` classifies manifold edges by adjacent-triangle normal angle, excludes coplanar triangulation diagonals, and compares selected source/output edges bidirectionally by midpoint-to-segment distance, direction alignment, and dihedral-angle agreement. Complete selected-edge pair work is reserved up front.
+- interior face: absolute cosine between its face normal and the connection joining the two owner-cell centroids;
+- boundary face: absolute cosine between its face normal and the owner-cell-centroid → face-centroid connection.
 
-This is sharp-crease correspondence evidence, not exact edge identity or CAD feature semantics.
+A value of `1` is normal-aligned and `0` is tangential. The face map is complete and deterministic, all work is budgeted before geometry evaluation, and minimum observed values retain the corresponding face plus owner-cell provenance. A valid mesh with no interior faces uses optional report fields rather than inventing a value.
 
-### Bounded triangulated discrete normal variation
+The desktop policy is:
 
-`validate_source_boundary_discrete_normal_variation` reuses the edge engine in two nested passes: a lower variation threshold and a strictly larger sharp cutoff. The report retains both complete pass reports, total work, and per-body variation/sharp/sub-sharp counts.
+```text
+minimum_interior_face_orthogonality_cosine = 1e-12
+minimum_boundary_face_orthogonality_cosine = 1e-12
+max_face_tests                            = 20,000,000
+```
 
-A positive sub-sharp count on a rounded triangulated fixture is discrete polygonal normal-variation evidence. It is not continuous-curvature evidence.
+These are numerical admission/sanity limits only. In the rounded real-TetGen fixture the observed report was:
 
-### Bounded body-wall first-cell height
+```text
+cells                 612
+interior_faces        954
+boundary_faces        540
+face_tests            1494
+minimum interior cos  0.3927105399869913
+minimum boundary cos  0.5161688582468765
+```
 
-`validate_body_wall_first_cell_heights` measures the perpendicular wall-face-plane distance to the unique opposite vertex of each body-wall face's owning tetrahedron. The policy supplies finite min/max height limits and a complete body-face work budget. The report retains total and per-body counts plus min/max/mean heights.
+Those values are fixture observations, not engineering acceptance thresholds. Generic centroid/face-normal orthogonality also does not establish a layered boundary-wall orthogonality contract.
 
-This observes only the first adjacent tetrahedron. It does not establish a layered boundary-layer mesh, growth ratio, orthogonality, y+, or engineering near-wall adequacy.
+## Owned TetGen hierarchy
 
-## Dihedral + one-to-one constrained-facet promotion
+`ValidatedTetgenExteriorHandoff` owns the base TetGen evidence: generic handoff, PLC/hole-seed state, source containment/clearance, tetrahedral overlap, normal/crease/discrete-variation/first-cell reports, process stdout/stderr and exit/switch contract, parsed IDs, and reorientation count.
 
-After the base TetGen handoff passes, `validate_tetgen_external_handoff_with_facet_correspondence` promotes it to `FacetValidatedTetgenExteriorHandoff` in two additional fail-closed steps over the exact retained solver-bound mesh.
+`FacetValidatedTetgenExteriorHandoff` owns the complete base plus the exact internal-dihedral policy/report and constrained-facet policy/report.
 
-First, `validate_tetrahedral_dihedral_quality` evaluates **all six internal dihedral angles of every tetrahedron**. The caller provides an explicit finite minimum/maximum interval. The report retains:
-
-- tetrahedron count;
-- exact angle-test count (`6 * cells`);
-- observed minimum internal dihedral angle plus its tetrahedron index and tetra-local edge slots; and
-- observed maximum internal dihedral angle plus its tetrahedron index and tetra-local edge slots.
-
-The local edge slots identify vertices `0..=3` inside the tetrahedron; they are not global point IDs. The desktop interval is deliberately permissive numerical sanity evidence. It is not a validated engineering skewness, orthogonality, aspect, or solver-adequacy criterion.
-
-Second, the promotion runs `validate_source_boundary_facet_correspondence` on the **exact** retained admitted source state and the **exact** solver-bound output mesh/marker pair. For every SceneObject it requires equal source/body-boundary triangle counts and evaluates the complete source×boundary triangle pair set under an explicit budget.
-
-A pair matches only when all three triangle vertices can be paired within `vertex_distance_tolerance`; winding and vertex order are ignored. Every source triangle and every boundary triangle must participate in exactly one match. Missing, extra, duplicate, or ambiguous facets fail closed.
-
-The retained facet report includes per body:
-
-- SceneObject ID;
-- source triangle count;
-- body-boundary triangle count;
-- matched triangle count; and
-- maximum matched vertex distance.
-
-This is **one-to-one triangulated facet coincidence evidence** plus complete local internal-dihedral evidence. Routine real-TetGen smoke covers both a cube and a rounded 528-triangle fixture; the rounded fixture performs the full 528×528 comparison set and passes under a `1e-12` facet smoke tolerance. The rounded solver-bound output contained 612 tetrahedra, so exactly 3,672 dihedral angles were evaluated; observed extrema were approximately `0.041458813292730747` rad and `2.5376468437737896` rad. Those values are fixture observations, not engineering acceptance thresholds.
-
-The stronger wrapper still does not establish analytic/CAD surface identity, CAD patch/curve semantics, continuous curvature independent of triangulation, exact source/output edge identity, boundary-layer quality, engineering mesh quality, or aerodynamic accuracy.
-
-## Owned TetGen handoff hierarchy
-
-`ValidatedTetgenExteriorHandoff` owns:
-
-- generic `ValidatedExteriorMesherHandoff`;
-- prepared PLC and hole-seed policy;
-- source containment and inter-body clearance policy/reports;
-- tetrahedral-overlap policy/report;
-- source/body normal policy/report;
-- sharp-crease policy/report;
-- discrete normal-variation policy/report;
-- body-wall first-cell-height policy/report;
-- external stdout/stderr, exit code, switch contract;
-- parsed node/tetrahedron/boundary-face IDs; and
-- tetrahedron reorientation count.
-
-`FacetValidatedTetgenExteriorHandoff` owns that complete base handoff plus the exact tetrahedral-dihedral policy/report and the exact constrained-facet policy/report. The desktop Accurate TetGen path consumes this stronger wrapper rather than reconstructing either evidence layer downstream.
+`OrthogonalityValidatedTetgenExteriorHandoff` is the final desktop-owned wrapper. It owns the complete facet handoff plus exact unique-face orthogonality policy/report. `AccuratePreparedCase` consumes this final wrapper, so v10 evidence cannot be reconstructed or silently dropped downstream.
 
 ## Persisted external TetGen provenance
 
-The desktop facet-promoted path persists:
+The desktop path persists the exact `aeroforge_tetgen_input.poly` and immutable `aeroforge_tetgen_handoff.tsv` **format v10**.
 
-- exact `aeroforge_tetgen_input.poly`; and
-- immutable `aeroforge_tetgen_handoff.tsv` **format version 9**.
+The version chain is additive:
 
-Version 9 preserves the entire v8 constrained-facet field set and the complete v7 base, then appends:
+- v7: base hole-seed/containment/clearance/process/parser/overlap/normal/crease/discrete-variation/first-cell evidence;
+- v8: constrained-facet policy/work and per-body source/boundary/matched triangle evidence;
+- v9: tetrahedral internal-dihedral policy, complete work, extrema and cell/local-edge provenance;
+- v10: unique-face orthogonality policy, cell/interior/boundary/test counts, observed minimum interior/boundary cosine, face IDs, and owner-cell provenance.
 
-- `tetra_dihedral_policy_minimum_angle_radians`;
-- `tetra_dihedral_policy_maximum_angle_radians`;
-- `tetra_dihedral_cells`;
-- `tetra_dihedral_angle_tests`;
-- `tetra_dihedral_observed_minimum_angle_radians`;
-- `tetra_dihedral_observed_minimum_cell`;
-- `tetra_dihedral_observed_minimum_local_edge_start`;
-- `tetra_dihedral_observed_minimum_local_edge_end`;
-- `tetra_dihedral_observed_maximum_angle_radians`;
-- `tetra_dihedral_observed_maximum_cell`;
-- `tetra_dihedral_observed_maximum_local_edge_start`; and
-- `tetra_dihedral_observed_maximum_local_edge_end`.
+The v10 renderer consumes the exact v9 facet/dihedral manifest and rejects an unexpected version prefix. Optional face extrema are rendered as `unavailable`, never guessed. Persistence retains `body_fitted_status=not_established` and `engineering_quality_status=not_established`.
 
-The v8 field set still contains the constrained-facet policy/work and per-body SceneObject/source/boundary/matched-triangle evidence. The v7 base still contains hole-seed, containment, source-clearance, external-process/parser, tetrahedral-overlap, normal, sharp-crease, discrete-normal-variation, and first-cell-height evidence. Raw external stdout/stderr remain in memory; only byte counts are persisted.
+## Evidence boundary
 
-The facet-aware renderer refuses to promote an unexpected base manifest: it requires the exact format-v7 prefix before constructing v9. Persistence retains `body_fitted_status=not_established` and `engineering_quality_status=not_established`.
+The current external TetGen path has strong triangulated surface-conformance and several complete local tetrahedral shape/face observations. It still does not establish:
 
-## Current evidence boundary
-
-The external TetGen path now establishes significantly stronger geometry evidence than the generic handoff, including **one-to-one source-triangle ↔ output-body-triangle coincidence within an explicit tolerance** and complete six-angle-per-cell internal-dihedral observations under an explicit numerical policy.
-
-It still does not establish:
-
-- exact source/output **edge** identity;
-- analytic/CAD surface identity or CAD feature semantics;
-- continuous-curvature preservation independent of input triangulation;
+- exact source/output edge identity;
+- analytic/CAD surface identity, CAD patch/curve semantics, or continuous curvature independent of source tessellation;
 - a universal engineering minimum separation beyond the explicit numerical clearance policy;
-- a layered boundary-layer mesh, controlled growth, orthogonality, y+, or engineering near-wall suitability;
-- globally validated engineering mesh-quality thresholds;
+- a layered boundary-layer mesh, controlled growth, wall-specific orthogonality, wall-model/y+ adequacy, or engineering near-wall suitability;
+- universal solver/model-specific engineering mesh-quality thresholds;
 - body-fitted fidelity as an AeroForge classification;
-- engineering CFD accuracy; or
-- grid/domain/model/reference convergence or GCI.
+- grid/domain/model/reference convergence or GCI; or
+- engineering CFD accuracy.
 
-`Su2MeshFidelity` therefore still has no body-fitted variant. The built-in reference path remains `staircase_voxel_derived`; the validated external TetGen path remains `unclassified_audited_volume` with body-fitted and engineering-quality status not established.
+`Su2MeshFidelity` therefore still has no body-fitted variant. The built-in path remains `staircase_voxel_derived`; the external TetGen path remains `unclassified_audited_volume` with body-fitted and engineering-quality status not established.
