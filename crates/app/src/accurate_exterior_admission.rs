@@ -4,14 +4,15 @@ use aeroforge_accurate_backend::{
     build_validated_exterior_mesher_input, run_tetgen_for_handoff,
     validate_exterior_mesher_input_intersections, validate_exterior_mesher_source_clearance,
     validate_exterior_mesher_source_containment,
-    validate_tetgen_external_handoff_with_facet_correspondence,
+    validate_tetgen_external_handoff_with_face_orthogonality,
     BodyWallFirstCellHeightPolicy, BoundaryRole, BoundarySource,
     ClearanceValidatedExteriorMesherInput, DomainAxis, DomainSide, ExteriorMeshQualityPolicy,
-    FacetValidatedTetgenExteriorHandoff, SourceBoundaryDiscreteNormalVariationPolicy,
+    OrthogonalityValidatedTetgenExteriorHandoff, SourceBoundaryDiscreteNormalVariationPolicy,
     SourceBoundaryFacetCorrespondencePolicy, SourceBoundaryFeatureEdgePolicy,
     SourceBoundaryNormalPolicy, SourceContainmentPolicy, SourceInterBodyClearancePolicy,
     SourceSurfaceCorrespondencePolicy, SourceSurfaceIntersectionPolicy, Su2MarkerBinding,
-    TetrahedralDihedralQualityPolicy, TetrahedralOverlapPolicy, TetgenHoleSeedPolicy,
+    TetrahedralDihedralQualityPolicy, TetrahedralFaceOrthogonalityPolicy,
+    TetrahedralOverlapPolicy, TetgenHoleSeedPolicy,
 };
 use aeroforge_volume_core::BoundaryMarkerId;
 
@@ -46,6 +47,12 @@ const DESKTOP_TETGEN_DIHEDRAL_QUALITY_POLICY: TetrahedralDihedralQualityPolicy =
     TetrahedralDihedralQualityPolicy {
         minimum_dihedral_angle_radians: 1.0e-12,
         maximum_dihedral_angle_radians: std::f64::consts::PI,
+    };
+const DESKTOP_TETGEN_FACE_ORTHOGONALITY_POLICY: TetrahedralFaceOrthogonalityPolicy =
+    TetrahedralFaceOrthogonalityPolicy {
+        minimum_interior_face_orthogonality_cosine: 1.0e-12,
+        minimum_boundary_face_orthogonality_cosine: 1.0e-12,
+        max_face_tests: 20_000_000,
     };
 const DESKTOP_TETGEN_OVERLAP_POLICY: TetrahedralOverlapPolicy = TetrahedralOverlapPolicy {
     geometric_epsilon: 1.0e-10,
@@ -149,44 +156,40 @@ pub fn admit_project_geometry_for_tetgen(
 /// Executes the configured external TetGen binary for one already-auditable desktop project and
 /// promotes its output through AeroForge's solver-bound source-clearance, overlap,
 /// volume-shape quality/provenance/correspondence, complete tetrahedral internal-dihedral evidence,
-/// one-to-one constrained-facet correspondence, bounded source/body-boundary normal-opposition,
-/// bounded sharp-crease edge correspondence, bounded discrete normal-variation correspondence, and
-/// bounded body-wall first-cell height gates.
+/// complete unique-face centroid/normal orthogonality evidence, one-to-one constrained-facet
+/// correspondence, bounded source/body-boundary normal-opposition, bounded sharp-crease edge
+/// correspondence, bounded discrete normal-variation correspondence, and bounded body-wall
+/// first-cell height gates.
 ///
 /// The constrained-facet gate requires every source triangle and SceneObject body-boundary triangle
 /// to participate in exactly one three-vertex match within the explicit desktop tolerance and
 /// reserves the complete source×boundary pair work before comparison. That triangulated coincidence
 /// is stronger than proximity evidence but is not analytic/CAD semantics or continuous-curvature
 /// preservation. The positive source-body clearance floor is an explicit numerical admission policy,
-/// not an engineering spacing criterion. The mean-ratio, edge-ratio, and dihedral limits here are
-/// deliberately permissive numerical sanity checks; the dihedral wrapper still evaluates all six
-/// internal angles of every solver-bound tetrahedron and retains the exact extrema/work evidence.
-/// None of these policies are engineering mesh-quality thresholds. The volumetric overlap gate uses
-/// a deterministic sweep-and-prune broad phase with an explicit pair-test budget. The normal gate
-/// reconstructs body-boundary winding from positive owning tetrahedra and checks every source and
-/// boundary triangle centroid against the nearest opposite triangle under explicit distance,
-/// opposition-cosine and work limits. The feature gate independently extracts crease edges above
-/// the configured angle and checks bidirectional midpoint distance, orientation-independent edge
-/// direction, dihedral-angle agreement, and work budget against the exact owned source/body-boundary
-/// pair. The discrete normal-variation gate reuses that edge correspondence contract at a lower
-/// positive angle and at the sharp cutoff, retaining both reports and the sub-sharp selected-edge
-/// count difference. The first-cell gate measures every SceneObject body-wall triangle's owning
-/// tetrahedron perpendicular face-to-opposite-vertex height under the explicit numerical interval
-/// and face budget above. That observation is not a boundary-layer, layer-count, growth-ratio,
-/// orthogonality, or y+ certificate. Passing the complete path still does not establish continuous
-/// curvature, CAD-feature semantics, body-fitted fidelity, or engineering CFD quality.
+/// not an engineering spacing criterion. The mean-ratio, edge-ratio, dihedral, and face-
+/// orthogonality limits here are deliberately permissive numerical sanity checks. The dihedral gate
+/// evaluates all six internal angles of every solver-bound tetrahedron. The face-orthogonality gate
+/// evaluates every unique tetrahedral face: interior faces against owner-centroid connections and
+/// boundary faces against owner-centroid-to-face-centroid connections. Neither is an engineering
+/// mesh-quality threshold or a layered boundary-wall orthogonality certificate. The volumetric
+/// overlap gate uses a deterministic sweep-and-prune broad phase with an explicit pair-test budget.
+/// The first-cell gate remains a face-to-opposite-vertex geometric observation, not boundary-layer,
+/// layer-count, growth-ratio, orthogonality, or y+ evidence. Passing the complete path still does not
+/// establish continuous curvature, CAD-feature semantics, body-fitted fidelity, or engineering CFD
+/// quality.
 pub fn run_project_tetgen_handoff(
     state: &ProjectState,
     executable: &Path,
-) -> Result<FacetValidatedTetgenExteriorHandoff, String> {
+) -> Result<OrthogonalityValidatedTetgenExteriorHandoff, String> {
     let admitted = admit_project_geometry_for_tetgen(state)?;
     let bound = run_tetgen_for_handoff(executable, &admitted, DESKTOP_TETGEN_HOLE_SEED_POLICY)
         .map_err(|error| format!("desktop external TetGen run failed: {error}"))?;
 
-    validate_tetgen_external_handoff_with_facet_correspondence(
+    validate_tetgen_external_handoff_with_face_orthogonality(
         bound,
         DESKTOP_TETGEN_SANITY_QUALITY_POLICY,
         DESKTOP_TETGEN_DIHEDRAL_QUALITY_POLICY,
+        DESKTOP_TETGEN_FACE_ORTHOGONALITY_POLICY,
         DESKTOP_TETGEN_OVERLAP_POLICY,
         DESKTOP_SOURCE_CORRESPONDENCE_POLICY,
         DESKTOP_SOURCE_FACET_POLICY,

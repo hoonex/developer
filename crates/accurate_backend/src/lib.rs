@@ -29,6 +29,7 @@ mod tetra_overlap;
 mod tetgen_facet_handoff;
 mod tetgen_facet_validated_case;
 mod tetgen_handoff;
+mod tetgen_orthogonality_handoff;
 mod tetgen_output;
 mod tetgen_plc;
 mod tetgen_runner;
@@ -180,6 +181,11 @@ pub use tetgen_facet_validated_case::{
 pub use tetgen_handoff::{
     run_tetgen_for_handoff, validate_tetgen_external_handoff, BoundTetgenExternalRun,
     TetgenBoundRunError, TetgenExteriorHandoffError, ValidatedTetgenExteriorHandoff,
+};
+pub use tetgen_orthogonality_handoff::{
+    validate_tetgen_external_handoff_with_face_orthogonality,
+    OrthogonalityValidatedTetgenExteriorHandoff,
+    OrthogonalityValidatedTetgenExteriorHandoffError,
 };
 pub use tetgen_output::{
     parse_tetgen_volume_mesh, ParsedTetgenVolumeMesh, TetgenOutputError,
