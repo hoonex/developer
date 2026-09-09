@@ -24,6 +24,7 @@ mod su2;
 mod su2_mesh;
 mod surface_correspondence;
 mod tetra_dihedral_quality;
+mod tetra_face_orthogonality;
 mod tetra_overlap;
 mod tetgen_facet_handoff;
 mod tetgen_facet_validated_case;
@@ -159,6 +160,10 @@ pub use surface_correspondence::{
 pub use tetra_dihedral_quality::{
     validate_tetrahedral_dihedral_quality, TetrahedralDihedralQualityError,
     TetrahedralDihedralQualityPolicy, TetrahedralDihedralQualityReport,
+};
+pub use tetra_face_orthogonality::{
+    validate_tetrahedral_face_orthogonality, TetrahedralFaceOrthogonalityError,
+    TetrahedralFaceOrthogonalityPolicy, TetrahedralFaceOrthogonalityReport,
 };
 pub use tetra_overlap::{
     validate_tetrahedral_interior_overlaps, TetrahedralOverlapError, TetrahedralOverlapPolicy,
