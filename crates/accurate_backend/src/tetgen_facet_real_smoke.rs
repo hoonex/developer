@@ -24,6 +24,7 @@ use crate::su2_mesh::{
     BoundaryRole, BoundarySource, DomainAxis, DomainSide, Su2MarkerBinding,
 };
 use crate::surface_correspondence::SourceSurfaceCorrespondencePolicy;
+use crate::tetra_dihedral_quality::TetrahedralDihedralQualityPolicy;
 use crate::tetra_overlap::TetrahedralOverlapPolicy;
 use crate::tetgen_facet_handoff::validate_tetgen_external_handoff_with_facet_correspondence;
 use crate::tetgen_handoff::run_tetgen_for_handoff;
@@ -160,6 +161,10 @@ fn configured_real_tetgen_rounded_surface_reaches_facet_owned_handoff() {
     )
     .unwrap();
 
+    let dihedral_policy = TetrahedralDihedralQualityPolicy {
+        minimum_dihedral_angle_radians: 1.0e-12,
+        maximum_dihedral_angle_radians: std::f64::consts::PI,
+    };
     let facet_policy = SourceBoundaryFacetCorrespondencePolicy {
         vertex_distance_tolerance: 1.0e-12,
         max_triangle_pair_tests: 1_000_000,
@@ -170,6 +175,7 @@ fn configured_real_tetgen_rounded_surface_reaches_facet_owned_handoff() {
             min_mean_ratio: 1.0e-12,
             max_edge_length_ratio: 1.0e6,
         },
+        dihedral_policy,
         TetrahedralOverlapPolicy {
             geometric_epsilon: 1.0e-10,
             max_tetrahedron_pair_tests: 20_000_000,
@@ -206,6 +212,28 @@ fn configured_real_tetgen_rounded_surface_reaches_facet_owned_handoff() {
         },
     )
     .unwrap();
+
+    assert_eq!(result.dihedral_policy, dihedral_policy);
+    assert_eq!(result.dihedral_quality.cells, result.handoff.handoff.mesh.cells.len());
+    assert_eq!(
+        result.dihedral_quality.dihedral_angle_tests,
+        result.dihedral_quality.cells * 6
+    );
+    assert!(
+        result.dihedral_quality.minimum_dihedral_angle_radians
+            >= dihedral_policy.minimum_dihedral_angle_radians
+    );
+    assert!(
+        result.dihedral_quality.maximum_dihedral_angle_radians
+            <= dihedral_policy.maximum_dihedral_angle_radians
+    );
+    println!(
+        "rounded real TetGen dihedral extrema: min={} rad max={} rad cells={} tests={}",
+        result.dihedral_quality.minimum_dihedral_angle_radians,
+        result.dihedral_quality.maximum_dihedral_angle_radians,
+        result.dihedral_quality.cells,
+        result.dihedral_quality.dihedral_angle_tests,
+    );
 
     assert_eq!(result.facet_policy, facet_policy);
     assert_eq!(result.facet_correspondence.bodies.len(), 1);
