@@ -44,7 +44,8 @@ A GREEN implementation or runtime check never silently upgrades another evidence
 | Body-wall first-cell geometric height | TetGen path | GREEN bounded local wall evidence |
 | Complete six-internal-dihedral-per-tetrahedron evaluation | TetGen path | GREEN bounded local shape evidence |
 | One-to-one triangulated source/body facet coincidence | TetGen path | GREEN real external evidence |
-| TetGen provenance v9 through real desktop prepare/persistence | App + TetGen path | GREEN routine external persistence |
+| Complete unique-face centroid/normal orthogonality evaluation | TetGen path | GREEN bounded local face evidence |
+| TetGen provenance v10 through real desktop prepare/persistence | App + TetGen path | GREEN routine external persistence |
 | Analytic/CAD feature/surface identity | Accurate | **NOT ESTABLISHED** |
 | Continuous curvature independent of source tessellation | Accurate | **NOT ESTABLISHED** |
 | Layered boundary-layer mesh / y+ suitability | Accurate | **NOT ESTABLISHED** |
@@ -102,17 +103,13 @@ PR checkpoint #253 exercised AeroForge's `discover_su2 → probe_su2_banner → 
 [-4.168180, -3.611108, 0.007850, 4.539924]
 ```
 
-with reported maximum absolute error `0.000e0` under the pinned fixture/tolerance.
-
-This proves the evidenced adapter/process/reference contract, not general SU2 or AeroForge engineering accuracy.
+with reported maximum absolute error `0.000e0` under the pinned fixture/tolerance. This proves the evidenced adapter/process/reference contract, not general SU2 or AeroForge engineering accuracy.
 
 ### AeroForge-generated staircase execution
 
 Generated external-runtime evidence covers empty tunnel and body-containing staircase meshes with authoritative domain/body markers and persisted provenance. A body fixture with stable `SceneObject.id=42` preserves `body_42` wall-marker provenance and body-only monitoring.
 
-Coefficient normalization is explicit: generated configurations validate/render positive finite SI `REF_AREA` and `REF_LENGTH`, pin `AOA=0`, `SIDESLIP_ANGLE=0`, and use moment origin `(0,0,0)`.
-
-AeroForge is Y-up, so the desktop keeps exact world-axis `CFx/CFy/CFz/CMx/CMy/CMz` terminology rather than silently relabeling raw SU2 `CL` as vertical lift.
+Coefficient normalization is explicit: generated configurations validate/render positive finite SI `REF_AREA` and `REF_LENGTH`, pin `AOA=0`, `SIDESLIP_ANGLE=0`, and use moment origin `(0,0,0)`. AeroForge is Y-up, so the desktop keeps exact world-axis `CFx/CFy/CFz/CMx/CMy/CMz` terminology rather than silently relabeling raw SU2 `CL` as vertical lift.
 
 Representative generated diagnostic checkpoints:
 
@@ -138,8 +135,6 @@ The optional TetGen route is a separately evidenced source-surface-driven Accura
 
 ### Source admission
 
-The current source type-state chain is:
-
 ```text
 ValidatedExteriorMesherInput
 → bounded source-shell intersection validation
@@ -156,73 +151,85 @@ The runner requires the clearance-promoted type. The desktop `1e-9` clearance fl
 
 ### Output / handoff evidence
 
-The parsed candidate is not accepted merely because TetGen exits successfully. Solver-bound promotion composes:
+A parsed candidate is not accepted merely because TetGen exits successfully. Solver-bound promotion composes:
 
 1. bounded positive-volume tetrahedral non-overlap;
-2. generic declared-exterior / quality / source-intersection / bidirectional source-proximity handoff;
+2. generic declared-exterior / local sanity-quality / source-intersection / bidirectional source-proximity handoff;
 3. canonical exterior boundary orientation;
 4. bounded bidirectional source/body normal opposition;
 5. bounded sharp-crease edge correspondence;
 6. bounded discrete triangulated normal-variation correspondence;
 7. bounded body-wall first-cell geometric-height observation;
 8. complete six-internal-dihedral-per-tetrahedron evaluation under an explicit numerical policy;
-9. one-to-one constrained source/body facet correspondence.
+9. one-to-one constrained source/body facet correspondence; and
+10. complete unique-face centroid/normal orthogonality evaluation under an explicit numerical policy.
 
-`ValidatedTetgenExteriorHandoff` owns the complete base path through the first-cell-height evidence. `FacetValidatedTetgenExteriorHandoff` owns that base handoff plus the exact tetrahedral-dihedral policy/report and exact constrained-facet policy/report and is the actual desktop prepared-case input.
+Ownership follows the same additive hierarchy:
+
+```text
+ValidatedTetgenExteriorHandoff
+→ FacetValidatedTetgenExteriorHandoff
+→ OrthogonalityValidatedTetgenExteriorHandoff
+→ AccuratePreparedCase
+```
+
+The final desktop prepared-case input is `OrthogonalityValidatedTetgenExteriorHandoff`, which owns the complete facet/dihedral-promoted state plus exact face-orthogonality policy/report.
 
 ### Complete internal-dihedral proof
 
-`validate_tetrahedral_dihedral_quality` evaluates all six internal angles for every audited solver-bound tetrahedron. The work count is deterministic and complete: `6 * cells`, with overflow checked before geometry evaluation. The report retains observed minimum/maximum angles plus the tetrahedron and tetra-local edge slots that produced each extreme.
+`validate_tetrahedral_dihedral_quality` evaluates all six internal angles for every audited solver-bound tetrahedron. The work count is deterministic and complete: `6 * cells`. The report retains observed extrema plus the tetrahedron and tetra-local edge slots producing each extreme.
 
-The desktop policy uses the deliberately permissive numerical interval `[1e-12, π]` radians. It is a fail-closed sanity policy, not a universal engineering mesh-quality threshold. The rounded real-TetGen ownership smoke observed:
-
-- 612 tetrahedra;
-- 3,672 complete internal-dihedral evaluations;
-- observed minimum approximately `0.041458813292730747` rad; and
-- observed maximum approximately `2.5376468437737896` rad.
-
-Those extrema are fixture observations, not engineering acceptance criteria.
+The desktop policy uses the deliberately permissive interval `[1e-12, π]` radians. The rounded real-TetGen fixture observed 612 tetrahedra, 3,672 angle evaluations, minimum `0.041458813292730747` rad, and maximum `2.5376468437737896` rad. These are fixture observations, not engineering acceptance criteria.
 
 ### Constrained triangulated facet proof
 
-The final facet validator requires, per SceneObject:
-
-- equal source and output body-boundary triangle counts;
-- complete source×boundary triangle pair work under an explicit budget;
-- coordinate matching of all three triangle vertices within the selected tolerance;
-- exactly one match for every source triangle and every boundary triangle.
-
-Missing, extra, duplicate, or ambiguous facets fail closed.
+Per SceneObject, the facet validator requires equal source/output body triangle counts, complete source×boundary triangle-pair work, coordinate matching of all three vertices within the selected tolerance, and exactly one match for every triangle on both sides. Missing, extra, duplicate, or ambiguous facets fail closed.
 
 Routine real-TetGen evidence includes:
 
 - cube: **12 source ↔ 12 output body triangles**, 144 complete pair tests;
 - rounded fixture: **528 source ↔ 528 output body triangles**, 278,784 complete pair tests.
 
-The rounded real-smoke facet policy uses a `1e-12` vertex-distance tolerance and proves the triangulated facet correspondence for that fixture/runtime path.
+The rounded smoke uses a `1e-12` vertex-distance tolerance. This establishes one-to-one coincidence of the **input triangulated facets** and output body-boundary facets within that explicit numerical tolerance. It does not establish analytic/CAD or exact-edge semantics.
 
-This is materially stronger than the earlier vertex/centroid proximity gate. It establishes **one-to-one coincidence of the input triangulated source facets and output body-boundary facets within the explicit numerical tolerance**.
+### Complete unique-face orthogonality proof
 
-The combined promoted handoff still does **not** establish:
+`validate_tetrahedral_face_orthogonality` evaluates every unique face of the exact solver-bound tetrahedral mesh.
 
-- analytic/CAD surface identity;
-- CAD patch/curve/feature semantics;
-- continuous curvature independent of source tessellation;
-- exact source/output edge identity;
-- a layered prism/hex boundary-layer stack;
-- growth-ratio/orthogonality/y+ suitability;
-- universal engineering mesh-quality thresholds;
-- aerodynamic accuracy.
+- Interior face: absolute cosine between the face normal and the vector connecting its two owner-cell centroids.
+- Boundary face: absolute cosine between the face normal and the owner-cell-centroid → face-centroid vector.
 
-### TetGen provenance v9
+The desktop policy uses minimum interior/boundary cosine `1e-12` and `max_face_tests=20,000,000`. These are numerical admission/work bounds, not solver-specific engineering criteria.
+
+The rounded real-TetGen fixture observed:
+
+- 612 tetrahedra;
+- 954 interior faces;
+- 540 boundary faces;
+- 1,494 complete unique-face evaluations;
+- minimum interior-face cosine `0.3927105399869913`; and
+- minimum boundary-face cosine `0.5161688582468765`.
+
+The report also retains the associated face and owner-cell provenance. These observations do not establish a layered boundary-wall orthogonality contract.
+
+The combined promoted handoff still does **not** establish analytic/CAD surface identity, CAD patch/curve/feature semantics, continuous curvature independent of source tessellation, exact source/output edge identity, a layered prism/hex boundary-layer stack, growth-ratio/wall-model/y+ suitability, universal engineering mesh-quality thresholds, or aerodynamic accuracy.
+
+### TetGen provenance v10
 
 The real desktop external path persists:
 
 - exact `aeroforge_tetgen_input.poly`;
 - generic `aeroforge_exterior_handoff.tsv`;
-- `aeroforge_tetgen_handoff.tsv` **format v9**.
+- `aeroforge_tetgen_handoff.tsv` **format v10**.
 
-V9 preserves the complete v8 constrained-facet field set and the full v7 base, then appends the exact tetrahedral-dihedral policy, tetrahedron count, complete angle-test count, observed minimum/maximum angles, and the cell/tetra-local-edge provenance of each extreme.
+The version chain is additive:
+
+- v7 base geometry/process evidence;
+- v8 constrained-facet policy/work and per-body match evidence;
+- v9 internal-dihedral policy/work/extrema provenance;
+- v10 unique-face orthogonality policy, cell/interior/boundary/test counts, minimum observed cosines, face IDs, and owner-cell provenance.
+
+The v10 persistence layer consumes the exact v9 manifest and rejects an unexpected prefix. Optional extrema are rendered as `unavailable`, not guessed.
 
 Representative external geometry checkpoints:
 
@@ -237,11 +244,11 @@ Representative external geometry checkpoints:
 - #903 — facet-owned wrapper + rounded 528↔528 real-TetGen proof;
 - #905 — desktop Accurate path owns the facet-promoted handoff;
 - #911 / run `34243197775` — TetGen provenance v8 and real desktop prepare+persistence, 4/4 GREEN;
-- #913 / run `34243969877` — constrained-facet/v8 documentation reconciliation, 4/4 GREEN;
-- #927 / run `34298181967` at `1a077ddee4c130faacf0b9f88dc331d91354bee7` — facet-owned complete tetrahedral internal-dihedral evidence with rounded real-TetGen ownership and desktop regression, 4/4 GREEN;
-- #929 / run `34315349508` at `cc948cead8c11f1d733bcd391fb80ee34a1fbdd9` — TetGen provenance v9 and real desktop dihedral persistence, 4/4 GREEN.
-
-Later documentation-consistency commits do not change these geometry policies or thresholds.
+- #927 / run `34298181967` at `1a077ddee4c130faacf0b9f88dc331d91354bee7` — complete tetrahedral internal-dihedral ownership, rounded real-TetGen evidence, desktop regression; 4/4 GREEN;
+- #929 / run `34315349508` at `cc948cead8c11f1d733bcd391fb80ee34a1fbdd9` — TetGen provenance v9 and real desktop dihedral persistence; 4/4 GREEN;
+- #931 / run `34320481290` at `11e5c13780bc7a40e3ae5e41d584dff76f20ef1e` — v9 documentation reconciliation; 4/4 GREEN;
+- #940 / run `34326027956` at `f245f37a0229a6f41441df1c4a35aa87845d5690` — standalone/real rounded face-orthogonality observation and exact-SHA regression; 4/4 GREEN;
+- #944 / run `34340539004` at `72e6ae11db33ef4ccacdba06a6c22750e59a958d` — orthogonality-owned desktop handoff + format-v10 persistence; core/GPU/real-TetGen GREEN, Windows app unit-test tracked separately until terminal.
 
 ## Mesh fidelity boundary
 
@@ -252,7 +259,7 @@ AeroForge currently represents two relevant Accurate mesh-fidelity states:
 
 `Su2MeshFidelity` intentionally has **no `BodyFitted` variant**.
 
-The constrained-facet proof closes a major triangulated source/output conformance gap, and the complete dihedral report closes a local tetrahedral-angle observability gap. A product-level `BodyFitted` or engineering-quality label is still not defined/promoted because current source data is primitive/triangle-mesh based and lacks CAD semantic topology, while boundary-layer and solver-appropriate engineering-quality obligations remain independent.
+The constrained-facet proof closes a major triangulated source/output conformance gap, the dihedral report closes an internal-angle observability gap, and the face-orthogonality report closes a generic unique-face alignment observability gap. A product-level `BodyFitted` or engineering-quality label is still not promoted because CAD semantics, actual boundary-layer generation, solver/model-specific engineering criteria, and independent engineering reference/convergence evidence remain separate obligations.
 
 ## Claims policy
 
@@ -265,22 +272,20 @@ The constrained-facet proof closes a major triangulated source/output conformanc
 - Explicit `REF_AREA` / `REF_LENGTH` proves denominator validation/persistence, not physical appropriateness for an arbitrary scene.
 - Aggregate/per-surface six-axis consistency proves parsing/attribution consistency for the fixtures, not physical correctness.
 - Staircase voxel boundaries must not be described as body-fitted surfaces.
-- Generic source-surface proximity remains a bounded sample correspondence contract; it is not the constrained-facet proof.
-- The TetGen constrained-facet gate **does** establish one-to-one triangulated source/body facet coincidence within its explicit tolerance for the validated handoff.
-- That facet result must not be relabeled as analytic/CAD identity, continuous-curvature preservation, exact edge identity, boundary-layer evidence, or engineering mesh quality.
-- Complete tetrahedral internal-dihedral evidence establishes bounded local angle observations only; the desktop `[1e-12, π]` interval is not an engineering-quality threshold.
-- First-cell height is a local first-adjacent-tetra observation only; it is not a layered boundary-layer claim.
+- The TetGen constrained-facet gate establishes one-to-one **triangulated** source/body facet coincidence within its explicit tolerance; it must not be relabeled as CAD/analytic/continuous-curvature or exact-edge evidence.
+- Complete tetrahedral internal-dihedral evidence establishes bounded local angle observations only; `[1e-12, π]` is not an engineering-quality interval.
+- Complete tetrahedral unique-face orthogonality evidence establishes bounded centroid/face-normal observations only; the desktop `1e-12` floors are not solver-specific engineering or boundary-layer orthogonality criteria.
+- First-cell height is a first-adjacent-tetra observation only; it is not a layered boundary-layer claim.
 - The desktop source-clearance floor is a numerical admission policy, not a universal engineering clearance.
-- Process success, residual quality, diagnostic availability, mesh fidelity, and engineering validation remain separate signals.
-- Accurate results must retain solver/runtime, mesh/config/source provenance, geometry revision, coefficient references/frame/origin, execution state, and convergence/diagnostic evidence.
+- Process success, residual quality, diagnostics, mesh fidelity, and engineering validation remain separate signals.
 
 ## Next validation milestones
 
-1. **CAD/analytic semantics only if needed** — if AeroForge intends to claim CAD feature/patch preservation, add source semantic patch/curve/feature identity or a CAD-aware import representation; triangle-only data cannot substantiate that claim.
-2. **Actual near-wall strategy** — design and validate a real boundary-layer generation strategy before claiming layers, growth control, orthogonality, y+, or engineering near-wall adequacy. First-cell height alone is insufficient.
-3. **Engineering mesh-quality policy** — define and validate solver-appropriate skewness/orthogonality/aspect/size or equivalent criteria instead of treating the current permissive complete-dihedral sanity policy or generic tetrahedral validity as engineering quality.
-4. **Pinned body reference cases** — run trusted dimensional body cases through the generated external path with explicit reference area/length/frame and independently controlled mesh/domain/model sensitivity.
-5. **Grid/domain/model convergence** — add formal convergence/GCI or another defensible independent sensitivity methodology before promoting aerodynamic accuracy claims.
-6. **Operational work remains separate** — true crash/restart recovery, GPU per-object force attribution, and preview occupancy acceleration are independent product capabilities and must not be conflated with mesh-fidelity evidence.
+1. **CAD/analytic semantics only if needed** — add source semantic patch/curve/feature identity or CAD-aware import before claiming CAD preservation; triangle-only data cannot substantiate it.
+2. **Actual near-wall strategy** — design and validate real boundary-layer generation before claiming layers, growth control, wall orthogonality, y+, or engineering near-wall adequacy.
+3. **Engineering mesh-quality policy** — add solver-appropriate criteria such as validated non-orthogonality/skewness/aspect/size-transition limits instead of treating current permissive mean-ratio/edge-ratio/dihedral/face-cosine gates as engineering quality.
+4. **Pinned body reference cases** — run trusted dimensional body cases through the generated external path with explicit coefficient references and controlled mesh/domain/model sensitivity.
+5. **Grid/domain/model convergence** — add formal convergence/GCI or another defensible independent methodology before promoting aerodynamic accuracy.
+6. **Operational work remains separate** — crash/restart recovery, GPU per-object force attribution, and preview occupancy acceleration remain independent product capabilities.
 
 Do not extend the native D8/D10/D12 cylinder ladder by brute force merely to produce more numbers; repeat or extend it only when a relevant solver/boundary/force change requires revalidation.
