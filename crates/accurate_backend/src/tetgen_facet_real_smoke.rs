@@ -25,6 +25,9 @@ use crate::su2_mesh::{
 };
 use crate::surface_correspondence::SourceSurfaceCorrespondencePolicy;
 use crate::tetra_dihedral_quality::TetrahedralDihedralQualityPolicy;
+use crate::tetra_face_orthogonality::{
+    validate_tetrahedral_face_orthogonality, TetrahedralFaceOrthogonalityPolicy,
+};
 use crate::tetra_overlap::TetrahedralOverlapPolicy;
 use crate::tetgen_facet_handoff::validate_tetgen_external_handoff_with_facet_correspondence;
 use crate::tetgen_handoff::run_tetgen_for_handoff;
@@ -233,6 +236,43 @@ fn configured_real_tetgen_rounded_surface_reaches_facet_owned_handoff() {
         result.dihedral_quality.maximum_dihedral_angle_radians,
         result.dihedral_quality.cells,
         result.dihedral_quality.dihedral_angle_tests,
+    );
+
+    let orthogonality_policy = TetrahedralFaceOrthogonalityPolicy {
+        minimum_interior_face_orthogonality_cosine: 0.0,
+        minimum_boundary_face_orthogonality_cosine: 0.0,
+        max_face_tests: 20_000_000,
+    };
+    let orthogonality = validate_tetrahedral_face_orthogonality(
+        &result.handoff.handoff.mesh,
+        orthogonality_policy,
+    )
+    .unwrap();
+    assert_eq!(orthogonality.cells, result.handoff.handoff.mesh.cells.len());
+    assert_eq!(
+        orthogonality.face_tests,
+        orthogonality.interior_faces + orthogonality.boundary_faces
+    );
+    assert_eq!(
+        orthogonality.boundary_faces,
+        result.handoff.handoff.mesh.boundary.len()
+    );
+    assert!(orthogonality.interior_faces > 0);
+    let minimum_interior = orthogonality
+        .minimum_interior_face_orthogonality_cosine
+        .unwrap();
+    let minimum_boundary = orthogonality
+        .minimum_boundary_face_orthogonality_cosine
+        .unwrap();
+    assert!(minimum_interior > 0.0 && minimum_interior <= 1.0);
+    assert!(minimum_boundary > 0.0 && minimum_boundary <= 1.0);
+    println!(
+        "rounded real TetGen face orthogonality: min_interior_cos={} min_boundary_cos={} interior_faces={} boundary_faces={} tests={}",
+        minimum_interior,
+        minimum_boundary,
+        orthogonality.interior_faces,
+        orthogonality.boundary_faces,
+        orthogonality.face_tests,
     );
 
     assert_eq!(result.facet_policy, facet_policy);
