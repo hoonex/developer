@@ -4,17 +4,18 @@ use aeroforge_accurate_backend::{
     build_validated_exterior_su2_case_bundle_with_reference,
     prepare_generated_su2_case_directory_with_fidelity,
     prepare_orthogonality_tetgen_validated_exterior_su2_case_directory_with_reference,
-    GeneratedSu2CaseBundle, OrthogonalityValidatedTetgenExteriorHandoff,
-    PreparedGeneratedSu2Case, Su2Case, Su2CoefficientReference, Su2MeshFidelity,
+    GeneratedSu2CaseBundle, PreparedGeneratedSu2Case, SizeTransitionValidatedTetgenExteriorHandoff,
+    Su2Case, Su2CoefficientReference, Su2MeshFidelity,
 };
 
 /// One in-memory Accurate-mode case together with the provenance required to persist it honestly.
 ///
 /// The staircase path stores only the already-rendered generated bundle and is always persisted as
 /// `StaircaseVoxelDerived`. The validated TetGen path retains the solver case, explicit coefficient
-/// reference and the orthogonality-promoted validated external-TetGen handoff. Persistence is forced
-/// through the v10 orthogonality-aware TetGen sidecar path so the owned unique-face evidence cannot
-/// be dropped while the solver-visible mesh is retained.
+/// reference and size-transition-promoted validated external-TetGen handoff. During this ownership
+/// slice persistence intentionally remains on the established v10 orthogonality-aware sidecar path;
+/// the nested orthogonality state is passed explicitly so the new size-transition evidence cannot be
+/// mistaken for already-persisted evidence before the separate v11 schema promotion.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AccuratePreparedCase {
     Staircase {
@@ -24,7 +25,7 @@ pub enum AccuratePreparedCase {
         bundle: GeneratedSu2CaseBundle,
         case: Su2Case,
         coefficient_reference: Su2CoefficientReference,
-        handoff: OrthogonalityValidatedTetgenExteriorHandoff,
+        handoff: SizeTransitionValidatedTetgenExteriorHandoff,
     },
 }
 
@@ -33,16 +34,20 @@ impl AccuratePreparedCase {
         Self::Staircase { bundle }
     }
 
-    /// Constructs the solver-visible bundle from the authoritative orthogonality-promoted validated
-    /// handoff instead of accepting independent TetGen mesh/config text from the caller.
+    /// Constructs the solver-visible bundle from the authoritative size-transition-promoted
+    /// validated handoff instead of accepting independent TetGen mesh/config text from the caller.
     pub fn validated_tetgen(
         case: Su2Case,
         coefficient_reference: Su2CoefficientReference,
-        handoff: OrthogonalityValidatedTetgenExteriorHandoff,
+        handoff: SizeTransitionValidatedTetgenExteriorHandoff,
     ) -> Result<Self, String> {
         let bundle = build_validated_exterior_su2_case_bundle_with_reference(
             &case,
-            &handoff.handoff.handoff,
+            &handoff
+                .orthogonality_handoff
+                .facet_handoff
+                .handoff
+                .handoff,
             Some(&coefficient_reference),
         )
         .map_err(|error| format!("validated TetGen SU2 bundle generation failed: {error}"))?;
@@ -74,10 +79,10 @@ impl AccuratePreparedCase {
 
     /// Persists through the provenance path dictated by the variant.
     ///
-    /// TetGen persistence rebuilds the exact solver bundle from the retained `Su2Case` and nested
-    /// generic validated handoff, then writes the exact PLC plus complete format-v10 provenance for
-    /// v7 base evidence, v8 constrained facets, v9 internal dihedrals, and v10 unique-face
-    /// orthogonality evidence.
+    /// Until the dedicated v11 size-transition schema is promoted, TetGen persistence rebuilds the
+    /// exact solver bundle from the nested orthogonality handoff and writes the existing format-v10
+    /// evidence. The in-memory size-transition policy/report remain owned by this type but are not
+    /// claimed as persisted yet.
     pub fn persist(
         &self,
         root: &Path,
@@ -100,7 +105,7 @@ impl AccuratePreparedCase {
                 root,
                 case_directory_name,
                 case,
-                handoff,
+                &handoff.orthogonality_handoff,
                 Some(coefficient_reference),
             )
             .map_err(|error| {
