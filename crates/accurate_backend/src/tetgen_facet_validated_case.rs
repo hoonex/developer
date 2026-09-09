@@ -19,14 +19,15 @@ const V7_PREFIX: &str = "key\tvalue\nformat_version\t7\n";
 
 /// Builds and persists a solver-bound SU2 case from the facet-promoted external-TetGen handoff.
 ///
-/// The established v7 TetGen manifest remains the authoritative base and is promoted to v8 only
-/// after its exact version prefix is verified. V8 then appends the owned one-to-one constrained-
-/// facet policy/report. This preserves all earlier evidence without duplicating its renderer.
+/// The established v7 TetGen manifest remains the authoritative base. Format v9 preserves the
+/// complete v8 constrained-facet field set and appends the exact owned tetrahedral internal-dihedral
+/// policy/report without duplicating the v7 renderer.
 ///
-/// One-to-one triangulated facet coincidence within an explicit vertex tolerance does not establish
-/// analytic/CAD semantics, continuous curvature, boundary-layer quality, engineering mesh quality,
-/// or aerodynamic accuracy. `body_fitted_status` and `engineering_quality_status` remain inherited
-/// as `not_established` from the v7 base manifest.
+/// One-to-one triangulated facet coincidence and complete six-angle-per-cell dihedral evidence are
+/// numerical geometry contracts only. They do not establish analytic/CAD semantics, continuous
+/// curvature, boundary-layer quality, engineering mesh quality, or aerodynamic accuracy.
+/// `body_fitted_status` and `engineering_quality_status` remain inherited as `not_established` from
+/// the v7 base manifest.
 pub fn prepare_facet_tetgen_validated_exterior_su2_case_directory(
     root: &Path,
     case_directory_name: &str,
@@ -109,7 +110,7 @@ pub(crate) fn render_facet_tetgen_handoff_provenance(
     let mut output = format!(
         concat!(
             "key\tvalue\n",
-            "format_version\t8\n",
+            "format_version\t9\n",
             "{}",
             "source_facet_vertex_distance_tolerance\t{}\n",
             "source_facet_max_triangle_pair_tests\t{}\n",
@@ -145,6 +146,35 @@ pub(crate) fn render_facet_tetgen_handoff_provenance(
         ));
     }
 
+    output.push_str(&format!(
+        concat!(
+            "tetra_dihedral_policy_minimum_angle_radians\t{}\n",
+            "tetra_dihedral_policy_maximum_angle_radians\t{}\n",
+            "tetra_dihedral_cells\t{}\n",
+            "tetra_dihedral_angle_tests\t{}\n",
+            "tetra_dihedral_observed_minimum_angle_radians\t{}\n",
+            "tetra_dihedral_observed_minimum_cell\t{}\n",
+            "tetra_dihedral_observed_minimum_local_edge_start\t{}\n",
+            "tetra_dihedral_observed_minimum_local_edge_end\t{}\n",
+            "tetra_dihedral_observed_maximum_angle_radians\t{}\n",
+            "tetra_dihedral_observed_maximum_cell\t{}\n",
+            "tetra_dihedral_observed_maximum_local_edge_start\t{}\n",
+            "tetra_dihedral_observed_maximum_local_edge_end\t{}\n"
+        ),
+        handoff.dihedral_policy.minimum_dihedral_angle_radians,
+        handoff.dihedral_policy.maximum_dihedral_angle_radians,
+        handoff.dihedral_quality.cells,
+        handoff.dihedral_quality.dihedral_angle_tests,
+        handoff.dihedral_quality.minimum_dihedral_angle_radians,
+        handoff.dihedral_quality.minimum_dihedral_angle_cell,
+        handoff.dihedral_quality.minimum_dihedral_angle_edge[0],
+        handoff.dihedral_quality.minimum_dihedral_angle_edge[1],
+        handoff.dihedral_quality.maximum_dihedral_angle_radians,
+        handoff.dihedral_quality.maximum_dihedral_angle_cell,
+        handoff.dihedral_quality.maximum_dihedral_angle_edge[0],
+        handoff.dihedral_quality.maximum_dihedral_angle_edge[1],
+    ));
+
     Ok(output)
 }
 
@@ -153,7 +183,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn v8_promotion_requires_exact_v7_prefix() {
+    fn v9_promotion_requires_exact_v7_prefix() {
         let valid = format!("{V7_PREFIX}contract\tvalidated_external_tetgen_handoff\n");
         assert_eq!(
             valid.strip_prefix(V7_PREFIX),
