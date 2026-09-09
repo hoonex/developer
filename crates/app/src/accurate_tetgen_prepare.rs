@@ -28,12 +28,13 @@ pub(crate) fn snapshot_project_state(state: &ProjectState) -> ProjectState {
 /// TetGen. Successful output has already passed strict source admission including bounded positive
 /// source-body clearance, external process parsing, bounded volumetric tetrahedral-overlap
 /// validation, local tetrahedron sanity quality, complete six-angle-per-cell internal-dihedral
-/// evidence, bounded source correspondence, one-to-one constrained source/body facet
-/// correspondence, bounded source/body-boundary normal-opposition, bounded sharp-crease feature-edge
-/// correspondence, bounded triangulated discrete normal-variation correspondence, and bounded
-/// body-wall first-cell geometric-height validation. The returned `AccuratePreparedCase` owns the
-/// facet-promoted handoff and persists the complete TetGen evidence as format v9. Body-fitted and
-/// engineering-quality status remain not established.
+/// evidence, complete unique-face centroid/normal orthogonality evidence, bounded source
+/// correspondence, one-to-one constrained source/body facet correspondence, bounded
+/// source/body-boundary normal-opposition, bounded sharp-crease feature-edge correspondence,
+/// bounded triangulated discrete normal-variation correspondence, and bounded body-wall first-cell
+/// geometric-height validation. The returned `AccuratePreparedCase` owns the orthogonality-promoted
+/// handoff and persists the complete TetGen evidence as format v10. Body-fitted and engineering-
+/// quality status remain not established.
 pub(crate) fn prepare_tetgen_from_state(
     state: &ProjectState,
     settings: &AccurateSettings,
@@ -144,7 +145,7 @@ mod tests {
         assert!(exterior.contains("engineering_quality_status\tnot_established"));
 
         let tetgen = fs::read_to_string(case_dir.join("aeroforge_tetgen_handoff.tsv")).unwrap();
-        assert!(tetgen.contains("format_version\t9"));
+        assert!(tetgen.contains("format_version\t10"));
         assert!(tetgen.contains("contract\tvalidated_external_tetgen_handoff"));
         assert!(tetgen.contains("body_fitted_status\tnot_established"));
         assert!(tetgen.contains("engineering_quality_status\tnot_established"));
@@ -169,6 +170,19 @@ mod tests {
         assert!(tetgen.contains("tetra_dihedral_observed_maximum_cell\t"));
         assert!(tetgen.contains("tetra_dihedral_observed_maximum_local_edge_start\t"));
         assert!(tetgen.contains("tetra_dihedral_observed_maximum_local_edge_end\t"));
+        assert!(tetgen.contains("tetra_face_orthogonality_policy_minimum_interior_cosine\t0.000000000001"));
+        assert!(tetgen.contains("tetra_face_orthogonality_policy_minimum_boundary_cosine\t0.000000000001"));
+        assert!(tetgen.contains("tetra_face_orthogonality_policy_max_face_tests\t20000000"));
+        assert!(tetgen.contains("tetra_face_orthogonality_cells\t"));
+        assert!(tetgen.contains("tetra_face_orthogonality_interior_faces\t"));
+        assert!(tetgen.contains("tetra_face_orthogonality_boundary_faces\t"));
+        assert!(tetgen.contains("tetra_face_orthogonality_face_tests\t"));
+        assert!(tetgen.contains("tetra_face_orthogonality_observed_minimum_interior_cosine\t"));
+        assert!(tetgen.contains("tetra_face_orthogonality_observed_minimum_interior_face\t"));
+        assert!(tetgen.contains("tetra_face_orthogonality_observed_minimum_interior_owner_cells\t"));
+        assert!(tetgen.contains("tetra_face_orthogonality_observed_minimum_boundary_cosine\t"));
+        assert!(tetgen.contains("tetra_face_orthogonality_observed_minimum_boundary_face\t"));
+        assert!(tetgen.contains("tetra_face_orthogonality_observed_minimum_boundary_owner_cell\t"));
         assert!(tetgen.contains("source_normal_distance_tolerance\t0.000000001"));
         assert!(tetgen.contains("source_normal_minimum_opposition_cosine\t0.999999"));
         assert!(tetgen.contains("source_normal_max_triangle_pair_tests\t20000000"));

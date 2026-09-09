@@ -2,20 +2,19 @@ use std::path::Path;
 
 use aeroforge_accurate_backend::{
     build_validated_exterior_su2_case_bundle_with_reference,
-    prepare_facet_tetgen_validated_exterior_su2_case_directory_with_reference,
-    prepare_generated_su2_case_directory_with_fidelity, GeneratedSu2CaseBundle,
-    OrthogonalityValidatedTetgenExteriorHandoff, PreparedGeneratedSu2Case, Su2Case,
-    Su2CoefficientReference, Su2MeshFidelity,
+    prepare_generated_su2_case_directory_with_fidelity,
+    prepare_orthogonality_tetgen_validated_exterior_su2_case_directory_with_reference,
+    GeneratedSu2CaseBundle, OrthogonalityValidatedTetgenExteriorHandoff,
+    PreparedGeneratedSu2Case, Su2Case, Su2CoefficientReference, Su2MeshFidelity,
 };
 
 /// One in-memory Accurate-mode case together with the provenance required to persist it honestly.
 ///
 /// The staircase path stores only the already-rendered generated bundle and is always persisted as
 /// `StaircaseVoxelDerived`. The validated TetGen path retains the solver case, explicit coefficient
-/// reference and the orthogonality-promoted validated external-TetGen handoff. Until the dedicated
-/// v10 persistence slice lands, persistence deliberately delegates to the nested facet handoff's
-/// established v9 sidecar path; in-memory ownership and persistence-schema promotion remain separate
-/// proof obligations.
+/// reference and the orthogonality-promoted validated external-TetGen handoff. Persistence is forced
+/// through the v10 orthogonality-aware TetGen sidecar path so the owned unique-face evidence cannot
+/// be dropped while the solver-visible mesh is retained.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AccuratePreparedCase {
     Staircase {
@@ -75,9 +74,10 @@ impl AccuratePreparedCase {
 
     /// Persists through the provenance path dictated by the variant.
     ///
-    /// The current TetGen persistence path intentionally receives the nested facet-promoted handoff,
-    /// retaining the established v9 manifest while the stronger face-orthogonality ownership is
-    /// proven independently in memory. A following schema slice promotes this evidence to v10.
+    /// TetGen persistence rebuilds the exact solver bundle from the retained `Su2Case` and nested
+    /// generic validated handoff, then writes the exact PLC plus complete format-v10 provenance for
+    /// v7 base evidence, v8 constrained facets, v9 internal dihedrals, and v10 unique-face
+    /// orthogonality evidence.
     pub fn persist(
         &self,
         root: &Path,
@@ -96,14 +96,16 @@ impl AccuratePreparedCase {
                 coefficient_reference,
                 handoff,
                 ..
-            } => prepare_facet_tetgen_validated_exterior_su2_case_directory_with_reference(
+            } => prepare_orthogonality_tetgen_validated_exterior_su2_case_directory_with_reference(
                 root,
                 case_directory_name,
                 case,
-                &handoff.facet_handoff,
+                handoff,
                 Some(coefficient_reference),
             )
-            .map_err(|error| format!("failed to persist facet-validated TetGen SU2 case: {error}")),
+            .map_err(|error| {
+                format!("failed to persist orthogonality-validated TetGen SU2 case: {error}")
+            }),
         }
     }
 }

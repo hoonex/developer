@@ -30,6 +30,7 @@ mod tetgen_facet_handoff;
 mod tetgen_facet_validated_case;
 mod tetgen_handoff;
 mod tetgen_orthogonality_handoff;
+mod tetgen_orthogonality_validated_case;
 mod tetgen_output;
 mod tetgen_plc;
 mod tetgen_runner;
@@ -186,6 +187,10 @@ pub use tetgen_orthogonality_handoff::{
     validate_tetgen_external_handoff_with_face_orthogonality,
     OrthogonalityValidatedTetgenExteriorHandoff,
     OrthogonalityValidatedTetgenExteriorHandoffError,
+};
+pub use tetgen_orthogonality_validated_case::{
+    prepare_orthogonality_tetgen_validated_exterior_su2_case_directory,
+    prepare_orthogonality_tetgen_validated_exterior_su2_case_directory_with_reference,
 };
 pub use tetgen_output::{
     parse_tetgen_volume_mesh, ParsedTetgenVolumeMesh, TetgenOutputError,
