@@ -25,6 +25,9 @@ use crate::su2_mesh::{
 };
 use crate::surface_correspondence::SourceSurfaceCorrespondencePolicy;
 use crate::tetra_dihedral_quality::TetrahedralDihedralQualityPolicy;
+use crate::tetra_face_centroid_skewness::{
+    validate_tetrahedral_face_centroid_skewness, TetrahedralFaceCentroidSkewnessPolicy,
+};
 use crate::tetra_face_orthogonality::{
     validate_tetrahedral_face_orthogonality, TetrahedralFaceOrthogonalityPolicy,
 };
@@ -273,6 +276,56 @@ fn configured_real_tetgen_rounded_surface_reaches_facet_owned_handoff() {
         maximum_ratio,
         size_transition.interior_faces,
         size_transition.interior_face_tests,
+    );
+
+    let face_centroid_skewness = validate_tetrahedral_face_centroid_skewness(
+        &result.handoff.handoff.mesh,
+        TetrahedralFaceCentroidSkewnessPolicy {
+            maximum_face_centroid_skewness: f64::MAX,
+            max_interior_face_tests: 20_000_000,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        face_centroid_skewness.cells,
+        result.handoff.handoff.mesh.cells.len()
+    );
+    assert_eq!(
+        face_centroid_skewness.interior_face_tests,
+        face_centroid_skewness.interior_faces
+    );
+    assert!(face_centroid_skewness.interior_faces > 0);
+    let maximum_skewness = face_centroid_skewness
+        .maximum_face_centroid_skewness
+        .unwrap();
+    assert!(maximum_skewness.is_finite() && maximum_skewness >= 0.0);
+    assert!(face_centroid_skewness.maximum_skewness_face.is_some());
+    assert!(
+        face_centroid_skewness
+            .maximum_skewness_owner_cells
+            .is_some()
+    );
+    assert!(
+        face_centroid_skewness
+            .maximum_skewness_face_centroid
+            .is_some()
+    );
+    assert!(
+        face_centroid_skewness
+            .maximum_skewness_centroid_line_intersection
+            .is_some()
+    );
+    assert!(
+        face_centroid_skewness
+            .maximum_skewness_face_scale
+            .unwrap()
+            > 0.0
+    );
+    println!(
+        "rounded real TetGen face-centroid skewness: max_normalized_offset={} interior_faces={} tests={}",
+        maximum_skewness,
+        face_centroid_skewness.interior_faces,
+        face_centroid_skewness.interior_face_tests,
     );
 
     assert_eq!(result.facet_policy, facet_policy);
