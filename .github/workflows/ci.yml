@@ -110,7 +110,7 @@ jobs:
             ${{ runner.os }}-cargo-
       - name: Build Windows limited-alpha executable
         run: cargo build -p aeroforge-app --release
-      - name: Package Windows limited-alpha artifact
+      - name: Stage Windows limited-alpha artifact
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -130,12 +130,11 @@ jobs:
           "@ | Set-Content "$packageDir/README.txt" -Encoding utf8
           "$sha  AeroForge.exe" | Set-Content "$packageDir/SHA256SUMS.txt" -Encoding ascii
           "${{ github.sha }}" | Set-Content "$packageDir/BUILD_COMMIT.txt" -Encoding ascii
-          Compress-Archive -Path "$packageDir/*" -DestinationPath "dist/AeroForge-Windows-x86_64.zip" -Force
       - name: Upload Windows limited-alpha package
         uses: actions/upload-artifact@v4
         with:
           name: AeroForge-Windows-x86_64-${{ github.sha }}
-          path: dist/AeroForge-Windows-x86_64.zip
+          path: dist/AeroForge-Windows-x86_64
           if-no-files-found: error
           retention-days: 14
 
