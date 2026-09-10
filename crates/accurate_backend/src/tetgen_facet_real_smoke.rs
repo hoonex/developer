@@ -299,33 +299,30 @@ fn configured_real_tetgen_rounded_surface_reaches_facet_owned_handoff() {
         .maximum_face_centroid_skewness
         .unwrap();
     assert!(maximum_skewness.is_finite() && maximum_skewness >= 0.0);
-    assert!(face_centroid_skewness.maximum_skewness_face.is_some());
-    assert!(
-        face_centroid_skewness
-            .maximum_skewness_owner_cells
-            .is_some()
-    );
-    assert!(
-        face_centroid_skewness
-            .maximum_skewness_face_centroid
-            .is_some()
-    );
-    assert!(
-        face_centroid_skewness
-            .maximum_skewness_centroid_line_intersection
-            .is_some()
-    );
-    assert!(
-        face_centroid_skewness
-            .maximum_skewness_face_scale
-            .unwrap()
-            > 0.0
-    );
+    let maximum_face = face_centroid_skewness.maximum_skewness_face.unwrap();
+    let maximum_owner_cells = face_centroid_skewness
+        .maximum_skewness_owner_cells
+        .unwrap();
+    let maximum_face_centroid = face_centroid_skewness
+        .maximum_skewness_face_centroid
+        .unwrap();
+    let maximum_intersection = face_centroid_skewness
+        .maximum_skewness_centroid_line_intersection
+        .unwrap();
+    let maximum_face_scale = face_centroid_skewness
+        .maximum_skewness_face_scale
+        .unwrap();
+    assert!(maximum_face_scale > 0.0);
     println!(
-        "rounded real TetGen face-centroid skewness: max_normalized_offset={} interior_faces={} tests={}",
+        "rounded real TetGen face-centroid skewness: max_normalized_offset={} interior_faces={} tests={} face={:?} owner_cells={:?} face_centroid={:?} centroid_line_intersection={:?} face_scale={}",
         maximum_skewness,
         face_centroid_skewness.interior_faces,
         face_centroid_skewness.interior_face_tests,
+        maximum_face,
+        maximum_owner_cells,
+        maximum_face_centroid,
+        maximum_intersection,
+        maximum_face_scale,
     );
 
     assert_eq!(result.facet_policy, facet_policy);

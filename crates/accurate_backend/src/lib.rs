@@ -36,6 +36,8 @@ mod tetgen_orthogonality_validated_case;
 mod tetgen_output;
 mod tetgen_plc;
 mod tetgen_runner;
+mod tetgen_skewness_handoff;
+mod tetgen_skewness_validated_case;
 mod tetgen_size_transition_handoff;
 mod tetgen_size_transition_validated_case;
 mod tetgen_validated_case;
@@ -214,6 +216,15 @@ pub use tetgen_plc::{
 pub use tetgen_runner::{
     discover_tetgen, run_prepared_tetgen_plc, TetgenExternalRunError,
     TetgenExternalRunResult,
+};
+pub use tetgen_skewness_handoff::{
+    validate_tetgen_external_handoff_with_face_centroid_skewness,
+    SkewnessValidatedTetgenExteriorHandoff,
+    SkewnessValidatedTetgenExteriorHandoffError,
+};
+pub use tetgen_skewness_validated_case::{
+    prepare_skewness_tetgen_validated_exterior_su2_case_directory,
+    prepare_skewness_tetgen_validated_exterior_su2_case_directory_with_reference,
 };
 pub use tetgen_size_transition_handoff::{
     validate_tetgen_external_handoff_with_size_transition,

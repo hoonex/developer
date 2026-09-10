@@ -29,14 +29,14 @@ pub(crate) fn snapshot_project_state(state: &ProjectState) -> ProjectState {
 /// source-body clearance, external process parsing, bounded volumetric tetrahedral-overlap
 /// validation, local tetrahedron sanity quality, complete six-angle-per-cell internal-dihedral
 /// evidence, complete unique-face centroid/normal orthogonality evidence, complete adjacent-cell
-/// volume-ratio size-transition evidence, bounded source correspondence, one-to-one constrained
-/// source/body facet correspondence, bounded source/body-boundary normal-opposition, bounded
+/// volume-ratio size-transition evidence, complete interior-face centroid-skewness evidence,
+/// bounded source correspondence, one-to-one constrained source/body facet correspondence, bounded
 /// sharp-crease feature-edge correspondence, bounded triangulated discrete normal-variation
 /// correspondence, and bounded body-wall first-cell geometric-height validation. The returned
-/// `AccuratePreparedCase` owns the size-transition-promoted handoff and persists the complete TetGen
-/// evidence as format v11. The adjacent-cell ratio policy remains a broad numerical sanity bound,
-/// not an engineering growth criterion. Body-fitted and engineering-quality status remain not
-/// established.
+/// `AccuratePreparedCase` owns the skewness-promoted handoff and persists the complete TetGen
+/// evidence as format v12. The adjacent-cell ratio and face-centroid skewness policies remain broad
+/// numerical sanity bounds, not engineering criteria. Body-fitted and engineering-quality status
+/// remain not established.
 pub(crate) fn prepare_tetgen_from_state(
     state: &ProjectState,
     settings: &AccurateSettings,
@@ -48,6 +48,7 @@ pub(crate) fn prepare_tetgen_from_state(
 
     let handoff = run_project_tetgen_handoff(state, &executable)?;
     let generic_handoff = &handoff
+        .size_transition_handoff
         .orthogonality_handoff
         .facet_handoff
         .handoff
@@ -152,7 +153,7 @@ mod tests {
         assert!(exterior.contains("engineering_quality_status\tnot_established"));
 
         let tetgen = fs::read_to_string(case_dir.join("aeroforge_tetgen_handoff.tsv")).unwrap();
-        assert!(tetgen.contains("format_version\t11"));
+        assert!(tetgen.contains("format_version\t12"));
         assert!(tetgen.contains("contract\tvalidated_external_tetgen_handoff"));
         assert!(tetgen.contains("body_fitted_status\tnot_established"));
         assert!(tetgen.contains("engineering_quality_status\tnot_established"));
@@ -198,6 +199,17 @@ mod tests {
         assert!(tetgen.contains("tetra_size_transition_observed_maximum_adjacent_cell_volume_ratio\t"));
         assert!(tetgen.contains("tetra_size_transition_observed_maximum_ratio_face\t"));
         assert!(tetgen.contains("tetra_size_transition_observed_maximum_ratio_owner_cells\t"));
+        assert!(tetgen.contains("tetra_face_centroid_skewness_policy_maximum_normalized_offset\t1000000000000"));
+        assert!(tetgen.contains("tetra_face_centroid_skewness_policy_max_interior_face_tests\t20000000"));
+        assert!(tetgen.contains("tetra_face_centroid_skewness_cells\t"));
+        assert!(tetgen.contains("tetra_face_centroid_skewness_interior_faces\t"));
+        assert!(tetgen.contains("tetra_face_centroid_skewness_interior_face_tests\t"));
+        assert!(tetgen.contains("tetra_face_centroid_skewness_observed_maximum_normalized_offset\t"));
+        assert!(tetgen.contains("tetra_face_centroid_skewness_observed_maximum_face\t"));
+        assert!(tetgen.contains("tetra_face_centroid_skewness_observed_maximum_owner_cells\t"));
+        assert!(tetgen.contains("tetra_face_centroid_skewness_observed_maximum_face_centroid\t"));
+        assert!(tetgen.contains("tetra_face_centroid_skewness_observed_maximum_centroid_line_intersection\t"));
+        assert!(tetgen.contains("tetra_face_centroid_skewness_observed_maximum_face_scale\t"));
         assert!(tetgen.contains("source_normal_distance_tolerance\t0.000000001"));
         assert!(tetgen.contains("source_normal_minimum_opposition_cosine\t0.999999"));
         assert!(tetgen.contains("source_normal_max_triangle_pair_tests\t20000000"));

@@ -4,15 +4,16 @@ use aeroforge_accurate_backend::{
     build_validated_exterior_mesher_input, run_tetgen_for_handoff,
     validate_exterior_mesher_input_intersections, validate_exterior_mesher_source_clearance,
     validate_exterior_mesher_source_containment,
-    validate_tetgen_external_handoff_with_size_transition,
+    validate_tetgen_external_handoff_with_face_centroid_skewness,
     BodyWallFirstCellHeightPolicy, BoundaryRole, BoundarySource,
     ClearanceValidatedExteriorMesherInput, DomainAxis, DomainSide, ExteriorMeshQualityPolicy,
-    SizeTransitionValidatedTetgenExteriorHandoff, SourceBoundaryDiscreteNormalVariationPolicy,
+    SkewnessValidatedTetgenExteriorHandoff, SourceBoundaryDiscreteNormalVariationPolicy,
     SourceBoundaryFacetCorrespondencePolicy, SourceBoundaryFeatureEdgePolicy,
     SourceBoundaryNormalPolicy, SourceContainmentPolicy, SourceInterBodyClearancePolicy,
     SourceSurfaceCorrespondencePolicy, SourceSurfaceIntersectionPolicy, Su2MarkerBinding,
-    TetrahedralDihedralQualityPolicy, TetrahedralFaceOrthogonalityPolicy,
-    TetrahedralOverlapPolicy, TetrahedralSizeTransitionPolicy, TetgenHoleSeedPolicy,
+    TetrahedralDihedralQualityPolicy, TetrahedralFaceCentroidSkewnessPolicy,
+    TetrahedralFaceOrthogonalityPolicy, TetrahedralOverlapPolicy,
+    TetrahedralSizeTransitionPolicy, TetgenHoleSeedPolicy,
 };
 use aeroforge_volume_core::BoundaryMarkerId;
 
@@ -57,6 +58,11 @@ const DESKTOP_TETGEN_FACE_ORTHOGONALITY_POLICY: TetrahedralFaceOrthogonalityPoli
 const DESKTOP_TETGEN_SIZE_TRANSITION_POLICY: TetrahedralSizeTransitionPolicy =
     TetrahedralSizeTransitionPolicy {
         maximum_adjacent_cell_volume_ratio: 1.0e12,
+        max_interior_face_tests: 20_000_000,
+    };
+const DESKTOP_TETGEN_FACE_CENTROID_SKEWNESS_POLICY: TetrahedralFaceCentroidSkewnessPolicy =
+    TetrahedralFaceCentroidSkewnessPolicy {
+        maximum_face_centroid_skewness: 1.0e12,
         max_interior_face_tests: 20_000_000,
     };
 const DESKTOP_TETGEN_OVERLAP_POLICY: TetrahedralOverlapPolicy = TetrahedralOverlapPolicy {
@@ -162,7 +168,8 @@ pub fn admit_project_geometry_for_tetgen(
 /// promotes its output through AeroForge's solver-bound source-clearance, overlap,
 /// volume-shape quality/provenance/correspondence, complete tetrahedral internal-dihedral evidence,
 /// complete unique-face centroid/normal orthogonality evidence, complete adjacent-cell volume-ratio
-/// size-transition evidence, one-to-one constrained-facet correspondence, bounded
+/// size-transition evidence, complete interior-face centroid-skewness evidence, one-to-one
+/// constrained-facet correspondence, bounded
 /// source/body-boundary normal-opposition, bounded sharp-crease edge correspondence, bounded
 /// discrete normal-variation correspondence, and bounded body-wall first-cell height gates.
 ///
@@ -172,14 +179,19 @@ pub fn admit_project_geometry_for_tetgen(
 /// is stronger than proximity evidence but is not analytic/CAD semantics or continuous-curvature
 /// preservation. The positive source-body clearance floor is an explicit numerical admission policy,
 /// not an engineering spacing criterion. The mean-ratio, edge-ratio, dihedral, face-orthogonality,
-/// and adjacent-cell volume-ratio limits here are deliberately permissive numerical sanity checks.
-/// The size-transition gate evaluates every unique interior tetrahedral face and retains the maximum
+/// adjacent-cell volume-ratio, and face-centroid skewness limits here are deliberately permissive
+/// numerical sanity checks. The size-transition gate evaluates every unique interior tetrahedral
+/// face and retains the maximum
 /// positive owner-cell volume ratio plus its face/cell provenance. The `1e12` desktop cap is a broad
 /// numerical sanity ceiling, not a solver/model-specific engineering growth criterion. The
-/// dihedral gate evaluates all six internal angles of every solver-bound tetrahedron. The face-
-/// orthogonality gate evaluates every unique tetrahedral face: interior faces against owner-centroid
-/// connections and boundary faces against owner-centroid-to-face-centroid connections. None of these
-/// are layered boundary-wall quality or y+ certificates. The volumetric overlap gate uses a
+/// face-centroid skewness gate intersects each interior owner-cell centroid line with the shared
+/// face plane and normalizes its offset from the face centroid by the face's RMS vertex radius. The
+/// `1e12` desktop cap is a broad numerical bound, not a solver-specific engineering skewness
+/// criterion. The dihedral gate evaluates all six internal angles of every solver-bound tetrahedron.
+/// The face-orthogonality gate evaluates every unique tetrahedral face: interior faces against
+/// owner-centroid connections and boundary faces against owner-centroid-to-face-centroid
+/// connections. None of these are layered boundary-wall quality or y+ certificates. The
+/// volumetric overlap gate uses a
 /// deterministic sweep-and-prune broad phase with an explicit pair-test budget. The first-cell gate
 /// remains a face-to-opposite-vertex geometric observation, not boundary-layer, layer-count,
 /// growth-ratio, orthogonality, or y+ evidence. Passing the complete path still does not establish
@@ -188,17 +200,18 @@ pub fn admit_project_geometry_for_tetgen(
 pub fn run_project_tetgen_handoff(
     state: &ProjectState,
     executable: &Path,
-) -> Result<SizeTransitionValidatedTetgenExteriorHandoff, String> {
+) -> Result<SkewnessValidatedTetgenExteriorHandoff, String> {
     let admitted = admit_project_geometry_for_tetgen(state)?;
     let bound = run_tetgen_for_handoff(executable, &admitted, DESKTOP_TETGEN_HOLE_SEED_POLICY)
         .map_err(|error| format!("desktop external TetGen run failed: {error}"))?;
 
-    validate_tetgen_external_handoff_with_size_transition(
+    validate_tetgen_external_handoff_with_face_centroid_skewness(
         bound,
         DESKTOP_TETGEN_SANITY_QUALITY_POLICY,
         DESKTOP_TETGEN_DIHEDRAL_QUALITY_POLICY,
         DESKTOP_TETGEN_FACE_ORTHOGONALITY_POLICY,
         DESKTOP_TETGEN_SIZE_TRANSITION_POLICY,
+        DESKTOP_TETGEN_FACE_CENTROID_SKEWNESS_POLICY,
         DESKTOP_TETGEN_OVERLAP_POLICY,
         DESKTOP_SOURCE_CORRESPONDENCE_POLICY,
         DESKTOP_SOURCE_FACET_POLICY,

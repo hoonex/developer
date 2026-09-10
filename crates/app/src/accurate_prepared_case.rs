@@ -3,8 +3,8 @@ use std::path::Path;
 use aeroforge_accurate_backend::{
     build_validated_exterior_su2_case_bundle_with_reference,
     prepare_generated_su2_case_directory_with_fidelity,
-    prepare_size_transition_tetgen_validated_exterior_su2_case_directory_with_reference,
-    GeneratedSu2CaseBundle, PreparedGeneratedSu2Case, SizeTransitionValidatedTetgenExteriorHandoff,
+    prepare_skewness_tetgen_validated_exterior_su2_case_directory_with_reference,
+    GeneratedSu2CaseBundle, PreparedGeneratedSu2Case, SkewnessValidatedTetgenExteriorHandoff,
     Su2Case, Su2CoefficientReference, Su2MeshFidelity,
 };
 
@@ -12,9 +12,9 @@ use aeroforge_accurate_backend::{
 ///
 /// The staircase path stores only the already-rendered generated bundle and is always persisted as
 /// `StaircaseVoxelDerived`. The validated TetGen path retains the solver case, explicit coefficient
-/// reference and size-transition-promoted validated external-TetGen handoff. Persistence is forced
-/// through the v11 size-transition-aware TetGen sidecar path so the owned complete interior-face
-/// adjacent-cell volume-ratio evidence cannot be dropped while the solver-visible mesh is retained.
+/// reference and skewness-promoted validated external-TetGen handoff. Persistence is forced through
+/// the v12 face-centroid-skewness-aware TetGen sidecar path so the owned complete interior-face
+/// skewness evidence cannot be dropped while the solver-visible mesh is retained.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AccuratePreparedCase {
     Staircase {
@@ -24,7 +24,7 @@ pub enum AccuratePreparedCase {
         bundle: GeneratedSu2CaseBundle,
         case: Su2Case,
         coefficient_reference: Su2CoefficientReference,
-        handoff: SizeTransitionValidatedTetgenExteriorHandoff,
+        handoff: SkewnessValidatedTetgenExteriorHandoff,
     },
 }
 
@@ -33,16 +33,17 @@ impl AccuratePreparedCase {
         Self::Staircase { bundle }
     }
 
-    /// Constructs the solver-visible bundle from the authoritative size-transition-promoted
+    /// Constructs the solver-visible bundle from the authoritative skewness-promoted
     /// validated handoff instead of accepting independent TetGen mesh/config text from the caller.
     pub fn validated_tetgen(
         case: Su2Case,
         coefficient_reference: Su2CoefficientReference,
-        handoff: SizeTransitionValidatedTetgenExteriorHandoff,
+        handoff: SkewnessValidatedTetgenExteriorHandoff,
     ) -> Result<Self, String> {
         let bundle = build_validated_exterior_su2_case_bundle_with_reference(
             &case,
             &handoff
+                .size_transition_handoff
                 .orthogonality_handoff
                 .facet_handoff
                 .handoff
@@ -79,9 +80,9 @@ impl AccuratePreparedCase {
     /// Persists through the provenance path dictated by the variant.
     ///
     /// TetGen persistence rebuilds the exact solver bundle from the retained `Su2Case` and nested
-    /// generic validated handoff, then writes the exact PLC plus complete format-v11 provenance for
+    /// generic validated handoff, then writes the exact PLC plus complete format-v12 provenance for
     /// v7 base evidence, v8 constrained facets, v9 internal dihedrals, v10 unique-face
-    /// orthogonality, and v11 adjacent-cell size-transition evidence.
+    /// orthogonality, v11 adjacent-cell size-transition, and v12 face-centroid skewness evidence.
     pub fn persist(
         &self,
         root: &Path,
@@ -100,7 +101,7 @@ impl AccuratePreparedCase {
                 coefficient_reference,
                 handoff,
                 ..
-            } => prepare_size_transition_tetgen_validated_exterior_su2_case_directory_with_reference(
+            } => prepare_skewness_tetgen_validated_exterior_su2_case_directory_with_reference(
                 root,
                 case_directory_name,
                 case,
@@ -108,7 +109,7 @@ impl AccuratePreparedCase {
                 Some(coefficient_reference),
             )
             .map_err(|error| {
-                format!("failed to persist size-transition-validated TetGen SU2 case: {error}")
+                format!("failed to persist skewness-validated TetGen SU2 case: {error}")
             }),
         }
     }
