@@ -35,9 +35,10 @@ The validated external TetGen desktop path deliberately remains in this class ev
 - complete six-internal-dihedral-per-tetrahedron observations;
 - one-to-one triangulated source-facet ↔ output body-facet coincidence;
 - complete unique-face centroid/normal orthogonality observations;
-- complete interior-face adjacent-cell volume-ratio observations.
+- complete interior-face adjacent-cell volume-ratio observations;
+- complete interior-face face-centroid skewness observations.
 
-The final desktop ownership type is `SizeTransitionValidatedTetgenExteriorHandoff`. It owns `OrthogonalityValidatedTetgenExteriorHandoff`, which owns the facet/base handoff plus exact dihedral, constrained-facet, and unique-face orthogonality evidence, and adds exact adjacent-cell volume-ratio policy/report for the same solver-bound mesh.
+The final desktop ownership type is `SkewnessValidatedTetgenExteriorHandoff`. It owns `SizeTransitionValidatedTetgenExteriorHandoff`, which owns the orthogonality/facet/base evidence plus exact adjacent-cell volume-ratio policy/report, and adds exact face-centroid skewness policy/report for the same solver-bound mesh.
 
 ### Surface-facet evidence
 
@@ -78,6 +79,12 @@ The desktop numerical policy uses maximum ratio `1e12` and a 20,000,000-interior
 
 That value is a fixture observation, and the permissive ceiling is not a validated solver/model-specific engineering size-transition or boundary-layer growth specification.
 
+### Interior-face centroid-skewness evidence
+
+`validate_tetrahedral_face_centroid_skewness` evaluates every unique interior face of the exact solver-bound mesh. It intersects the owner-cell centroid line with the face plane and normalizes the distance from that point to the face centroid by the face RMS vertex radius. The report retains complete work, maximum value, face, owner cells, both points, and scale.
+
+The desktop numerical policy uses maximum normalized offset `1e12` and a 20,000,000-face budget. The rounded fixture evaluated all 954 interior faces and observed maximum `0.20174085968313984`. This is fixture observation under a broad ownership bound, not a validated engineering skewness specification.
+
 ### Clearance, crease, normal variation, and first-cell evidence
 
 Clearance records complete distinct-body pair work and observed Euclidean source-surface separation under an explicit positive floor. Feature-edge evidence compares selected manifold crease edges by midpoint distance, direction alignment, and dihedral agreement. Discrete normal-variation evidence runs the same bounded edge engine at a lower variation threshold and separate sharp cutoff. These are triangulated geometry contracts, not CAD/continuous-curvature semantics.
@@ -89,7 +96,7 @@ First-cell height records the perpendicular wall-face-to-opposite-vertex distanc
 The exact PLC and TetGen evidence are persisted as:
 
 - `aeroforge_tetgen_input.poly`;
-- `aeroforge_tetgen_handoff.tsv` **format v11**.
+- `aeroforge_tetgen_handoff.tsv` **format v12**.
 
 The additive version chain is:
 
@@ -98,8 +105,9 @@ The additive version chain is:
 - v9 — complete internal-dihedral policy/work/extrema provenance;
 - v10 — complete unique-face orthogonality policy, face counts/work, minimum observed cosines, face IDs, and owner-cell provenance;
 - v11 — complete interior-face adjacent-cell volume-ratio policy, counts/work, maximum observed ratio, face ID, and owner-cell provenance.
+- v12 — complete interior-face face-centroid skewness policy, counts/work, maximum normalized offset, face ID, owner cells, face centroid, centroid-line intersection, and face scale.
 
-The v11 layer requires the exact v10 manifest before promotion and represents unavailable optional extrema explicitly rather than guessing. None of these fields rewrite the separate mesh-fidelity sidecar.
+The v12 layer requires the exact v11 manifest before promotion and represents unavailable optional extrema and locations explicitly rather than guessing. None of these fields rewrite the separate mesh-fidelity sidecar.
 
 ### `StaircaseVoxelDerived`
 
@@ -122,7 +130,7 @@ Because the current source representation is primitive/triangle-mesh based, no v
 
 ## Evidence boundary
 
-Routine CI can prove that the real external-TetGen desktop path owns and persists its clearance, overlap, normal, crease, discrete variation, first-cell, complete internal-dihedral, constrained-facet, complete unique-face orthogonality, and complete interior-face adjacent-cell volume-ratio evidence without fidelity promotion.
+Routine CI can prove that the real external-TetGen desktop path owns and persists its clearance, overlap, normal, crease, discrete variation, first-cell, complete internal-dihedral, constrained-facet, complete unique-face orthogonality, and complete interior-face adjacent-cell volume-ratio and face-centroid skewness evidence without fidelity promotion.
 
 CI does not by itself prove analytic/CAD geometry fidelity, continuous curvature independent of tessellation, exact edge identity, layered boundary-wall quality, engineering mesh adequacy, grid convergence, or aerodynamic accuracy.
 

@@ -94,15 +94,24 @@ max interior-face tests             = 20,000,000
 
 These are numerical bounds, not engineering criteria. The rounded real-TetGen fixture evaluated all 954 interior faces and observed maximum ratio `108.24863139041692`. Neither the observation nor the broad desktop ceiling establishes solver/model-specific acceptable growth or controlled boundary-layer growth.
 
+### Interior-face centroid-skewness promotion
+
+`validate_tetgen_external_handoff_with_face_centroid_skewness` wraps the size-transition handoff as `SkewnessValidatedTetgenExteriorHandoff` and evaluates every unique interior face of the same retained solver-bound mesh.
+
+For each face, `validate_tetrahedral_face_centroid_skewness` intersects the two owner-cell centroid line with the face plane. It divides the distance from that intersection to the face centroid by the face RMS vertex radius. Zero means the line crosses the face centroid. Complete work is counted before geometry evaluation, and the report owns the maximum value plus face, owner cells, face centroid, intersection, and scale.
+
+The desktop policy uses a broad maximum `1e12` and 20,000,000-test budget. The rounded fixture evaluated all 954 interior faces and observed maximum normalized offset `0.20174085968313984` at face `[0, 3, 146]` owned by cells `[9, 516]`; the report also retained the exact face centroid, centroid-line intersection, and scale. Neither the observation nor the policy is a solver/model-specific engineering skewness criterion.
+
 ## Desktop ownership
 
-The actual desktop preparation path consumes `SizeTransitionValidatedTetgenExteriorHandoff`. Its nesting is intentional:
+The actual desktop preparation path consumes `SkewnessValidatedTetgenExteriorHandoff`. Its nesting is intentional:
 
 ```text
 ValidatedTetgenExteriorHandoff
 → FacetValidatedTetgenExteriorHandoff
 → OrthogonalityValidatedTetgenExteriorHandoff
 → SizeTransitionValidatedTetgenExteriorHandoff
+→ SkewnessValidatedTetgenExteriorHandoff
 → AccuratePreparedCase
 → solver-visible SU2 bundle + immutable provenance
 ```
@@ -114,7 +123,7 @@ Each stronger wrapper owns the prior state plus its own exact policy/report, pre
 The desktop external path persists:
 
 - `aeroforge_tetgen_input.poly` — exact deterministic PLC used by the external run;
-- `aeroforge_tetgen_handoff.tsv` **format v11**.
+- `aeroforge_tetgen_handoff.tsv` **format v12**.
 
 The version chain is additive:
 
@@ -123,8 +132,9 @@ The version chain is additive:
 - v9: complete tetrahedral internal-dihedral policy/work/extrema provenance;
 - v10: complete unique-face orthogonality policy, cell/interior/boundary/test counts, observed minima, faces, and owner-cell provenance;
 - v11: complete interior-face adjacent-cell volume-ratio policy, cell/interior-face/test counts, observed maximum, face, and owner-cell provenance.
+- v12: complete interior-face face-centroid skewness policy, cell/interior-face/test counts, observed maximum normalized offset, face, owner cells, face centroid, centroid-line intersection, and face scale.
 
-The v11 persistence layer consumes the exact v10 manifest and refuses an unexpected version prefix. Optional values are serialized as `unavailable`, not guessed. Create-new semantics are used and a newly created case directory is removed if provenance cannot be written.
+The v12 persistence layer consumes the exact v11 manifest and refuses an unexpected version prefix. Optional values and locations are serialized as `unavailable`, not guessed. Create-new semantics are used and a newly created case directory is removed if provenance cannot be written.
 
 The sidecar continues to state:
 
@@ -135,7 +145,7 @@ engineering_quality_status not_established
 
 ## Current evidence and non-claims
 
-Routine CI exercises a real system-installed TetGen executable through backend handoff, rounded geometry evidence, and desktop prepare/persistence. Current evidence establishes the implemented source admission, process/parser, volume overlap, generic handoff, canonical normals, crease/discrete variation, first-cell height, complete internal dihedrals, one-to-one triangulated facets, complete unique-face orthogonality, and complete interior-face adjacent-cell volume-ratio contracts.
+Routine CI exercises a real system-installed TetGen executable through backend handoff, rounded geometry evidence, and desktop prepare/persistence. Current evidence establishes the implemented source admission, process/parser, volume overlap, generic handoff, canonical normals, crease/discrete variation, first-cell height, complete internal dihedrals, one-to-one triangulated facets, complete unique-face orthogonality, and complete interior-face adjacent-cell volume-ratio and face-centroid skewness contracts.
 
 It does **not** establish analytic/CAD surface identity, CAD feature semantics, continuous curvature independent of source tessellation, exact source/output edge identity, universal engineering body separation, a layered boundary-layer mesh or y+ suitability, solver/model-specific engineering mesh-quality thresholds, body-fitted fidelity as an AeroForge classification, grid/domain/model/reference convergence/GCI, or aerodynamic accuracy.
 

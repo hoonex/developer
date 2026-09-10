@@ -87,6 +87,14 @@ max_interior_face_tests             = 20,000,000
 
 The rounded real-TetGen fixture evaluated all 954 interior faces and observed maximum adjacent-cell volume ratio `108.24863139041692`. The observed value is fixture evidence, and the `1e12` ceiling is a deliberately broad numerical sanity limit. Neither is a solver/model-specific engineering growth criterion or evidence of controlled boundary-layer growth.
 
+## Interior-face centroid-skewness promotion
+
+`validate_tetgen_external_handoff_with_face_centroid_skewness` promotes the size-transition handoff to `SkewnessValidatedTetgenExteriorHandoff`.
+
+`validate_tetrahedral_face_centroid_skewness` evaluates every unique interior face of the same retained solver-bound mesh. It intersects the line through the two owner-cell centroids with the face plane, measures the distance from that intersection to the face centroid, and normalizes by the face RMS vertex radius. A value of `0` means the centroid line crosses the face centroid.
+
+The complete interior-face count is established before evaluation. The report retains cells, faces/tests, the maximum normalized offset, canonical face, owner cells, face centroid, centroid-line intersection, and face scale. The desktop policy uses a broad `1e12` maximum plus a 20,000,000-test budget. The rounded fixture evaluated all 954 interior faces and observed `0.20174085968313984`. These are numerical ownership bounds and fixture evidence, not an engineering skewness criterion.
+
 ## Owned TetGen hierarchy
 
 `ValidatedTetgenExteriorHandoff` owns the base TetGen evidence: generic handoff, PLC/hole-seed state, source containment/clearance, tetrahedral overlap, normal/crease/discrete-variation/first-cell reports, process stdout/stderr and exit/switch contract, parsed IDs, and reorientation count.
@@ -95,11 +103,13 @@ The rounded real-TetGen fixture evaluated all 954 interior faces and observed ma
 
 `OrthogonalityValidatedTetgenExteriorHandoff` owns the complete facet handoff plus exact unique-face orthogonality policy/report.
 
-`SizeTransitionValidatedTetgenExteriorHandoff` is the final desktop-owned wrapper. It owns the complete orthogonality handoff plus exact adjacent-cell volume-ratio policy/report. `AccuratePreparedCase` consumes this final wrapper, so v11 evidence cannot be reconstructed or silently dropped downstream.
+`SizeTransitionValidatedTetgenExteriorHandoff` owns the complete orthogonality handoff plus exact adjacent-cell volume-ratio policy/report.
+
+`SkewnessValidatedTetgenExteriorHandoff` is the final desktop-owned wrapper. It owns the complete size-transition handoff plus exact face-centroid skewness policy/report. `AccuratePreparedCase` consumes this final wrapper, so v12 evidence cannot be reconstructed or silently dropped downstream.
 
 ## Persisted external TetGen provenance
 
-The desktop path persists the exact `aeroforge_tetgen_input.poly` and immutable `aeroforge_tetgen_handoff.tsv` **format v11**.
+The desktop path persists the exact `aeroforge_tetgen_input.poly` and immutable `aeroforge_tetgen_handoff.tsv` **format v12**.
 
 The version chain is additive:
 
@@ -108,12 +118,13 @@ The version chain is additive:
 - v9: tetrahedral internal-dihedral policy, complete work, extrema and cell/local-edge provenance;
 - v10: unique-face orthogonality policy, cell/interior/boundary/test counts, observed minimum interior/boundary cosine, face IDs, and owner-cell provenance;
 - v11: adjacent-cell volume-ratio policy, cell/interior-face/test counts, observed maximum ratio, canonical face, and owner-cell provenance.
+- v12: face-centroid skewness policy, cell/interior-face/test counts, observed maximum normalized offset, canonical face, owner cells, face centroid, centroid-line intersection, and face scale.
 
-The v11 renderer consumes the exact v10 orthogonality manifest and rejects an unexpected version prefix. Optional size-transition extrema are rendered as `unavailable`, never guessed. Persistence retains `body_fitted_status=not_established` and `engineering_quality_status=not_established`.
+The v12 renderer consumes the exact v11 size-transition manifest and rejects an unexpected version prefix. Optional skewness extrema and locations are rendered as `unavailable`, never guessed. Persistence retains `body_fitted_status=not_established` and `engineering_quality_status=not_established`.
 
 ## Evidence boundary
 
-The current external TetGen path has strong triangulated surface-conformance and several complete local tetrahedral shape/face/transition observations. It still does not establish:
+The current external TetGen path has strong triangulated surface-conformance and several complete local tetrahedral shape/face/transition observations, including centroid skewness. It still does not establish:
 
 - exact source/output edge identity;
 - analytic/CAD surface identity, CAD patch/curve semantics, or continuous curvature independent of source tessellation;
