@@ -90,6 +90,55 @@ jobs:
       - name: Run desktop editor unit tests
         run: cargo test -p aeroforge-app -- --nocapture
 
+  windows-alpha-package:
+    needs: app-check
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Windows alpha release build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-alpha-release-cargo-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-alpha-release-cargo-
+            ${{ runner.os }}-cargo-
+      - name: Build Windows limited-alpha executable
+        run: cargo build -p aeroforge-app --release
+      - name: Package Windows limited-alpha artifact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $packageDir = "dist/AeroForge-Windows-x86_64"
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+          Copy-Item "target/release/aeroforge-app.exe" "$packageDir/AeroForge.exe"
+          $sha = (Get-FileHash "$packageDir/AeroForge.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          @"
+          AeroForge limited alpha
+
+          Run AeroForge.exe directly. This is an unsigned test build, not an installer or production release.
+
+          Accurate SU2 execution requires a separately installed SU2 8.5.0 runtime. AeroForge discovers SU2_CFD.exe from SU2_RUN or PATH.
+          The external TetGen path is optional and TetGen is not bundled; configure TETGEN_EXECUTABLE or PATH when using it.
+
+          This package proves that the tested source revision can be built and packaged as a Windows executable. It does not prove real-device GUI/driver compatibility, successful solver installation, or engineering CFD accuracy.
+          "@ | Set-Content "$packageDir/README.txt" -Encoding utf8
+          "$sha  AeroForge.exe" | Set-Content "$packageDir/SHA256SUMS.txt" -Encoding ascii
+          "${{ github.sha }}" | Set-Content "$packageDir/BUILD_COMMIT.txt" -Encoding ascii
+          Compress-Archive -Path "$packageDir/*" -DestinationPath "dist/AeroForge-Windows-x86_64.zip" -Force
+      - name: Upload Windows limited-alpha package
+        uses: actions/upload-artifact@v4
+        with:
+          name: AeroForge-Windows-x86_64-${{ github.sha }}
+          path: dist/AeroForge-Windows-x86_64.zip
+          if-no-files-found: error
+          retention-days: 14
+
   gpu-smoke:
     runs-on: windows-latest
     timeout-minutes: 15
