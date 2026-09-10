@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "repository": "hoonex/developer",
+  "turn_id": "aeroforge-v12-reconcile-20260910",
+  "epoch": 1,
+  "status": "COMPLETED",
+  "terminal": true,
+  "updated_at": "2026-09-10T15:27:14.024Z",
+  "kind": "sloar-turn-pointer",
+  "response_language": "ko-KR",
+  "turn_file": ".sloar/turns/aeroforge-v12-reconcile-20260910/events/0001-completed.json"
+}
