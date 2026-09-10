@@ -1,3 +1,5 @@
+use bevy::app::AppExit;
+use bevy::diagnostic::FrameCount;
 use bevy::prelude::*;
 use bevy::window::PresentMode;
 use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
@@ -28,9 +30,13 @@ use model::ProjectState;
 use simulation::SimulationRuntime;
 use surface_import::SurfaceImportRuntime;
 
+const STARTUP_SMOKE_ARG: &str = "--startup-smoke";
+const STARTUP_SMOKE_RENDERED_FRAMES: u32 = 3;
+
 fn main() {
-    App::new()
-        .insert_resource(ClearColor(Color::srgb(0.028, 0.032, 0.045)))
+    let startup_smoke = std::env::args_os().any(|arg| arg == STARTUP_SMOKE_ARG);
+    let mut app = App::new();
+    app.insert_resource(ClearColor(Color::srgb(0.028, 0.032, 0.045)))
         .insert_resource(ProjectState::default())
         .init_resource::<SimulationRuntime>()
         .init_resource::<AccurateRuntime>()
@@ -43,6 +49,7 @@ fn main() {
                 title: "AeroForge — 3D Aerodynamics Workbench".into(),
                 resolution: (1600, 900).into(),
                 present_mode: PresentMode::AutoVsync,
+                visible: !startup_smoke,
                 ..default()
             }),
             ..default()
@@ -90,6 +97,24 @@ fn main() {
                     .run_if(accurate_workspace::run_tab_selected),
             )
                 .chain(),
-        )
-        .run();
+        );
+
+    if startup_smoke {
+        app.add_systems(Update, exit_after_startup_smoke_frames);
+    }
+
+    app.run();
+}
+
+fn exit_after_startup_smoke_frames(
+    frames: Res<FrameCount>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if frames.0 >= STARTUP_SMOKE_RENDERED_FRAMES {
+        println!(
+            "AEROFORGE_STARTUP_SMOKE_OK rendered_frames={}",
+            frames.0
+        );
+        exit.write(AppExit::Success);
+    }
 }
