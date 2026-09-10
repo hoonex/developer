@@ -20,10 +20,15 @@ import json
 import os
 import subprocess
 import sys
+import uuid
+from functools import wraps
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from sloar_state import atomic_write, compare_working_content, state_lock, state_root, working_content_digest
 
 SCHEMA_VERSION = 1
 DEFAULT_STATE_DIR = ".git/sloar-turn-state"
@@ -67,11 +72,7 @@ def _status_digest(status: str) -> str:
     return hashlib.sha256(status.encode("utf-8")).hexdigest()
 
 
-def _atomic_write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(content, encoding="utf-8")
-    os.replace(tmp, path)
+_atomic_write = atomic_write
 
 
 def _clean(values: Iterable[str] | None) -> list[str]:
@@ -112,19 +113,24 @@ class GitIdentity:
     origin: str
     repository: str
     working_state_observed: bool
+    working_content_sha256: str | None = None
 
 
 def capture_identity(repo: Path) -> GitIdentity:
     root = Path(_run_git(repo, "rev-parse", "--show-toplevel"))
     head = _run_git(root, "rev-parse", "HEAD")
     tree = _run_git(root, "rev-parse", "HEAD^{tree}")
-    branch = _run_git(root, "symbolic-ref", "--short", "-q", "HEAD") or "DETACHED"
+    branch = _run_git(root, "rev-parse", "--abbrev-ref", "HEAD")
+    branch = "DETACHED" if branch == "HEAD" else branch
     status = _run_git(root, "status", "--porcelain=v1", "--untracked-files=all")
     try:
         origin = _run_git(root, "remote", "get-url", "origin")
     except TurnStateError:
         origin = ""
     repository = _repo_slug(origin, root.name)
+    content_digest = working_content_digest(root)
+    if _run_git(root, "rev-parse", "HEAD") != head:
+        raise OSError("HEAD moved during identity capture; reconcile before recapturing")
     return GitIdentity(
         head=head,
         tree=tree,
@@ -134,6 +140,7 @@ def capture_identity(repo: Path) -> GitIdentity:
         origin=origin,
         repository=repository,
         working_state_observed=True,
+        working_content_sha256=content_digest,
     )
 
 
@@ -158,6 +165,7 @@ def compare_identity(previous: Mapping[str, Any], current: GitIdentity | Mapping
     previous_working_observed = bool(previous.get("working_state_observed", True))
     current_working_observed = bool(current_values.get("working_state_observed", True))
     if previous_working_observed and current_working_observed:
+        compare_working_content(dict(previous), current_values, changed, unobserved)
         for key in ("dirty", "status_sha256"):
             if previous.get(key) != current_values.get(key):
                 changed.append(key)
@@ -175,19 +183,15 @@ def compare_identity(previous: Mapping[str, Any], current: GitIdentity | Mapping
 
 def _state_root(repo: Path, state_dir: str) -> tuple[Path, Path]:
     root = Path(_run_git(repo, "rev-parse", "--show-toplevel"))
-    return root, root / state_dir
+    return state_root(root, state_dir)
 
 
 def _pointer_path(base: Path) -> Path:
     return base / "latest.json"
 
 
-def _turn_latest_path(base: Path, turn_id: str) -> Path:
-    return base / "turns" / turn_id / "latest.json"
-
-
 def _event_path(base: Path, turn_id: str, seq: int, status: str) -> Path:
-    return base / "turns" / turn_id / "events" / f"{seq:04d}-{status.lower()}.json"
+    return base / "turns" / turn_id / "events" / f"{seq:04d}-{status.lower()}-{uuid.uuid4().hex}.json"
 
 
 def load_pointer(repo: Path, state_dir: str = DEFAULT_STATE_DIR) -> dict[str, Any]:
@@ -198,6 +202,14 @@ def load_pointer(repo: Path, state_dir: str = DEFAULT_STATE_DIR) -> dict[str, An
     pointer = json.loads(path.read_text(encoding="utf-8"))
     if pointer.get("schema") != SCHEMA_VERSION or pointer.get("kind") != "sloar-turn-pointer":
         raise TurnStateError("Unsupported turn pointer schema")
+    if type(pointer.get("epoch")) is not int or pointer["epoch"] < 1:
+        raise TurnStateError("Invalid turn pointer epoch; refusing to reset fencing state")
+    if not all(isinstance(pointer.get(key), str) and pointer[key] for key in ("repository", "turn_id", "turn_file")):
+        raise TurnStateError("Incomplete turn pointer identity")
+    if type(pointer.get("terminal")) is not bool or pointer.get("status") not in {"ACTIVE", *TERMINAL_STATUSES}:
+        raise TurnStateError("Invalid turn pointer status")
+    if pointer["terminal"] != (pointer["status"] in TERMINAL_STATUSES):
+        raise TurnStateError("Inconsistent turn pointer terminal status")
     return pointer
 
 
@@ -210,6 +222,9 @@ def load_latest_turn(repo: Path, state_dir: str = DEFAULT_STATE_DIR) -> dict[str
     state = json.loads(path.read_text(encoding="utf-8"))
     if state.get("schema") != SCHEMA_VERSION or state.get("kind") != "sloar-turn-state":
         raise TurnStateError("Unsupported turn state schema")
+    for key in ("repository", "turn_id", "epoch", "status", "terminal"):
+        if state.get(key) != pointer.get(key):
+            raise TurnStateError(f"Turn pointer/state mismatch: {key}; recover from immutable event evidence")
     return state
 
 
@@ -279,17 +294,17 @@ def _merge_context(context: Mapping[str, Any], args: argparse.Namespace) -> dict
     return updated
 
 
-def _write_state(repo: Path, state_dir: str, state: dict[str, Any]) -> tuple[Path, Path, Path]:
+def _write_state(repo: Path, state_dir: str, state: dict[str, Any]) -> tuple[Path, Path]:
     root, base = _state_root(repo, state_dir)
     turn_id = state["turn_id"]
     seq = int(state["event_seq"])
     status = state["status"]
     event_path = _event_path(base, turn_id, seq, status)
-    turn_latest_path = _turn_latest_path(base, turn_id)
     pointer_path = _pointer_path(base)
     text = json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     _atomic_write(event_path, text)
-    _atomic_write(turn_latest_path, text)
+    # Do not overwrite the legacy mutable turn/latest.json. An older pointer
+    # may still reference it until the new pointer is atomically published.
     pointer = {
         "schema": SCHEMA_VERSION,
         "kind": "sloar-turn-pointer",
@@ -300,17 +315,28 @@ def _write_state(repo: Path, state_dir: str, state: dict[str, Any]) -> tuple[Pat
         "terminal": state["terminal"],
         "updated_at": state["updated_at"],
         "response_language": state.get("context", {}).get("response_language", ""),
-        "turn_file": str(turn_latest_path.relative_to(root)).replace(os.sep, "/"),
+        "turn_file": os.path.relpath(event_path, root).replace(os.sep, "/"),
     }
     _atomic_write(pointer_path, json.dumps(pointer, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
-    return event_path, turn_latest_path, pointer_path
+    return event_path, pointer_path
 
 
+def _locked_mutation(function):
+    @wraps(function)
+    def locked(repo: Path, args: argparse.Namespace, state_dir: str = DEFAULT_STATE_DIR):
+        _, base = _state_root(repo, state_dir)
+        with state_lock(base):
+            return function(repo, args, state_dir)
+    return locked
+
+
+@_locked_mutation
 def begin_turn(repo: Path, args: argparse.Namespace, state_dir: str = DEFAULT_STATE_DIR) -> dict[str, Any]:
     identity = capture_identity(repo)
-    try:
+    _, base = _state_root(repo, state_dir)
+    if _pointer_path(base).exists():
         pointer = load_pointer(repo, state_dir)
-    except TurnStateError:
+    else:
         pointer = None
     if pointer and not pointer.get("terminal", False):
         raise TurnStateError(
@@ -351,6 +377,7 @@ def _require_fence(state: Mapping[str, Any], turn_id: str, epoch: int) -> None:
         raise TurnStateError(f"turn is already terminal: {state.get('status')}")
 
 
+@_locked_mutation
 def progress_turn(repo: Path, args: argparse.Namespace, state_dir: str = DEFAULT_STATE_DIR) -> dict[str, Any]:
     current = load_latest_turn(repo, state_dir)
     _require_fence(current, args.turn_id, args.epoch)
@@ -363,6 +390,7 @@ def progress_turn(repo: Path, args: argparse.Namespace, state_dir: str = DEFAULT
     return state
 
 
+@_locked_mutation
 def complete_turn(repo: Path, args: argparse.Namespace, state_dir: str = DEFAULT_STATE_DIR) -> dict[str, Any]:
     current = load_latest_turn(repo, state_dir)
     _require_fence(current, args.turn_id, args.epoch)
@@ -381,6 +409,7 @@ def complete_turn(repo: Path, args: argparse.Namespace, state_dir: str = DEFAULT
     return state
 
 
+@_locked_mutation
 def takeover_turn(repo: Path, args: argparse.Namespace, state_dir: str = DEFAULT_STATE_DIR) -> dict[str, Any]:
     previous = load_latest_turn(repo, state_dir)
     if previous.get("terminal"):

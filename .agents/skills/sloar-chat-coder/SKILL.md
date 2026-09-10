@@ -2,9 +2,9 @@
 name: sloar-chat-coder
 description: Keep repository development exact and recoverable across disposable chat coding sessions, including first-use bootstrap, ownership/evidence closure, in-session upgrades, fresh-chat rollover, interrupted or stuck-response turns, repository-aware adaptive web design guidance, and degraded or partial forge/API/CI/publication capabilities. Use for repository implementation, debugging, testing, publication, outage handling, upgrade, or recovery when sandbox state, GitHub/GitLab state, connected tools, CI, permissions, policies, concurrent actors, host response delivery, or chat context can change during the task.
 license: MIT
-compatibility: Requires a repository source of truth and a code-execution environment for full engineering workflows. Forge-specific fallback rules apply only when equivalent authorized remote capabilities exist.
 metadata:
-  version: "0.9.0"
+  version: "0.9.1"
+  compatibility: Repository reads are sufficient for connector-native review. Execution-dependent checks require an actual local or remote runtime.
 ---
 
 # Sloar Chat Coder
@@ -27,15 +27,19 @@ This is the default reasoning algorithm. The detailed state machine and speciali
 - **PROVE:** attack the claim at the strongest relevant observable and semantic boundary, not merely a convenient implementation state.
 - **RECONCILE:** ensure evidence still matches the durable state being published/reported and preserve recovery state when needed.
 
-Read [references/reasoning-kernel.md](references/reasoning-kernel.md) for the full compact contract. For consequential async/stateful work, expand MODEL/PROVE with [references/async-evidence-closure.md](references/async-evidence-closure.md). In particular, `queued`, `reserved`, `scheduled`, `running`, and similar implementation states are not automatically equivalent to user-facing phases such as `before callback starts`; boundary claims should be tested at the latest valid observable point when that edge can change correctness.
+Read [references/reasoning-kernel.md](references/reasoning-kernel.md) when the engineering decision needs the fuller MODEL/PROVE contract. Routine connector operations can use the chat/GitHub reference directly. For consequential async/stateful work, expand MODEL/PROVE with [references/async-evidence-closure.md](references/async-evidence-closure.md). In particular, `queued`, `reserved`, `scheduled`, `running`, and similar implementation states are not automatically equivalent to user-facing phases such as `before callback starts`; boundary claims should be tested at the latest valid observable point when that edge can change correctness.
 
 Do not turn the union of all Sloar references into ceremony. Use a specialized reference only when its trigger is present.
+
+## ChatGPT chat with GitHub
+
+When the user works in ChatGPT chat through a GitHub plugin/app, read [references/chat-github-workflow.md](references/chat-github-workflow.md). The assistant applies this Skill through the tools actually exposed in that session. Python helpers, a local clone, Codex CLI, and background execution are not prerequisites or implied capabilities. Select connector-native work directly when it is sufficient; retain unknown local state as unknown. Use a conflict-rejecting remote update, not merely a last-minute HEAD read, for concurrency-sensitive publication.
 
 ## First-run onboarding
 
 When the user/session is new to Sloar or required capabilities are uncertain, run a compact **ONBOARD** check before repository modification. Inspect the capabilities actually exposed in the current session; do not assume a plugin, app, sandbox, GitHub write path, browser, or CI runner exists because another session had one.
 
-At the first Sloar repository turn in a chat, and again after an intentional fresh-chat resume or takeover, perform one **UPDATE_AWARENESS** check when the canonical stable Sloar source is reachable without disrupting the task. Resolve the installed Sloar version from the target repository and the current stable version from durable Sloar source state. If they match, stay silent. If a newer stable release exists, show one compact notice such as `Sloar update available: 0.8.0 -> 0.9.0. Upgrade now?` and wait for the user's answer before any upgrade write. If stable-version resolution is unavailable or degraded, classify update status as unknown and continue normal repository work unless the task itself depends on that source. Read [references/upgrading.md](references/upgrading.md) for the complete contract.
+At the first Sloar repository turn in a chat, and again after an intentional fresh-chat resume or takeover, perform one **UPDATE_AWARENESS** check when the canonical stable Sloar source is reachable without disrupting the task. Resolve the installed Sloar version from the target repository and the current stable version from durable Sloar source state. If they match, stay silent. If a newer stable release exists and upgrade authorization is missing, show one compact notice such as `Sloar update available: 0.9.0 -> 0.9.1. Upgrade now?` and wait for the user's answer before any upgrade write. An explicit upgrade request or authorization already given in this conversation is sufficient; do not ask again. If stable-version resolution is unavailable or degraded, classify update status as unknown and continue normal repository work unless the task itself depends on that source. Read [references/upgrading.md](references/upgrading.md) for the complete contract.
 
 For ChatGPT/Codex, distinguish **Plugin** (workflow package), **App** (authenticated external data/actions), and **Skill** (reusable instructions). Installing Sloar does not itself authorize GitHub. Conversely, missing GitHub integration does not block local engineering when a lower capability path is sufficient.
 
@@ -112,7 +116,7 @@ Treat repository identity as:
 HEAD commit SHA + HEAD tree SHA + working-tree state
 ```
 
-A matching commit SHA with unexpected local modifications is not the same engineering state. Preserve unfamiliar surviving work until ownership is known.
+A matching commit SHA with unexpected local modifications is not the same engineering state. Local recovery compares index identity and changed/untracked file bytes using `working_content_sha256`; status letters alone cannot establish content equality. A legacy dirty checkpoint without content evidence requires revalidation. Preserve unfamiliar surviving work until ownership is known.
 
 When the current session cannot observe a local worktree, do not invent one. Record working-tree observability explicitly and compare only identity fields that both the checkpoint and current session can actually observe. Unknown working-tree state is neither evidence of a clean tree nor a reconciliation event by itself. Read [references/chat-native-continuity.md](references/chat-native-continuity.md).
 
@@ -175,13 +179,13 @@ Assume branches, PRs, workflows, deployments, artifacts, and other chat sessions
 
 If the remote identity changed, stop publication, inspect the new durable state, deliberately reconcile, and rerun affected verification. After a forge outage or prolonged capability block, always perform this revalidation even if the original base was known exactly before the incident. Read [references/concurrency.md](references/concurrency.md).
 
-If a durable ACTIVE turn is in use, guard later durable writes with its `turn_id + fencing epoch`. A user-authorized takeover increments the epoch. A stale prior session must stop when its fence is no longer current. Fencing cannot retroactively cancel an external write that was already in flight before the epoch changed.
+If a durable ACTIVE turn is in use, guard later durable writes with its `turn_id + fencing epoch`. A user-authorized takeover increments the epoch. A stale prior session must stop when its fence is no longer current. Fencing cannot retroactively cancel an external write that was already in flight before the epoch changed. A sidecar epoch and a product branch are separate refs: ordinary connector calls cannot atomically fence both. Use isolated session branches and the conflict-rejecting publication procedure in `chat-github-workflow.md`; local helper locks do not lock GitHub.
 
 ## Verification and evidence
 
 Verification should be change-aware and repository-defined. Source changes are not complete merely because the files were written.
 
-Maintain an evidence ledger containing the checks that actually ran, their target state, result, blocker when applicable, and enough evidence type/scope to know which claims they support. No evidence means no success claim. A compile check does not prove visual quality; a merge/deploy transition does not automatically prove production health when runtime health is separately observable. During a remote outage or capability block, local green checks can support `LOCAL_READY` but cannot substitute for required REMOTE_VERIFY evidence. Read [references/verification.md](references/verification.md), [references/evidence-ledger.md](references/evidence-ledger.md), [references/ownership-evidence-closure.md](references/ownership-evidence-closure.md), [references/async-evidence-closure.md](references/async-evidence-closure.md), and [references/operational-continuity.md](references/operational-continuity.md).
+Maintain an evidence ledger containing the checks that actually ran, their target state, result, blocker when applicable, and enough evidence type/scope to know which claims they support. No evidence means no success claim. A compile check does not prove visual quality; a merge/deploy transition does not automatically prove production health when runtime health is separately observable. During a remote outage or capability block, local green checks can support `LOCAL_READY` but cannot substitute for required REMOTE_VERIFY evidence. Use [references/verification.md](references/verification.md) and [references/evidence-ledger.md](references/evidence-ledger.md) when defining checks or recording evidence; expand ownership, async, or operational references only for their stated triggers.
 
 For consequential acceptance claims, derive verification from the claim. When material, distinguish mouse from real touch/pen/keyboard, direct tracking from release/settle/final state, first frame from enhanced/settled state, fresh state from reload/migration, desktop/tablet/phone classes, and semantic lifecycle boundaries from convenient implementation states. A passing check on another modality, phase, viewport, observable, or older target state is not interchangeable evidence.
 

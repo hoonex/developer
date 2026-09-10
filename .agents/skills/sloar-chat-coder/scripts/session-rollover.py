@@ -19,6 +19,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from sloar_state import atomic_write, compare_working_content, state_root, working_content_digest
+
 SCHEMA_VERSION = 1
 DEFAULT_STATE_DIR = ".git/sloar-rollover"
 
@@ -70,19 +73,24 @@ class GitIdentity:
     origin: str
     repository: str
     working_state_observed: bool
+    working_content_sha256: str | None = None
 
 
 def capture_identity(repo: Path) -> GitIdentity:
     root = Path(_run_git(repo, "rev-parse", "--show-toplevel"))
     head = _run_git(root, "rev-parse", "HEAD")
     tree = _run_git(root, "rev-parse", "HEAD^{tree}")
-    branch = _run_git(root, "symbolic-ref", "--short", "-q", "HEAD") or "DETACHED"
+    branch = _run_git(root, "rev-parse", "--abbrev-ref", "HEAD")
+    branch = "DETACHED" if branch == "HEAD" else branch
     status = _run_git(root, "status", "--porcelain=v1", "--untracked-files=all")
     try:
         origin = _run_git(root, "remote", "get-url", "origin")
     except RolloverError:
         origin = ""
     repository = _repo_slug(origin, root.name)
+    content_digest = working_content_digest(root)
+    if _run_git(root, "rev-parse", "HEAD") != head:
+        raise OSError("HEAD moved during identity capture; reconcile before recapturing")
     return GitIdentity(
         head=head,
         tree=tree,
@@ -92,6 +100,7 @@ def capture_identity(repo: Path) -> GitIdentity:
         origin=origin,
         repository=repository,
         working_state_observed=True,
+        working_content_sha256=content_digest,
     )
 
 
@@ -139,15 +148,12 @@ def build_checkpoint(identity: GitIdentity, args: argparse.Namespace) -> dict[st
     }
 
 
-def _atomic_write(path: Path, content: str) -> None:
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(content, encoding="utf-8")
-    os.replace(tmp, path)
+_atomic_write = atomic_write
 
 
 def write_checkpoint(repo: Path, checkpoint: dict[str, Any], state_dir: str) -> tuple[Path, Path]:
     root = Path(_run_git(repo, "rev-parse", "--show-toplevel"))
-    base = root / state_dir
+    _, base = state_root(root, state_dir)
     checkpoints = base / "checkpoints"
     checkpoints.mkdir(parents=True, exist_ok=True)
     cp_path = checkpoints / f"{checkpoint['checkpoint_id']}.json"
@@ -157,7 +163,7 @@ def write_checkpoint(repo: Path, checkpoint: dict[str, Any], state_dir: str) -> 
         "schema": SCHEMA_VERSION,
         "kind": "sloar-rollover-pointer",
         "checkpoint_id": checkpoint["checkpoint_id"],
-        "checkpoint_file": str(cp_path.relative_to(root)).replace(os.sep, "/"),
+        "checkpoint_file": os.path.relpath(cp_path, root).replace(os.sep, "/"),
         "repository": checkpoint["repository"],
         "created_at": checkpoint["created_at"],
         "response_language": checkpoint.get("context", {}).get("response_language", ""),
@@ -170,7 +176,8 @@ def write_checkpoint(repo: Path, checkpoint: dict[str, Any], state_dir: str) -> 
 
 def load_pointer(repo: Path, state_dir: str) -> dict[str, Any]:
     root = Path(_run_git(repo, "rev-parse", "--show-toplevel"))
-    latest_path = root / state_dir / "latest.json"
+    _, base = state_root(root, state_dir)
+    latest_path = base / "latest.json"
     if not latest_path.exists():
         raise RolloverError(f"No rollover pointer found at {latest_path}")
     pointer = json.loads(latest_path.read_text(encoding="utf-8"))
@@ -181,7 +188,7 @@ def load_pointer(repo: Path, state_dir: str) -> dict[str, Any]:
 
 def load_checkpoint(repo: Path, state_dir: str, checkpoint_id: str | None) -> dict[str, Any]:
     root = Path(_run_git(repo, "rev-parse", "--show-toplevel"))
-    base = root / state_dir
+    _, base = state_root(root, state_dir)
     if checkpoint_id:
         cp_path = base / "checkpoints" / f"{checkpoint_id}.json"
     else:
@@ -214,6 +221,7 @@ def compare_identity(
     previous_working_observed = bool(previous.get("working_state_observed", True))
     current_working_observed = bool(current_values.get("working_state_observed", True))
     if previous_working_observed and current_working_observed:
+        compare_working_content(previous, current_values, changed, unobserved)
         for key in ("dirty", "status_sha256"):
             if previous.get(key) != current_values.get(key):
                 changed.append(key)

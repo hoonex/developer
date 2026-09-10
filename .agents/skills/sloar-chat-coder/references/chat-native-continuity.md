@@ -17,11 +17,33 @@ Enter `BOOTSTRAP_SESSION` only when the user explicitly asks to use Sloar for a 
 1. Resolve the target repository and current-session capabilities independently.
 2. Read repository guidance before mutation, especially `AGENTS.md`, and check whether `.agents/skills/sloar-chat-coder/SKILL.md` is already installed.
 3. If Sloar exists, do not reinstall blindly. Read the installed contract and continue through normal recovery.
-4. If Sloar is absent, determine whether an authorized durable installation path exists.
-5. When a safe write path exists, install the documented stable Sloar files while preserving unrelated repository guidance, then verify the durable installation before claiming bootstrap success.
+4. If Sloar is absent, use canonical remote activation for the session. Determine whether durable installation was requested or required by the target repository before copying files.
+5. When durable installation is authorized and a safe write path exists, install the documented stable Sloar files while preserving unrelated repository guidance, then verify the durable installation before claiming bootstrap success.
 6. If durable write is unavailable but local execution is usable, Sloar may operate ephemerally for the current engineering loop. Do not claim durable installation or durable cross-chat rollover.
-7. If no usable repository source or execution path exists, request only the smallest missing capability needed to proceed.
+7. Repository reads can be enough for review; exact connector writes can be enough for editing. Request a runtime only if a necessary operation actually requires execution and no sufficient authorized path exists.
 8. Resolve exact repository identity and begin the requested engineering work. Do not turn a healthy first run into an onboarding ceremony.
+
+## Activation evidence
+
+A user saying `Use Sloar`, a prompt naming `Sloar Chat Coder`, prior familiarity with Sloar, or the presence of a repository URL is **not** by itself evidence that Sloar is active in the current session.
+
+Before claiming Sloar is active, establish at least one current-session activation source:
+
+1. a host-exposed Sloar Skill was actually loaded/read in this session;
+2. the target repository contains `.agents/skills/sloar-chat-coder/SKILL.md` and that installed contract was actually read; or
+3. an authorized repository-read path was used to load the canonical Sloar source ephemerally for this session.
+
+For **canonical remote activation**:
+
+1. Resolve the canonical Sloar repository to an exact immutable source commit SHA before task mutation.
+2. Read `.agents/skills/sloar-chat-coder/SKILL.md` from that exact SHA.
+3. Read only task-triggered references, and read them from the **same source SHA** so one session cannot accidentally mix contracts from different Sloar revisions.
+4. Retain the source SHA as activation evidence for the completion report or benchmark record when that provenance matters.
+5. Do not copy or vendor Sloar into the target repository merely to activate it. When the target is intentionally clean, immutable, or benchmark-isolated, prefer this read-only ephemeral path.
+
+Remote activation is not permission to recursively load every Sloar reference. Follow the core trigger rules and fetch only references that can materially affect the current task. This keeps activation bounded and avoids unrelated capability, policy, or domain guidance from entering the working context without a task reason.
+
+If the user explicitly requires Sloar and none of the activation sources above can actually be established, classify the treatment as `SLOAR_UNAVAILABLE`. Do **not** silently continue as an ordinary/Bare workflow while implying that Sloar was used.
 
 Installing Sloar does not authorize GitHub or any other forge. Repository read access alone is not proof of installation capability.
 
@@ -88,7 +110,8 @@ Minimum rollover shape:
     "branch": "...",
     "working_state_observed": false,
     "dirty": null,
-    "status_sha256": null
+    "status_sha256": null,
+    "working_content_sha256": null
   },
   "context": {
     "goal": "...",
@@ -115,7 +138,8 @@ When the worktree is observable:
 ```text
 working_state_observed = true
 dirty = <actual boolean>
-status_sha256 = <actual digest>
+status_sha256 = <status digest>
+working_content_sha256 = <index and changed/untracked content digest>
 ```
 
 When the worktree is not observable:
@@ -124,9 +148,12 @@ When the worktree is not observable:
 working_state_observed = false
 dirty = null
 status_sha256 = null
+working_content_sha256 = null
 ```
 
 Unknown working-tree state is not evidence of a clean tree and is not a reconciliation event by itself.
+
+Legacy dirty checkpoints without `working_content_sha256` require content revalidation before reusing evidence. The local helpers report `RECONCILE_REQUIRED` with `working_content_unverified`; this is missing proof, not proof that source moved.
 
 `EXACT` means that no identity field observable in both the checkpoint and current session contradicts the checkpoint. It must not be presented as proof that unobserved fields match.
 
@@ -198,3 +225,5 @@ Rollover transport failure must not cause correct product source to be rewritten
 The sidecar branch is a durable metadata transport. Do not delete it as ordinary product-branch cleanup while active rollover checkpoints are expected to remain recoverable.
 
 Task-owned temporary refs/artifacts outside the sidecar branch still follow normal Sloar cleanup rules.
+
+For connector-only checkpoint construction and atomic sidecar publication, read [chat-github-workflow.md](chat-github-workflow.md). The assistant can write the JSON through the connector without running Python.
