@@ -112,17 +112,31 @@ jobs:
         run: cargo build -p aeroforge-app --release
       - name: Smoke-test Windows limited-alpha executable
         shell: pwsh
+        env:
+          RUST_BACKTRACE: full
+          RUST_LOG: info
         run: |
           $ErrorActionPreference = "Stop"
           $exe = (Resolve-Path "target/release/aeroforge-app.exe").Path
-          $process = Start-Process -FilePath $exe -ArgumentList "--startup-smoke" -PassThru
-          if (-not $process.WaitForExit(60000)) {
+          $stdout = Join-Path $env:RUNNER_TEMP "aeroforge-startup-smoke.stdout.log"
+          $stderr = Join-Path $env:RUNNER_TEMP "aeroforge-startup-smoke.stderr.log"
+          Remove-Item $stdout, $stderr -Force -ErrorAction SilentlyContinue
+          $process = Start-Process -FilePath $exe -ArgumentList "--startup-smoke" -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+          $timedOut = -not $process.WaitForExit(60000)
+          if ($timedOut) {
             $process.Kill($true)
+            $process.WaitForExit()
+          }
+          Write-Host "=== AeroForge startup smoke stdout ==="
+          if (Test-Path $stdout) { Get-Content $stdout } else { Write-Host "<no stdout captured>" }
+          Write-Host "=== AeroForge startup smoke stderr ==="
+          if (Test-Path $stderr) { Get-Content $stderr } else { Write-Host "<no stderr captured>" }
+          if ($timedOut) {
             throw "AeroForge startup smoke exceeded the 60-second bounded runtime."
           }
-          $process.WaitForExit()
           if ($process.ExitCode -ne 0) {
-            throw "AeroForge startup smoke exited with code $($process.ExitCode)."
+            $hexExit = '0x{0:X8}' -f ([uint32]$process.ExitCode)
+            throw "AeroForge startup smoke exited with code $($process.ExitCode) ($hexExit)."
           }
       - name: Stage Windows limited-alpha artifact
         shell: pwsh
