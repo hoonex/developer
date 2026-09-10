@@ -45,7 +45,8 @@ A GREEN implementation or runtime check never silently upgrades another evidence
 | Complete six-internal-dihedral-per-tetrahedron evaluation | TetGen path | GREEN bounded local shape evidence |
 | One-to-one triangulated source/body facet coincidence | TetGen path | GREEN real external evidence |
 | Complete unique-face centroid/normal orthogonality evaluation | TetGen path | GREEN bounded local face evidence |
-| TetGen provenance v10 through real desktop prepare/persistence | App + TetGen path | GREEN routine external persistence |
+| Complete interior-face adjacent-cell volume-ratio evaluation | TetGen path | GREEN bounded numerical transition evidence |
+| TetGen provenance v11 through real desktop prepare/persistence | App + TetGen path | GREEN routine external persistence |
 | Analytic/CAD feature/surface identity | Accurate | **NOT ESTABLISHED** |
 | Continuous curvature independent of source tessellation | Accurate | **NOT ESTABLISHED** |
 | Layered boundary-layer mesh / y+ suitability | Accurate | **NOT ESTABLISHED** |
@@ -161,8 +162,9 @@ A parsed candidate is not accepted merely because TetGen exits successfully. Sol
 6. bounded discrete triangulated normal-variation correspondence;
 7. bounded body-wall first-cell geometric-height observation;
 8. complete six-internal-dihedral-per-tetrahedron evaluation under an explicit numerical policy;
-9. one-to-one constrained source/body facet correspondence; and
-10. complete unique-face centroid/normal orthogonality evaluation under an explicit numerical policy.
+9. one-to-one constrained source/body facet correspondence;
+10. complete unique-face centroid/normal orthogonality evaluation under an explicit numerical policy; and
+11. complete interior-face adjacent-cell volume-ratio evaluation under an explicit numerical policy.
 
 Ownership follows the same additive hierarchy:
 
@@ -170,10 +172,11 @@ Ownership follows the same additive hierarchy:
 ValidatedTetgenExteriorHandoff
 → FacetValidatedTetgenExteriorHandoff
 → OrthogonalityValidatedTetgenExteriorHandoff
+→ SizeTransitionValidatedTetgenExteriorHandoff
 → AccuratePreparedCase
 ```
 
-The final desktop prepared-case input is `OrthogonalityValidatedTetgenExteriorHandoff`, which owns the complete facet/dihedral-promoted state plus exact face-orthogonality policy/report.
+The final desktop prepared-case input is `SizeTransitionValidatedTetgenExteriorHandoff`, which owns the complete orthogonality/facet/dihedral-promoted state plus exact adjacent-cell volume-ratio policy/report.
 
 ### Complete internal-dihedral proof
 
@@ -212,24 +215,40 @@ The rounded real-TetGen fixture observed:
 
 The report also retains the associated face and owner-cell provenance. These observations do not establish a layered boundary-wall orthogonality contract.
 
-The combined promoted handoff still does **not** establish analytic/CAD surface identity, CAD patch/curve/feature semantics, continuous curvature independent of source tessellation, exact source/output edge identity, a layered prism/hex boundary-layer stack, growth-ratio/wall-model/y+ suitability, universal engineering mesh-quality thresholds, or aerodynamic accuracy.
+### Complete interior-face size-transition proof
 
-### TetGen provenance v10
+`validate_tetrahedral_size_transition` evaluates every unique interior face of the exact solver-bound tetrahedral mesh. For the two positive owning tetrahedra it measures `max(volume_a, volume_b) / min(volume_a, volume_b)`, so `1` means equal adjacent volumes.
+
+The complete interior-face count is established before geometry evaluation; exceeding `max_interior_face_tests` fails closed without sampling or silent truncation. The report retains cells, interior faces/tests, maximum observed ratio, canonical face, and owner-cell indices. A valid mesh with no interior faces records optional extrema as unavailable rather than guessing them.
+
+The desktop policy uses maximum adjacent-cell volume ratio `1e12` and `max_interior_face_tests=20,000,000`. The rounded real-TetGen fixture observed:
+
+- 612 tetrahedra;
+- 954 interior faces;
+- 954 complete interior-face evaluations; and
+- maximum adjacent-cell volume ratio `108.24863139041692`.
+
+The observation is numerical fixture evidence. The deliberately broad desktop ceiling is not a solver/model-specific engineering size-growth criterion or evidence of controlled boundary-layer growth.
+
+The combined promoted handoff still does **not** establish analytic/CAD surface identity, CAD patch/curve/feature semantics, continuous curvature independent of source tessellation, exact source/output edge identity, a layered prism/hex boundary-layer stack, controlled boundary-layer growth, growth-ratio/wall-model/y+ suitability, universal engineering mesh-quality thresholds, or aerodynamic accuracy.
+
+### TetGen provenance v11
 
 The real desktop external path persists:
 
 - exact `aeroforge_tetgen_input.poly`;
 - generic `aeroforge_exterior_handoff.tsv`;
-- `aeroforge_tetgen_handoff.tsv` **format v10**.
+- `aeroforge_tetgen_handoff.tsv` **format v11**.
 
 The version chain is additive:
 
 - v7 base geometry/process evidence;
 - v8 constrained-facet policy/work and per-body match evidence;
 - v9 internal-dihedral policy/work/extrema provenance;
-- v10 unique-face orthogonality policy, cell/interior/boundary/test counts, minimum observed cosines, face IDs, and owner-cell provenance.
+- v10 unique-face orthogonality policy, cell/interior/boundary/test counts, minimum observed cosines, face IDs, and owner-cell provenance;
+- v11 adjacent-cell volume-ratio policy, cell/interior-face/test counts, maximum observed ratio, face ID, and owner-cell provenance.
 
-The v10 persistence layer consumes the exact v9 manifest and rejects an unexpected prefix. Optional extrema are rendered as `unavailable`, not guessed.
+The v11 persistence layer consumes the exact v10 manifest and rejects an unexpected prefix. Optional extrema are rendered as `unavailable`, not guessed.
 
 Representative external geometry checkpoints:
 
@@ -248,7 +267,8 @@ Representative external geometry checkpoints:
 - #929 / run `34315349508` at `cc948cead8c11f1d733bcd391fb80ee34a1fbdd9` — TetGen provenance v9 and real desktop dihedral persistence; 4/4 GREEN;
 - #931 / run `34320481290` at `11e5c13780bc7a40e3ae5e41d584dff76f20ef1e` — v9 documentation reconciliation; 4/4 GREEN;
 - #940 / run `34326027956` at `f245f37a0229a6f41441df1c4a35aa87845d5690` — standalone/real rounded face-orthogonality observation and exact-SHA regression; 4/4 GREEN;
-- #944 / run `34340539004` at `72e6ae11db33ef4ccacdba06a6c22750e59a958d` — orthogonality-owned desktop handoff + format-v10 persistence; core/GPU/real-TetGen GREEN, Windows app unit-test tracked separately until terminal.
+- #944 / run `34340539004` at `72e6ae11db33ef4ccacdba06a6c22750e59a958d` — orthogonality-owned desktop handoff + format-v10 persistence; core/GPU/real-TetGen GREEN, Windows app unit-test tracked separately until terminal;
+- #958 / run `34378339931` at `27a17acaa8d27e4570ebf82c9f6b9c345745cee9` — complete adjacent-cell volume-ratio ownership + format-v11 persistence and exact-SHA regression; 4/4 GREEN.
 
 ## Mesh fidelity boundary
 
@@ -259,7 +279,7 @@ AeroForge currently represents two relevant Accurate mesh-fidelity states:
 
 `Su2MeshFidelity` intentionally has **no `BodyFitted` variant**.
 
-The constrained-facet proof closes a major triangulated source/output conformance gap, the dihedral report closes an internal-angle observability gap, and the face-orthogonality report closes a generic unique-face alignment observability gap. A product-level `BodyFitted` or engineering-quality label is still not promoted because CAD semantics, actual boundary-layer generation, solver/model-specific engineering criteria, and independent engineering reference/convergence evidence remain separate obligations.
+The constrained-facet proof closes a major triangulated source/output conformance gap, the dihedral report closes an internal-angle observability gap, the face-orthogonality report closes a generic unique-face alignment observability gap, and the size-transition report closes a complete interior-face adjacent-volume observability gap. A product-level `BodyFitted` or engineering-quality label is still not promoted because CAD semantics, actual boundary-layer generation, solver/model-specific engineering criteria, and independent engineering reference/convergence evidence remain separate obligations.
 
 ## Claims policy
 
@@ -275,6 +295,7 @@ The constrained-facet proof closes a major triangulated source/output conformanc
 - The TetGen constrained-facet gate establishes one-to-one **triangulated** source/body facet coincidence within its explicit tolerance; it must not be relabeled as CAD/analytic/continuous-curvature or exact-edge evidence.
 - Complete tetrahedral internal-dihedral evidence establishes bounded local angle observations only; `[1e-12, π]` is not an engineering-quality interval.
 - Complete tetrahedral unique-face orthogonality evidence establishes bounded centroid/face-normal observations only; the desktop `1e-12` floors are not solver-specific engineering or boundary-layer orthogonality criteria.
+- Complete tetrahedral interior-face size-transition evidence establishes adjacent-cell volume-ratio observations only; the desktop `1e12` ceiling is not a solver/model-specific engineering or boundary-layer growth criterion.
 - First-cell height is a first-adjacent-tetra observation only; it is not a layered boundary-layer claim.
 - The desktop source-clearance floor is a numerical admission policy, not a universal engineering clearance.
 - Process success, residual quality, diagnostics, mesh fidelity, and engineering validation remain separate signals.
@@ -283,7 +304,7 @@ The constrained-facet proof closes a major triangulated source/output conformanc
 
 1. **CAD/analytic semantics only if needed** — add source semantic patch/curve/feature identity or CAD-aware import before claiming CAD preservation; triangle-only data cannot substantiate it.
 2. **Actual near-wall strategy** — design and validate real boundary-layer generation before claiming layers, growth control, wall orthogonality, y+, or engineering near-wall adequacy.
-3. **Engineering mesh-quality policy** — add solver-appropriate criteria such as validated non-orthogonality/skewness/aspect/size-transition limits instead of treating current permissive mean-ratio/edge-ratio/dihedral/face-cosine gates as engineering quality.
+3. **Engineering mesh-quality policy** — add solver-appropriate criteria such as validated non-orthogonality/skewness/aspect/size-transition limits instead of treating current permissive mean-ratio/edge-ratio/dihedral/face-cosine/adjacent-volume-ratio gates as engineering quality.
 4. **Pinned body reference cases** — run trusted dimensional body cases through the generated external path with explicit coefficient references and controlled mesh/domain/model sensitivity.
 5. **Grid/domain/model convergence** — add formal convergence/GCI or another defensible independent methodology before promoting aerodynamic accuracy.
 6. **Operational work remains separate** — crash/restart recovery, GPU per-object force attribution, and preview occupancy acceleration remain independent product capabilities.
