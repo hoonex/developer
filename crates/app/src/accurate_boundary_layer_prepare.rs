@@ -71,7 +71,27 @@ pub(crate) fn prepare_boundary_layer_tetgen_from_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aeroforge_accurate_backend::{
+        discover_su2, probe_su2_banner, run_prepared_generated_su2_case, FlowModel,
+    };
     use bevy::prelude::Vec3;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn env_enabled(name: &str) -> bool {
+        std::env::var(name).ok().as_deref() == Some("1")
+    }
+
+    fn temp_root(label: &str) -> std::path::PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock must be after UNIX_EPOCH")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "aeroforge-boundary-layer-prepare-{label}-{}-{nonce}",
+            std::process::id()
+        ))
+    }
 
     #[test]
     fn limited_alpha_boundary_layer_preset_matches_proven_smoke_contract() {
@@ -83,11 +103,7 @@ mod tests {
 
     #[test]
     fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_via_prepare_path() {
-        if std::env::var("AEROFORGE_REQUIRE_REAL_TETGEN")
-            .ok()
-            .as_deref()
-            != Some("1")
-        {
+        if !env_enabled("AEROFORGE_REQUIRE_REAL_TETGEN") {
             return;
         }
 
@@ -111,5 +127,70 @@ mod tests {
             summary.tetrahedra,
             LIMITED_ALPHA_BOUNDARY_LAYER_PRESET_LABEL,
         );
+    }
+
+    #[test]
+    fn configured_real_tetgen_boundary_layer_case_runs_through_su2_850() {
+        if !env_enabled("AEROFORGE_REQUIRE_REAL_TETGEN")
+            || !env_enabled("AEROFORGE_REQUIRE_REAL_SU2")
+        {
+            return;
+        }
+
+        let su2 = discover_su2().expect("SU2_CFD must be discoverable through SU2_RUN or PATH");
+        let banner = probe_su2_banner(&su2)
+            .expect("SU2 banner probe must execute")
+            .expect("SU2 banner must be present");
+        assert!(
+            banner.contains("SU2 v8.5.0"),
+            "boundary-layer execution evidence is pinned to SU2 8.5.0, got: {banner}"
+        );
+
+        let mut state = ProjectState::default();
+        state.objects[0].position = Vec3::new(0.0, 2.0, 0.0);
+        state.touch();
+
+        let mut settings = AccurateSettings::default();
+        settings.flow_model = FlowModel::Laminar;
+        settings.inlet_speed_mps = 2.0;
+        settings.max_iterations = 2;
+        settings.convergence_log10 = -12.0;
+
+        let (prepared_case, summary) =
+            prepare_boundary_layer_tetgen_from_state(&state, &settings).unwrap();
+        assert_eq!(summary.tetrahedra, 108);
+
+        let root = temp_root("su2");
+        fs::create_dir_all(&root).unwrap();
+        let persisted = prepared_case
+            .persist(&root, "boundary_layer_su2")
+            .expect("boundary-layer + TetGen case must persist before SU2 execution");
+        assert!(persisted
+            .working_directory
+            .join("aeroforge_boundary_layer_tetgen.tsv")
+            .is_file());
+        assert!(!persisted
+            .working_directory
+            .join("aeroforge_tetgen_handoff.tsv")
+            .exists());
+
+        let run = run_prepared_generated_su2_case(&su2, &persisted)
+            .expect("SU2_CFD process must launch for the boundary-layer + TetGen case");
+        if !run.success {
+            eprintln!("SU2 stdout:\n{}", run.stdout);
+            eprintln!("SU2 stderr:\n{}", run.stderr);
+        }
+        assert!(
+            run.success,
+            "SU2 8.5.0 must accept and advance the merged boundary-layer + TetGen case; exit={:?}",
+            run.exit_code
+        );
+
+        println!(
+            "AEROFORGE_BOUNDARY_LAYER_SU2_E2E=PASS tetrahedra={} exit_code={:?} su2=8.5.0",
+            summary.tetrahedra,
+            run.exit_code,
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 }
