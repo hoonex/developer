@@ -15,11 +15,27 @@ AeroForge is a native Bevy + egui 3D aerodynamics workbench with a fast interact
 - optional user-installed external TetGen path with explicit source admission, deterministic PLC/hole seeds, parser/process provenance, positive-volume tetrahedral non-overlap, source/body normal and crease evidence, discrete triangulated normal-variation evidence, first-cell wall-normal height observations, complete six-internal-dihedral-per-tetrahedron evidence, complete unique-face centroid/normal orthogonality evidence, complete interior-face adjacent-cell volume-ratio and face-centroid skewness evidence, and one-to-one triangulated source-facet ↔ output-body-facet correspondence;
 - external TetGen provenance persisted as `aeroforge_tetgen_handoff.tsv` format v12 while mesh fidelity remains explicitly unclassified rather than being silently promoted.
 
-## Run
+## Run from source
 
 ```bash
 cargo run -p aeroforge-app --release
 ```
+
+## Windows limited alpha
+
+A successful `AeroForge CI` run publishes a temporary Windows artifact named `AeroForge-Windows-x86_64-<source-commit>` and retains it for 14 days. Open the matching GitHub Actions run, download that artifact, extract it once, and run `AeroForge.exe` directly. It is an unsigned test build, not an installer or production release.
+
+The package contains:
+
+- `AeroForge.exe` — the packaged desktop application;
+- `README.txt` — runtime requirements and the exact startup-smoke claim boundary;
+- `SHA256SUMS.txt` — SHA-256 for `AeroForge.exe`;
+- `BUILD_COMMIT.txt` — the exact source-head commit used to build the package;
+- `CI_VALIDATION_COMMIT.txt` — the workflow validation commit. On pull-request runs this may be GitHub's synthetic merge commit while `BUILD_COMMIT.txt` remains the exact PR head.
+
+The package job builds the exact source head, launches that release executable on a GitHub-hosted Windows runner with the primary window hidden, and requires `AEROFORGE_STARTUP_SMOKE_OK` after at least three rendered frames before upload. The smoke process intentionally terminates immediately at that boundary because the hosted Microsoft Basic Render Driver has been observed to lose its DX12 device during Bevy/wgpu teardown after successful rendering. This CI smoke therefore establishes bounded startup/render evidence, **not graceful GPU teardown or compatibility with every real GPU/driver/display environment**.
+
+Accurate SU2 execution still requires a separately installed SU2 8.5.0 runtime discoverable through `SU2_RUN` or `PATH`. TetGen is optional and separately installed; configure `TETGEN_EXECUTABLE` or `PATH` when using the external TetGen path. Neither dependency is bundled in the Windows alpha artifact.
 
 ## Test the numerical / geometry / Accurate cores
 
