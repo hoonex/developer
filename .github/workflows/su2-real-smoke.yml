@@ -24,6 +24,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Report dependency lock
+        run: sha256sum Cargo.lock
       - name: Cache Cargo
         uses: actions/cache@v4
         with:
@@ -31,7 +33,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-su2-real-cargo-${{ hashFiles('**/Cargo.toml') }}
+          key: ${{ runner.os }}-su2-real-cargo-${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-su2-real-cargo-
             ${{ runner.os }}-cargo-
@@ -115,6 +117,6 @@ jobs:
           echo "AEROFORGE_SU2_CONFIG_COMMIT=12eb826f049ef7f67df974dfcb44cf36ee07c0f8"
           echo "AEROFORGE_SU2_TESTCASES_COMMIT=790c80ec5b543487b5f8ecf8bb0f0e4d2cc67f3f"
       - name: Run AeroForge-generated SU2 8.5.0 cases
-        run: cargo test -p aeroforge-accurate-backend --test su2_generated -- --ignored --nocapture
+        run: cargo test -p aeroforge-accurate-backend --test su2_generated --locked -- --ignored --nocapture
       - name: Run pinned upstream SU2 8.5.0 numerical regression
-        run: cargo test -p aeroforge-accurate-backend --test su2_upstream upstream_inc_laminar_cylinder_matches_su2_850_regression -- --ignored --nocapture
+        run: cargo test -p aeroforge-accurate-backend --test su2_upstream upstream_inc_laminar_cylinder_matches_su2_850_regression --locked -- --ignored --nocapture
