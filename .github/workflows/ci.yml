@@ -94,8 +94,13 @@ jobs:
     needs: app-check
     runs-on: windows-latest
     timeout-minutes: 45
+    env:
+      AEROFORGE_SOURCE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      AEROFORGE_CI_SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AEROFORGE_SOURCE_SHA }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache Windows alpha release build
         uses: actions/cache@v4
@@ -160,11 +165,12 @@ jobs:
           The packaged executable is smoke-tested on the GitHub-hosted Windows runner by creating the real AeroForge Bevy application with its primary window hidden and advancing at least three rendered frames. The smoke process then terminates immediately because the hosted Microsoft Basic Render Driver loses its DX12 device during Bevy/wgpu teardown after successful rendering; graceful GPU teardown is therefore not established by this CI smoke. This is stronger than build-only evidence but still does not prove compatibility with every real GPU/driver/display environment, successful solver installation, or engineering CFD accuracy.
           "@ | Set-Content "$packageDir/README.txt" -Encoding utf8
           "$sha  AeroForge.exe" | Set-Content "$packageDir/SHA256SUMS.txt" -Encoding ascii
-          "${{ github.sha }}" | Set-Content "$packageDir/BUILD_COMMIT.txt" -Encoding ascii
+          $env:AEROFORGE_SOURCE_SHA | Set-Content "$packageDir/BUILD_COMMIT.txt" -Encoding ascii
+          $env:AEROFORGE_CI_SHA | Set-Content "$packageDir/CI_VALIDATION_COMMIT.txt" -Encoding ascii
       - name: Upload Windows limited-alpha package
         uses: actions/upload-artifact@v4
         with:
-          name: AeroForge-Windows-x86_64-${{ github.sha }}
+          name: AeroForge-Windows-x86_64-${{ env.AEROFORGE_SOURCE_SHA }}
           path: dist/AeroForge-Windows-x86_64
           if-no-files-found: error
           retention-days: 14
