@@ -4,7 +4,7 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
@@ -12,6 +12,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  AEROFORGE_EXPECTED_LOCK_SHA256: 90be482b3aeadbf6657fe088cf97769468221628b5c94e9cecb0b6e8463c74e4
 
 jobs:
   generate-lockfile:
@@ -22,11 +23,11 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - uses: dtolnay/rust-toolchain@stable
-      - name: Generate resolver lockfile from source HEAD
+      - name: Generate and verify resolver lockfile from source HEAD
         run: |
           cargo generate-lockfile
           test -s Cargo.lock
-          sha256sum Cargo.lock
+          echo "$AEROFORGE_EXPECTED_LOCK_SHA256  Cargo.lock" | sha256sum -c -
       - name: Upload resolver lockfile
         uses: actions/upload-artifact@v4
         with:
@@ -34,3 +35,25 @@ jobs:
           path: Cargo.lock
           if-no-files-found: error
           retention-days: 7
+      - name: Commit exact lockfile to unchanged PR branch
+        shell: bash
+        env:
+          AEROFORGE_BRANCH: ${{ github.event.pull_request.head.ref }}
+          AEROFORGE_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$AEROFORGE_BRANCH"
+          REMOTE_HEAD="$(git rev-parse FETCH_HEAD)"
+          if [[ "$REMOTE_HEAD" != "$AEROFORGE_EXPECTED_HEAD" ]]; then
+            echo "Branch moved before lockfile publication: expected $AEROFORGE_EXPECTED_HEAD, got $REMOTE_HEAD" >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git diff --cached --exit-code --quiet && {
+            echo "Cargo.lock already matches generated resolver state"
+            exit 0
+          }
+          git commit -m "build: pin Cargo dependency resolution"
+          git push origin "HEAD:$AEROFORGE_BRANCH"
