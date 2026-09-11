@@ -8,13 +8,22 @@ use aeroforge_accurate_backend::{
     Su2Case, Su2CoefficientReference, Su2MeshFidelity,
 };
 
+use crate::accurate_boundary_layer_tetgen::{
+    build_boundary_layer_tetgen_bundle, persist_boundary_layer_tetgen_case,
+    DesktopBoundaryLayerTetgenHandoff,
+};
+
 /// One in-memory Accurate-mode case together with the provenance required to persist it honestly.
 ///
 /// The staircase path stores only the already-rendered generated bundle and is always persisted as
-/// `StaircaseVoxelDerived`. The validated TetGen path retains the solver case, explicit coefficient
-/// reference and skewness-promoted validated external-TetGen handoff. Persistence is forced through
-/// the v12 face-centroid-skewness-aware TetGen sidecar path so the owned complete interior-face
-/// skewness evidence cannot be dropped while the solver-visible mesh is retained.
+/// `StaircaseVoxelDerived`. The direct validated-TetGen path retains the solver case, explicit
+/// coefficient reference and skewness-promoted external-TetGen handoff; it persists through the
+/// format-v12 TetGen sidecar because that evidence was measured on that exact solver-visible mesh.
+///
+/// The boundary-layer + TetGen path is deliberately separate. It retains the generated layer
+/// blocks, outer-shell TetGen execution and welded final generic handoff, and persists through its
+/// dedicated boundary-layer/TetGen provenance contract. It must not inherit direct-TetGen v8-v12
+/// quality evidence measured before the layer/TetGen merge.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AccuratePreparedCase {
     Staircase {
@@ -26,6 +35,12 @@ pub enum AccuratePreparedCase {
         coefficient_reference: Su2CoefficientReference,
         handoff: SkewnessValidatedTetgenExteriorHandoff,
     },
+    BoundaryLayerTetgen {
+        bundle: GeneratedSu2CaseBundle,
+        case: Su2Case,
+        coefficient_reference: Su2CoefficientReference,
+        handoff: DesktopBoundaryLayerTetgenHandoff,
+    },
 }
 
 impl AccuratePreparedCase {
@@ -33,8 +48,8 @@ impl AccuratePreparedCase {
         Self::Staircase { bundle }
     }
 
-    /// Constructs the solver-visible bundle from the authoritative skewness-promoted
-    /// validated handoff instead of accepting independent TetGen mesh/config text from the caller.
+    /// Constructs the solver-visible bundle from the authoritative skewness-promoted direct-TetGen
+    /// handoff instead of accepting independent mesh/config text from the caller.
     pub fn validated_tetgen(
         case: Su2Case,
         coefficient_reference: Su2CoefficientReference,
@@ -60,9 +75,28 @@ impl AccuratePreparedCase {
         })
     }
 
+    /// Constructs the solver-visible bundle from the final welded boundary-layer/TetGen handoff.
+    /// The retained handoff owns its separate provenance path, so direct-TetGen v12 evidence cannot
+    /// be silently attached to the merged mesh.
+    pub fn boundary_layer_tetgen(
+        case: Su2Case,
+        coefficient_reference: Su2CoefficientReference,
+        handoff: DesktopBoundaryLayerTetgenHandoff,
+    ) -> Result<Self, String> {
+        let bundle = build_boundary_layer_tetgen_bundle(&case, &coefficient_reference, &handoff)?;
+        Ok(Self::BoundaryLayerTetgen {
+            bundle,
+            case,
+            coefficient_reference,
+            handoff,
+        })
+    }
+
     pub fn bundle(&self) -> &GeneratedSu2CaseBundle {
         match self {
-            Self::Staircase { bundle } | Self::ValidatedTetgen { bundle, .. } => bundle,
+            Self::Staircase { bundle }
+            | Self::ValidatedTetgen { bundle, .. }
+            | Self::BoundaryLayerTetgen { bundle, .. } => bundle,
         }
     }
 
@@ -70,6 +104,9 @@ impl AccuratePreparedCase {
         match self {
             Self::Staircase { .. } => "Cartesian staircase tetra mesh",
             Self::ValidatedTetgen { .. } => "Validated external TetGen handoff",
+            Self::BoundaryLayerTetgen { .. } => {
+                "Boundary-layer + external TetGen merged handoff"
+            }
         }
     }
 
@@ -77,12 +114,17 @@ impl AccuratePreparedCase {
         matches!(self, Self::ValidatedTetgen { .. })
     }
 
+    pub fn is_boundary_layer_tetgen(&self) -> bool {
+        matches!(self, Self::BoundaryLayerTetgen { .. })
+    }
+
     /// Persists through the provenance path dictated by the variant.
     ///
-    /// TetGen persistence rebuilds the exact solver bundle from the retained `Su2Case` and nested
-    /// generic validated handoff, then writes the exact PLC plus complete format-v12 provenance for
-    /// v7 base evidence, v8 constrained facets, v9 internal dihedrals, v10 unique-face
-    /// orthogonality, v11 adjacent-cell size-transition, and v12 face-centroid skewness evidence.
+    /// Direct TetGen persistence rebuilds the exact solver bundle from the retained `Su2Case` and
+    /// nested generic validated handoff, then writes the exact PLC plus complete format-v12
+    /// provenance for evidence actually measured on that direct-TetGen mesh. Boundary-layer/TetGen
+    /// persistence instead writes the generic final exterior handoff plus its dedicated format-v1
+    /// layer/outer-TetGen/weld sidecar, avoiding false reuse of direct-TetGen v12 measurements.
     pub fn persist(
         &self,
         root: &Path,
@@ -111,6 +153,18 @@ impl AccuratePreparedCase {
             .map_err(|error| {
                 format!("failed to persist skewness-validated TetGen SU2 case: {error}")
             }),
+            Self::BoundaryLayerTetgen {
+                case,
+                coefficient_reference,
+                handoff,
+                ..
+            } => persist_boundary_layer_tetgen_case(
+                root,
+                case_directory_name,
+                case,
+                coefficient_reference,
+                handoff,
+            ),
         }
     }
 }
@@ -160,6 +214,7 @@ mod tests {
             .exists());
         assert_eq!(prepared_case.mesh_kind_label(), "Cartesian staircase tetra mesh");
         assert!(!prepared_case.is_validated_tetgen());
+        assert!(!prepared_case.is_boundary_layer_tetgen());
 
         fs::remove_dir_all(root).unwrap();
     }

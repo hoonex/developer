@@ -1,20 +1,28 @@
 use std::collections::BTreeSet;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::Path;
 
 use aeroforge_accurate_backend::{
+    build_validated_exterior_su2_case_bundle_with_reference,
     generate_tetrahedral_boundary_layer, merge_tetgen_with_boundary_layers,
+    prepare_validated_exterior_su2_case_directory_with_reference,
     rebuild_tetgen_input_around_boundary_layers, run_tetgen_for_handoff,
     validate_candidate_exterior_mesher_handoff, validate_exterior_mesher_source_clearance,
     AccurateImportedSurfacePolicy, BoundTetgenExternalRun, BoundaryLayerTetgenMergePolicy,
     BoundaryLayerTetgenMergeReport, BoundarySource, ClearanceValidatedExteriorMesherInput,
-    ExteriorMeshQualityPolicy, GeneratedTetrahedralBoundaryLayer,
-    SourceSurfaceCorrespondencePolicy, TetrahedralBoundaryLayerPolicy,
-    TetrahedralOverlapPolicy, TetgenHoleSeedPolicy, ValidatedExteriorMesherHandoff,
+    ExteriorMeshQualityPolicy, GeneratedSu2CaseBundle, GeneratedTetrahedralBoundaryLayer,
+    PreparedGeneratedSu2Case, SourceSurfaceCorrespondencePolicy, Su2Case,
+    Su2CoefficientReference, TetrahedralBoundaryLayerPolicy, TetrahedralOverlapPolicy,
+    TetgenHoleSeedPolicy, ValidatedExteriorMesherHandoff,
 };
 use aeroforge_volume_core::BoundaryMarkerId;
 
 use crate::accurate_exterior_admission::admit_project_geometry_for_tetgen;
 use crate::model::ProjectState;
+
+const BOUNDARY_LAYER_TETGEN_PROVENANCE_FILENAME: &str = "aeroforge_boundary_layer_tetgen.tsv";
+const BOUNDARY_LAYER_TETGEN_INPUT_FILENAME: &str = "aeroforge_boundary_layer_tetgen_input.poly";
 
 const DESKTOP_BOUNDARY_LAYER_TETGEN_HOLE_SEED_POLICY: TetgenHoleSeedPolicy =
     TetgenHoleSeedPolicy {
@@ -174,6 +182,208 @@ pub(crate) fn run_project_tetgen_boundary_layer_handoff(
     })
 }
 
+pub(crate) fn build_boundary_layer_tetgen_bundle(
+    case: &Su2Case,
+    coefficient_reference: &Su2CoefficientReference,
+    handoff: &DesktopBoundaryLayerTetgenHandoff,
+) -> Result<GeneratedSu2CaseBundle, String> {
+    build_validated_exterior_su2_case_bundle_with_reference(
+        case,
+        &handoff.handoff,
+        Some(coefficient_reference),
+    )
+    .map_err(|error| format!("boundary-layer TetGen SU2 bundle generation failed: {error}"))
+}
+
+/// Persists the solver-visible merged mesh through the generic exterior-handoff contract, then
+/// adds the exact outer-shell PLC and a dedicated boundary-layer/TetGen provenance sidecar.
+///
+/// This deliberately does not reuse `aeroforge_tetgen_handoff.tsv` format v12: those v8-v12
+/// observations belong to the unmerged direct-TetGen mesh and would be false provenance for this
+/// merged boundary-layer mesh. The dedicated sidecar records only evidence actually owned by this
+/// path and keeps all engineering/body-fitted/y+ promotions explicitly unestablished.
+pub(crate) fn persist_boundary_layer_tetgen_case(
+    root: &Path,
+    case_directory_name: &str,
+    case: &Su2Case,
+    coefficient_reference: &Su2CoefficientReference,
+    handoff: &DesktopBoundaryLayerTetgenHandoff,
+) -> Result<PreparedGeneratedSu2Case, String> {
+    let prepared = prepare_validated_exterior_su2_case_directory_with_reference(
+        root,
+        case_directory_name,
+        case,
+        &handoff.handoff,
+        Some(coefficient_reference),
+    )
+    .map_err(|error| format!("failed to persist boundary-layer merged SU2 case: {error}"))?;
+
+    let write_result = (|| -> Result<(), String> {
+        write_create_new(
+            &prepared
+                .working_directory
+                .join(BOUNDARY_LAYER_TETGEN_INPUT_FILENAME),
+            handoff.tetgen_run.prepared().poly_text().as_bytes(),
+        )?;
+        let provenance = render_boundary_layer_tetgen_provenance(handoff);
+        write_create_new(
+            &prepared
+                .working_directory
+                .join(BOUNDARY_LAYER_TETGEN_PROVENANCE_FILENAME),
+            provenance.as_bytes(),
+        )?;
+        Ok(())
+    })();
+
+    if let Err(error) = write_result {
+        return match fs::remove_dir_all(&prepared.working_directory) {
+            Ok(()) => Err(error),
+            Err(cleanup) => Err(format!(
+                "{error}; additionally failed to remove partially persisted boundary-layer case: {cleanup}"
+            )),
+        };
+    }
+
+    Ok(prepared)
+}
+
+fn render_boundary_layer_tetgen_provenance(
+    handoff: &DesktopBoundaryLayerTetgenHandoff,
+) -> String {
+    let source_clearance_policy = handoff.source_input.clearance_policy();
+    let source_clearance = handoff.source_input.clearance_report();
+    let outer_clearance_policy = handoff.tetgen_run.input().clearance_policy();
+    let outer_clearance = handoff.tetgen_run.input().clearance_report();
+    let hole_policy = handoff.tetgen_run.hole_seed_policy();
+    let plc = handoff.tetgen_run.prepared();
+    let run = handoff.tetgen_run.run();
+    let parsed = &run.parsed;
+    let merge = &handoff.merge_report;
+    let overlap = &merge.overlap;
+    let final_audit = handoff
+        .handoff
+        .mesh
+        .audit()
+        .expect("validated final handoff must retain an auditable mesh");
+
+    let mut out = String::new();
+    macro_rules! row {
+        ($key:expr, $value:expr) => {{
+            out.push_str($key);
+            out.push('\t');
+            out.push_str(&$value.to_string());
+            out.push('\n');
+        }};
+    }
+
+    row!("format_version", 1);
+    row!("contract", "desktop_boundary_layer_tetgen_handoff");
+    row!("boundary_layer_geometry_status", "generated_and_welded_tetrahedral_shell");
+    row!("body_fitted_status", "not_established");
+    row!("engineering_quality_status", "not_established");
+    row!("y_plus_status", "not_established");
+    row!("layer_policy_first_layer_thickness", handoff.layer_policy.first_layer_thickness);
+    row!("layer_policy_growth_ratio", handoff.layer_policy.growth_ratio);
+    row!("layer_policy_layer_count", handoff.layer_policy.layer_count);
+    row!("layer_policy_maximum_total_thickness", handoff.layer_policy.maximum_total_thickness);
+    row!(
+        "layer_policy_maximum_adjacent_face_normal_angle_radians",
+        handoff.layer_policy.maximum_adjacent_face_normal_angle_radians
+    );
+    row!("layer_policy_minimum_tetrahedron_volume", handoff.layer_policy.minimum_tetrahedron_volume);
+    row!("layer_policy_max_generated_tetrahedra", handoff.layer_policy.max_generated_tetrahedra);
+    row!("layer_policy_overlap_geometric_epsilon", handoff.layer_policy.overlap_geometric_epsilon);
+    row!("layer_policy_max_overlap_pair_tests", handoff.layer_policy.max_overlap_pair_tests);
+    row!("source_clearance_minimum_clearance", source_clearance_policy.minimum_clearance);
+    row!("source_clearance_max_triangle_pair_tests", source_clearance_policy.max_triangle_pair_tests);
+    row!("source_clearance_triangle_pair_tests", source_clearance.triangle_pair_tests);
+    row!("source_clearance_body_pair_count", source_clearance.pairs.len());
+    row!("outer_clearance_minimum_clearance", outer_clearance_policy.minimum_clearance);
+    row!("outer_clearance_max_triangle_pair_tests", outer_clearance_policy.max_triangle_pair_tests);
+    row!("outer_clearance_triangle_pair_tests", outer_clearance.triangle_pair_tests);
+    row!("outer_clearance_body_pair_count", outer_clearance.pairs.len());
+    row!("tetgen_hole_seed_geometric_epsilon", hole_policy.geometric_epsilon);
+    row!("tetgen_hole_seed_initial_inward_edge_fraction", hole_policy.initial_inward_edge_fraction);
+    row!("tetgen_hole_seed_max_attempts", hole_policy.max_attempts);
+    row!("tetgen_hole_seed_max_point_triangle_tests", hole_policy.max_point_triangle_tests);
+    row!("tetgen_plc_point_count", plc.point_count());
+    row!("tetgen_plc_facet_count", plc.facet_count());
+    row!("tetgen_plc_hole_seed_count", plc.hole_seeds().len());
+    row!("tetgen_plc_reserved_point_triangle_tests", plc.reserved_point_triangle_tests());
+    row!("tetgen_plc_executed_point_triangle_tests", plc.executed_point_triangle_tests());
+    row!("tetgen_switches", &run.switches);
+    row!(
+        "tetgen_exit_code",
+        run.exit_code
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unavailable".into())
+    );
+    row!("tetgen_output_points", parsed.mesh.points.len());
+    row!("tetgen_output_tetrahedra", parsed.mesh.cells.len());
+    row!("tetgen_output_boundary_faces", parsed.mesh.boundary.len());
+    row!("tetgen_output_reoriented_tetrahedra", parsed.reoriented_tetrahedra);
+    row!("merge_interface_vertex_tolerance", handoff.merge_policy.interface_vertex_tolerance);
+    row!(
+        "merge_max_interface_vertex_comparisons",
+        handoff.merge_policy.max_interface_vertex_comparisons
+    );
+    row!("merge_max_combined_tetrahedra", handoff.merge_policy.max_combined_tetrahedra);
+    row!("merge_overlap_geometric_epsilon", handoff.merge_policy.overlap_policy.geometric_epsilon);
+    row!(
+        "merge_overlap_max_tetrahedron_pair_tests",
+        handoff.merge_policy.overlap_policy.max_tetrahedron_pair_tests
+    );
+    row!("merge_layer_count", merge.layer_count);
+    row!("merge_layer_tetrahedra", merge.layer_tetrahedra);
+    row!("merge_tetgen_tetrahedra", merge.tetgen_tetrahedra);
+    row!("merge_combined_tetrahedra", merge.combined_tetrahedra);
+    row!("merge_welded_interface_vertices", merge.welded_interface_vertices);
+    row!("merge_removed_layer_interface_faces", merge.removed_layer_interface_faces);
+    row!("merge_removed_tetgen_interface_faces", merge.removed_tetgen_interface_faces);
+    row!("merge_interface_vertex_comparisons", merge.interface_vertex_comparisons);
+    row!("merge_overlap_cells", overlap.cells);
+    row!("merge_overlap_broad_phase_pair_tests", overlap.broad_phase_pair_tests);
+    row!("merge_overlap_aabb_candidate_pairs", overlap.aabb_candidate_pairs);
+    row!("merge_overlap_sat_pair_tests", overlap.sat_pair_tests);
+    row!("final_points", final_audit.points);
+    row!("final_tetrahedra", final_audit.cells);
+    row!("final_boundary_triangles", final_audit.boundary_triangles);
+    row!("final_source_correspondence_body_count", handoff.handoff.correspondence.bodies.len());
+    row!("layer_count", handoff.layers.len());
+    for (index, layer) in handoff.layers.iter().enumerate() {
+        row!(&format!("layer_{index}_scene_object_id"), layer.report.scene_object_id);
+        row!(&format!("layer_{index}_wall_marker"), layer.wall_marker.0);
+        row!(&format!("layer_{index}_temporary_interface_marker"), layer.interface_marker.0);
+        row!(&format!("layer_{index}_source_vertices"), layer.report.source_vertices);
+        row!(&format!("layer_{index}_source_triangles"), layer.report.source_triangles);
+        row!(&format!("layer_{index}_generated_points"), layer.report.generated_points);
+        row!(&format!("layer_{index}_generated_tetrahedra"), layer.report.generated_tetrahedra);
+        row!(&format!("layer_{index}_total_thickness"), layer.report.total_thickness);
+        row!(&format!("layer_{index}_minimum_tetrahedron_volume"), layer.report.minimum_tetrahedron_volume);
+        row!(&format!("layer_{index}_maximum_tetrahedron_volume"), layer.report.maximum_tetrahedron_volume);
+        row!(&format!("layer_{index}_overlap_cells"), layer.report.overlap.cells);
+        row!(
+            &format!("layer_{index}_overlap_broad_phase_pair_tests"),
+            layer.report.overlap.broad_phase_pair_tests
+        );
+        row!(&format!("layer_{index}_overlap_sat_pair_tests"), layer.report.overlap.sat_pair_tests);
+    }
+    out
+}
+
+fn write_create_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| format!("failed to create {}: {error}", path.display()))?;
+    file.write_all(bytes)
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
+    file.sync_all()
+        .map_err(|error| format!("failed to sync {}: {error}", path.display()))?;
+    Ok(())
+}
+
 fn allocate_temporary_interface_marker(
     used_markers: &mut BTreeSet<BoundaryMarkerId>,
 ) -> Result<BoundaryMarkerId, String> {
@@ -191,6 +401,10 @@ mod tests {
     use super::*;
     use aeroforge_accurate_backend::discover_tetgen;
     use bevy::prelude::Vec3;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use crate::accurate_prepare::{solver_case_for_scene_ids, AccurateSettings};
+    use crate::accurate_prepared_case::AccuratePreparedCase;
 
     fn smoke_layer_policy() -> TetrahedralBoundaryLayerPolicy {
         TetrahedralBoundaryLayerPolicy {
@@ -204,6 +418,17 @@ mod tests {
             overlap_geometric_epsilon: 1.0e-10,
             max_overlap_pair_tests: 1_000_000,
         }
+    }
+
+    fn temp_root(label: &str) -> std::path::PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "aeroforge-boundary-layer-tetgen-{label}-{}-{nonce}",
+            std::process::id()
+        ))
     }
 
     #[test]
@@ -264,8 +489,47 @@ mod tests {
                 .contains_key(&BoundaryMarkerId(marker)));
         }
 
+        let scene_ids = result.handoff.exterior.scene_object_ids.clone();
+        let (case, coefficient_reference) =
+            solver_case_for_scene_ids(&state, &AccurateSettings::default(), &scene_ids);
+        let prepared_case = AccuratePreparedCase::boundary_layer_tetgen(
+            case,
+            coefficient_reference,
+            result.clone(),
+        )
+        .unwrap();
+        assert!(prepared_case.is_boundary_layer_tetgen());
+        assert_eq!(
+            prepared_case.mesh_kind_label(),
+            "Boundary-layer + external TetGen merged handoff"
+        );
+
+        let root = temp_root("real");
+        fs::create_dir_all(&root).unwrap();
+        let persisted = prepared_case.persist(&root, "case_a").unwrap();
+        let case_dir = &persisted.working_directory;
+        let provenance = fs::read_to_string(
+            case_dir.join(BOUNDARY_LAYER_TETGEN_PROVENANCE_FILENAME),
+        )
+        .unwrap();
+        assert!(provenance.contains("format_version\t1\n"));
+        assert!(provenance.contains("contract\tdesktop_boundary_layer_tetgen_handoff\n"));
+        assert!(provenance.contains("boundary_layer_geometry_status\tgenerated_and_welded_tetrahedral_shell\n"));
+        assert!(provenance.contains("body_fitted_status\tnot_established\n"));
+        assert!(provenance.contains("engineering_quality_status\tnot_established\n"));
+        assert!(provenance.contains("y_plus_status\tnot_established\n"));
+        assert!(provenance.contains("merge_layer_tetrahedra\t72\n"));
+        assert!(provenance.contains("merge_tetgen_tetrahedra\t36\n"));
+        assert!(provenance.contains("merge_combined_tetrahedra\t108\n"));
+        assert!(provenance.contains("merge_welded_interface_vertices\t8\n"));
+        assert!(provenance.contains("final_source_correspondence_body_count\t1\n"));
+        assert!(case_dir.join(BOUNDARY_LAYER_TETGEN_INPUT_FILENAME).is_file());
+        assert!(case_dir.join("aeroforge_exterior_handoff.tsv").is_file());
+        assert!(!case_dir.join("aeroforge_tetgen_handoff.tsv").exists());
+        fs::remove_dir_all(&root).unwrap();
+
         println!(
-            "AEROFORGE_DESKTOP_TETGEN_BOUNDARY_LAYER=PASS bodies={} layer_tets={} tetgen_tets={} combined_tets={} welded_vertices={} source_correspondence_bodies={}",
+            "AEROFORGE_DESKTOP_TETGEN_BOUNDARY_LAYER=PASS bodies={} layer_tets={} tetgen_tets={} combined_tets={} welded_vertices={} source_correspondence_bodies={} persisted_provenance=v1",
             result.layers.len(),
             result.merge_report.layer_tetrahedra,
             result.merge_report.tetgen_tetrahedra,
