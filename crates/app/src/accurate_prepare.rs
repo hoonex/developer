@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::accurate_boundary_layer_prepare::{
-    prepare_boundary_layer_tetgen_from_state, LIMITED_ALPHA_BOUNDARY_LAYER_PRESET_LABEL,
+    prepare_boundary_layer_tetgen_from_state, AccurateBoundaryLayerSettings,
 };
 use crate::accurate_prepared_case::AccuratePreparedCase;
 use crate::accurate_scene_geometry::voxelize_project_geometry_for_accurate;
@@ -94,18 +94,21 @@ struct AccuratePrepareCompletion {
     revision: u64,
     settings: AccurateSettings,
     mesh_path: AccurateMeshPath,
+    boundary_layer_settings: Option<AccurateBoundaryLayerSettings>,
     result: Result<(AccuratePreparedCase, PreparedCaseSummary), String>,
 }
 
 #[derive(Resource)]
 pub struct AccurateRuntime {
     pub settings: AccurateSettings,
+    pub boundary_layer_settings: AccurateBoundaryLayerSettings,
     pub selected_mesh_path: AccurateMeshPath,
     pub status: AccuratePrepareStatus,
     pub preparing_revision: Option<u64>,
     pub prepared_revision: Option<u64>,
     pub prepared_settings: Option<AccurateSettings>,
     pub prepared_mesh_path: Option<AccurateMeshPath>,
+    pub prepared_boundary_layer_settings: Option<AccurateBoundaryLayerSettings>,
     pub summary: Option<PreparedCaseSummary>,
     pub last_error: Option<String>,
     pub prepared_case: Option<AccuratePreparedCase>,
@@ -116,12 +119,14 @@ impl Default for AccurateRuntime {
     fn default() -> Self {
         Self {
             settings: AccurateSettings::default(),
+            boundary_layer_settings: AccurateBoundaryLayerSettings::default(),
             selected_mesh_path: AccurateMeshPath::Staircase,
             status: AccuratePrepareStatus::Idle,
             preparing_revision: None,
             prepared_revision: None,
             prepared_settings: None,
             prepared_mesh_path: None,
+            prepared_boundary_layer_settings: None,
             summary: None,
             last_error: None,
             prepared_case: None,
@@ -132,11 +137,16 @@ impl Default for AccurateRuntime {
 
 impl AccurateRuntime {
     pub fn is_fresh_for(&self, scene_revision: u64) -> bool {
+        let boundary_layer_settings_fresh = self.selected_mesh_path
+            != AccurateMeshPath::BoundaryLayerTetgen
+            || self.prepared_boundary_layer_settings.as_ref()
+                == Some(&self.boundary_layer_settings);
         self.status == AccuratePrepareStatus::Prepared
             && self.prepared_case.is_some()
             && self.prepared_revision == Some(scene_revision)
             && self.prepared_settings.as_ref() == Some(&self.settings)
             && self.prepared_mesh_path == Some(self.selected_mesh_path)
+            && boundary_layer_settings_fresh
     }
 }
 
@@ -215,14 +225,53 @@ pub fn draw_accurate_prepare_ui(
                         ui.small(
                             "Experimental limited-alpha path: generates tetrahedral wall-normal layers, remeshes the expanded outer interfaces with user-installed TetGen, welds both regions, then validates the final solver mesh against the original physical walls.",
                         );
-                        ui.monospace(format!(
-                            "Validated preset: {LIMITED_ALPHA_BOUNDARY_LAYER_PRESET_LABEL}"
-                        ));
                         ui.small(
-                            "The preset is a proven geometric smoke configuration, not an inferred y+ target or engineering mesh prescription. body_fitted_status, engineering_quality_status and y_plus_status remain not_established.",
+                            "The defaults below reproduce the real-TetGen + pinned-SU2 fixture. They are user-owned geometric inputs, not inferred y+ targets or engineering mesh prescriptions.",
                         );
+                        ui.horizontal(|ui| {
+                            ui.label("First layer thickness (scene units)");
+                            ui.add(
+                                egui::DragValue::new(
+                                    &mut runtime.boundary_layer_settings.first_layer_thickness,
+                                )
+                                .speed(0.001),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Growth ratio");
+                            ui.add(
+                                egui::DragValue::new(
+                                    &mut runtime.boundary_layer_settings.growth_ratio,
+                                )
+                                .speed(0.01),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Layer count");
+                            ui.add(
+                                egui::DragValue::new(
+                                    &mut runtime.boundary_layer_settings.layer_count,
+                                )
+                                .speed(1.0),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Maximum total thickness (scene units)");
+                            ui.add(
+                                egui::DragValue::new(
+                                    &mut runtime.boundary_layer_settings.maximum_total_thickness,
+                                )
+                                .speed(0.001),
+                            );
+                        });
+                        if let Err(error) = runtime.boundary_layer_settings.validate() {
+                            ui.colored_label(
+                                egui::Color32::RED,
+                                format!("Boundary-layer settings invalid: {error}"),
+                            );
+                        }
                         ui.small(
-                            "Set TETGEN_EXECUTABLE or place tetgen(.exe) on PATH. Source bodies must remain strictly inside the outer domain after layer expansion.",
+                            "Set TETGEN_EXECUTABLE or place tetgen(.exe) on PATH. Source bodies must remain strictly inside the outer domain after layer expansion. Internal numerical tolerances/work budgets are not user-facing engineering thresholds.",
                         );
                     }
                 }
@@ -340,7 +389,11 @@ pub fn draw_accurate_prepare_ui(
                     }
                 }
 
+                let boundary_layer_settings_valid = runtime.selected_mesh_path
+                    != AccurateMeshPath::BoundaryLayerTetgen
+                    || runtime.boundary_layer_settings.validate().is_ok();
                 let can_prepare = !preparing
+                    && boundary_layer_settings_valid
                     && (runtime.selected_mesh_path != AccurateMeshPath::Staircase
                         || staircase_within_budget);
                 let prepare_label = match runtime.selected_mesh_path {
@@ -356,6 +409,9 @@ pub fn draw_accurate_prepare_ui(
 
                 if prepare {
                     let settings_snapshot = runtime.settings.clone();
+                    let boundary_layer_settings_snapshot =
+                        (runtime.selected_mesh_path == AccurateMeshPath::BoundaryLayerTetgen)
+                            .then_some(runtime.boundary_layer_settings);
                     match runtime.selected_mesh_path {
                         AccurateMeshPath::Staircase => {
                             match prepare_staircase_from_state(&state, &settings_snapshot) {
@@ -366,6 +422,7 @@ pub fn draw_accurate_prepare_ui(
                                     runtime.prepared_revision = Some(state.revision);
                                     runtime.prepared_settings = Some(settings_snapshot);
                                     runtime.prepared_mesh_path = Some(AccurateMeshPath::Staircase);
+                                    runtime.prepared_boundary_layer_settings = None;
                                     runtime.preparing_revision = None;
                                     runtime.last_error = None;
                                     runtime.status = AccuratePrepareStatus::Prepared;
@@ -383,6 +440,7 @@ pub fn draw_accurate_prepare_ui(
                                 &state,
                                 settings_snapshot,
                                 AccurateMeshPath::ValidatedTetgen,
+                                None,
                             );
                         }
                         AccurateMeshPath::BoundaryLayerTetgen => {
@@ -391,6 +449,7 @@ pub fn draw_accurate_prepare_ui(
                                 &state,
                                 settings_snapshot,
                                 AccurateMeshPath::BoundaryLayerTetgen,
+                                boundary_layer_settings_snapshot,
                             );
                         }
                     }
@@ -404,7 +463,7 @@ pub fn draw_accurate_prepare_ui(
                     ));
                     ui.spinner();
                     ui.small(
-                        "The editor remains responsive; completion is revision/settings/path-bound and may already be stale if the scene changes meanwhile.",
+                        "The editor remains responsive; completion is revision/solver-settings/path-bound, and boundary-layer preparations also own their geometric-settings snapshot.",
                     );
                 }
 
@@ -433,6 +492,16 @@ pub fn draw_accurate_prepare_ui(
                     ui.colored_label(
                         egui::Color32::YELLOW,
                         "Prepared case is stale: mesh path selection changed after preparation.",
+                    );
+                }
+                if runtime.selected_mesh_path == AccurateMeshPath::BoundaryLayerTetgen
+                    && runtime.prepared_mesh_path == Some(AccurateMeshPath::BoundaryLayerTetgen)
+                    && runtime.prepared_boundary_layer_settings.as_ref()
+                        != Some(&runtime.boundary_layer_settings)
+                {
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        "Prepared case is stale: boundary-layer geometry settings changed after preparation.",
                     );
                 }
 
@@ -492,6 +561,7 @@ fn collect_prepare_completion(runtime: &mut AccurateRuntime) {
             runtime.prepared_revision = Some(completed.revision);
             runtime.prepared_settings = Some(completed.settings);
             runtime.prepared_mesh_path = Some(completed.mesh_path);
+            runtime.prepared_boundary_layer_settings = completed.boundary_layer_settings;
             runtime.last_error = None;
             runtime.status = AccuratePrepareStatus::Prepared;
         }
@@ -507,11 +577,16 @@ fn launch_external_prepare(
     state: &ProjectState,
     settings: AccurateSettings,
     mesh_path: AccurateMeshPath,
+    boundary_layer_settings: Option<AccurateBoundaryLayerSettings>,
 ) {
     debug_assert!(matches!(
         mesh_path,
         AccurateMeshPath::ValidatedTetgen | AccurateMeshPath::BoundaryLayerTetgen
     ));
+    debug_assert_eq!(
+        boundary_layer_settings.is_some(),
+        mesh_path == AccurateMeshPath::BoundaryLayerTetgen
+    );
     let snapshot = snapshot_project_state(state);
     let revision = state.revision;
     let completion_slot = Arc::clone(&runtime.completion);
@@ -523,9 +598,18 @@ fn launch_external_prepare(
     thread::spawn(move || {
         let result = match mesh_path {
             AccurateMeshPath::ValidatedTetgen => prepare_tetgen_from_state(&snapshot, &settings),
-            AccurateMeshPath::BoundaryLayerTetgen => {
-                prepare_boundary_layer_tetgen_from_state(&snapshot, &settings)
-            }
+            AccurateMeshPath::BoundaryLayerTetgen => boundary_layer_settings
+                .as_ref()
+                .ok_or_else(|| {
+                    "boundary-layer preparation lost its geometric-settings snapshot".to_owned()
+                })
+                .and_then(|layer_settings| {
+                    prepare_boundary_layer_tetgen_from_state(
+                        &snapshot,
+                        &settings,
+                        layer_settings,
+                    )
+                }),
             AccurateMeshPath::Staircase => Err(
                 "staircase preparation cannot be launched through the external-mesh worker"
                     .to_owned(),
@@ -535,6 +619,7 @@ fn launch_external_prepare(
             revision,
             settings,
             mesh_path,
+            boundary_layer_settings,
             result,
         };
         let mut slot = completion_slot
@@ -783,6 +868,36 @@ mod tests {
         runtime.prepared_case = Some(AccuratePreparedCase::staircase(bundle));
         assert!(runtime.is_fresh_for(state.revision));
         runtime.selected_mesh_path = AccurateMeshPath::BoundaryLayerTetgen;
+        assert!(!runtime.is_fresh_for(state.revision));
+    }
+
+    #[test]
+    fn boundary_layer_settings_only_invalidate_boundary_layer_preparations() {
+        let mut state = ProjectState::default();
+        state.simulation.grid = [8, 6, 8];
+        let settings = AccurateSettings::default();
+        let (bundle, summary) = prepare_staircase_from_state(&state, &settings).unwrap();
+        let mut runtime = AccurateRuntime::default();
+        runtime.settings = settings.clone();
+        runtime.status = AccuratePrepareStatus::Prepared;
+        runtime.prepared_revision = Some(state.revision);
+        runtime.prepared_settings = Some(settings);
+        runtime.prepared_mesh_path = Some(AccurateMeshPath::ValidatedTetgen);
+        runtime.selected_mesh_path = AccurateMeshPath::ValidatedTetgen;
+        runtime.summary = Some(summary);
+        runtime.prepared_case = Some(AccuratePreparedCase::staircase(bundle));
+
+        runtime.boundary_layer_settings.first_layer_thickness = 0.03;
+        assert!(runtime.is_fresh_for(state.revision));
+
+        let prepared_boundary_layer_settings = AccurateBoundaryLayerSettings::default();
+        runtime.boundary_layer_settings = prepared_boundary_layer_settings;
+        runtime.prepared_mesh_path = Some(AccurateMeshPath::BoundaryLayerTetgen);
+        runtime.selected_mesh_path = AccurateMeshPath::BoundaryLayerTetgen;
+        runtime.prepared_boundary_layer_settings = Some(prepared_boundary_layer_settings);
+        assert!(runtime.is_fresh_for(state.revision));
+
+        runtime.boundary_layer_settings.first_layer_thickness = 0.03;
         assert!(!runtime.is_fresh_for(state.revision));
     }
 }
