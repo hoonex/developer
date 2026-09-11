@@ -64,7 +64,7 @@ impl AccurateBoundaryLayerSettings {
             minimum_tetrahedron_volume: 1.0e-14,
             max_generated_tetrahedra: 100_000,
             overlap_geometric_epsilon: 1.0e-10,
-            max_overlap_pair_tests: 1_000_000,
+            max_overlap_pair_tests: 20_000_000,
         })
     }
 
@@ -157,7 +157,7 @@ mod tests {
         assert_eq!(policy.minimum_tetrahedron_volume, 1.0e-14);
         assert_eq!(policy.max_generated_tetrahedra, 100_000);
         assert_eq!(policy.overlap_geometric_epsilon, 1.0e-10);
-        assert_eq!(policy.max_overlap_pair_tests, 1_000_000);
+        assert_eq!(policy.max_overlap_pair_tests, 20_000_000);
     }
 
     #[test]
