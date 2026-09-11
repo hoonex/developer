@@ -7,6 +7,8 @@ use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
 use bevy_panorbit_camera::PanOrbitCameraPlugin;
 
 mod accurate_boundary_layer_prepare;
+#[cfg(test)]
+mod accurate_boundary_layer_coverage;
 mod accurate_boundary_layer_tetgen;
 mod accurate_execute;
 mod accurate_exterior_admission;
