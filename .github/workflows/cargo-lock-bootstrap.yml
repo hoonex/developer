@@ -1,0 +1,36 @@
+name: AeroForge Cargo Lock Bootstrap
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  generate-lockfile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Generate resolver lockfile from source HEAD
+        run: |
+          cargo generate-lockfile
+          test -s Cargo.lock
+          sha256sum Cargo.lock
+      - name: Upload resolver lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: AeroForge-Cargo-lock-${{ github.event.pull_request.head.sha }}
+          path: Cargo.lock
+          if-no-files-found: error
+          retention-days: 7
