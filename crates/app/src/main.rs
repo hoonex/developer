@@ -9,6 +9,8 @@ use bevy_panorbit_camera::PanOrbitCameraPlugin;
 mod accurate_boundary_layer_prepare;
 #[cfg(test)]
 mod accurate_boundary_layer_coverage;
+#[cfg(test)]
+mod accurate_boundary_layer_shape_coverage;
 mod accurate_boundary_layer_tetgen;
 mod accurate_execute;
 mod accurate_exterior_admission;
