@@ -20,6 +20,7 @@ mod gpu_preview;
 mod model;
 mod scene;
 mod simulation;
+mod su2_preflight;
 mod surface_import;
 mod ui;
 
@@ -29,6 +30,7 @@ use accurate_recovery::AccurateRecoveryUi;
 use accurate_workspace::AccurateWorkspaceUi;
 use model::ProjectState;
 use simulation::SimulationRuntime;
+use su2_preflight::Su2Preflight;
 use surface_import::SurfaceImportRuntime;
 
 const STARTUP_SMOKE_ARG: &str = "--startup-smoke";
@@ -44,6 +46,7 @@ fn main() {
         .init_resource::<AccurateExecutionRuntime>()
         .init_resource::<AccurateRecoveryUi>()
         .init_resource::<AccurateWorkspaceUi>()
+        .init_resource::<Su2Preflight>()
         .init_resource::<SurfaceImportRuntime>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -63,6 +66,7 @@ fn main() {
             gpu_preview::GpuPreviewPlugin,
         ))
         .add_systems(Startup, scene::setup)
+        .add_systems(Startup, su2_preflight::initialize_su2_preflight)
         .add_systems(
             Update,
             accurate_prepare::poll_accurate_prepare_completion,
@@ -94,8 +98,11 @@ fn main() {
                 accurate_recovery::draw_accurate_recovery_notice,
                 accurate_prepare::draw_accurate_prepare_ui
                     .run_if(accurate_workspace::prepare_tab_selected),
-                accurate_execute::draw_accurate_execute_ui
+                su2_preflight::draw_su2_preflight_gate
                     .run_if(accurate_workspace::run_tab_selected),
+                accurate_execute::draw_accurate_execute_ui
+                    .run_if(accurate_workspace::run_tab_selected)
+                    .run_if(su2_preflight::su2_execution_ready),
             )
                 .chain(),
         );
