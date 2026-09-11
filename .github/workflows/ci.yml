@@ -61,6 +61,10 @@ jobs:
         env:
           AEROFORGE_REQUIRE_REAL_TETGEN: "1"
         run: cargo test -p aeroforge-accurate-backend configured_real_tetgen_reaches_validated_handoff --locked -- --nocapture
+      - name: Validate desktop boundary-layer TetGen merge handoff
+        env:
+          AEROFORGE_REQUIRE_REAL_TETGEN: "1"
+        run: cargo test -p aeroforge-app configured_real_tetgen_builds_desktop_boundary_layer_handoff --locked -- --nocapture
       - name: Validate rounded real TetGen dihedral ownership
         env:
           AEROFORGE_REQUIRE_REAL_TETGEN: "1"
