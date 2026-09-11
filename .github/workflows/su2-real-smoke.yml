@@ -24,10 +24,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install external TetGen desktop dependency
+      - name: Install external TetGen dependency
         run: |
           sudo apt-get update
-          sudo apt-get install -y tetgen libasound2-dev libudev-dev
+          sudo apt-get install -y tetgen
           command -v tetgen
       - name: Report dependency lock
         run: sha256sum Cargo.lock
@@ -124,9 +124,6 @@ jobs:
       - name: Run AeroForge-generated SU2 8.5.0 cases
         run: cargo test -p aeroforge-accurate-backend --test su2_generated --locked -- --ignored --nocapture
       - name: Run boundary-layer TetGen case through SU2 8.5.0
-        env:
-          AEROFORGE_REQUIRE_REAL_TETGEN: "1"
-          AEROFORGE_REQUIRE_REAL_SU2: "1"
-        run: cargo test -p aeroforge-app configured_real_tetgen_boundary_layer_case_runs_through_su2_850 --locked -- --nocapture
+        run: cargo test -p aeroforge-accurate-backend --test boundary_layer_su2 boundary_layer_tetgen_mesh_runs_through_su2_850 --locked -- --ignored --nocapture
       - name: Run pinned upstream SU2 8.5.0 numerical regression
         run: cargo test -p aeroforge-accurate-backend --test su2_upstream upstream_inc_laminar_cylinder_matches_su2_850_regression --locked -- --ignored --nocapture
