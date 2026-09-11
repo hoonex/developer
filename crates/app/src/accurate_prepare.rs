@@ -11,6 +11,9 @@ use aeroforge_volume_core::{BlockBoundaryMarkers, BoundaryMarkerId};
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
+use crate::accurate_boundary_layer_prepare::{
+    prepare_boundary_layer_tetgen_from_state, LIMITED_ALPHA_BOUNDARY_LAYER_PRESET_LABEL,
+};
 use crate::accurate_prepared_case::AccuratePreparedCase;
 use crate::accurate_scene_geometry::voxelize_project_geometry_for_accurate;
 use crate::accurate_tetgen_prepare::{prepare_tetgen_from_state, snapshot_project_state};
@@ -22,6 +25,7 @@ pub const ACCURATE_PREPARE_CELL_LIMIT: u64 = 200_000;
 pub enum AccurateMeshPath {
     Staircase,
     ValidatedTetgen,
+    BoundaryLayerTetgen,
 }
 
 impl AccurateMeshPath {
@@ -29,6 +33,7 @@ impl AccurateMeshPath {
         match self {
             Self::Staircase => "Cartesian staircase",
             Self::ValidatedTetgen => "Validated external TetGen",
+            Self::BoundaryLayerTetgen => "Boundary layer + external TetGen",
         }
     }
 }
@@ -179,6 +184,11 @@ pub fn draw_accurate_prepare_ui(
                             AccurateMeshPath::ValidatedTetgen,
                             AccurateMeshPath::ValidatedTetgen.label(),
                         );
+                        ui.selectable_value(
+                            &mut runtime.selected_mesh_path,
+                            AccurateMeshPath::BoundaryLayerTetgen,
+                            AccurateMeshPath::BoundaryLayerTetgen.label(),
+                        );
                     });
 
                 match runtime.selected_mesh_path {
@@ -199,6 +209,20 @@ pub fn draw_accurate_prepare_ui(
                         );
                         ui.small(
                             "Source bodies must lie strictly inside the outer domain: touching the tunnel floor/walls is rejected by this exterior-mesher path.",
+                        );
+                    }
+                    AccurateMeshPath::BoundaryLayerTetgen => {
+                        ui.small(
+                            "Experimental limited-alpha path: generates tetrahedral wall-normal layers, remeshes the expanded outer interfaces with user-installed TetGen, welds both regions, then validates the final solver mesh against the original physical walls.",
+                        );
+                        ui.monospace(format!(
+                            "Validated preset: {LIMITED_ALPHA_BOUNDARY_LAYER_PRESET_LABEL}"
+                        ));
+                        ui.small(
+                            "The preset is a proven geometric smoke configuration, not an inferred y+ target or engineering mesh prescription. body_fitted_status, engineering_quality_status and y_plus_status remain not_established.",
+                        );
+                        ui.small(
+                            "Set TETGEN_EXECUTABLE or place tetgen(.exe) on PATH. Source bodies must remain strictly inside the outer domain after layer expansion.",
                         );
                     }
                 }
@@ -322,6 +346,9 @@ pub fn draw_accurate_prepare_ui(
                 let prepare_label = match runtime.selected_mesh_path {
                     AccurateMeshPath::Staircase => "Prepare staircase SU2 case",
                     AccurateMeshPath::ValidatedTetgen => "Prepare validated TetGen SU2 case",
+                    AccurateMeshPath::BoundaryLayerTetgen => {
+                        "Prepare boundary-layer + TetGen SU2 case"
+                    }
                 };
                 let prepare = ui
                     .add_enabled(can_prepare, egui::Button::new(prepare_label))
@@ -351,7 +378,20 @@ pub fn draw_accurate_prepare_ui(
                             }
                         }
                         AccurateMeshPath::ValidatedTetgen => {
-                            launch_tetgen_prepare(&mut runtime, &state, settings_snapshot);
+                            launch_external_prepare(
+                                &mut runtime,
+                                &state,
+                                settings_snapshot,
+                                AccurateMeshPath::ValidatedTetgen,
+                            );
+                        }
+                        AccurateMeshPath::BoundaryLayerTetgen => {
+                            launch_external_prepare(
+                                &mut runtime,
+                                &state,
+                                settings_snapshot,
+                                AccurateMeshPath::BoundaryLayerTetgen,
+                            );
                         }
                     }
                 }
@@ -359,7 +399,7 @@ pub fn draw_accurate_prepare_ui(
                 if runtime.status == AccuratePrepareStatus::Preparing {
                     ui.separator();
                     ui.label(format!(
-                        "TetGen preparation: running scene revision {}",
+                        "External mesh preparation: running scene revision {}",
                         runtime.preparing_revision.unwrap_or_default()
                     ));
                     ui.spinner();
@@ -400,7 +440,7 @@ pub fn draw_accurate_prepare_ui(
                     ui.separator();
                     if let Some(prepared_case) = &runtime.prepared_case {
                         ui.monospace(format!("Mesh path: {}", prepared_case.mesh_kind_label()));
-                        if !prepared_case.is_validated_tetgen() {
+                        if runtime.prepared_mesh_path == Some(AccurateMeshPath::Staircase) {
                             ui.monospace(format!("Solid cells: {}", summary.solid_cells));
                         }
                     }
@@ -462,11 +502,16 @@ fn collect_prepare_completion(runtime: &mut AccurateRuntime) {
     }
 }
 
-fn launch_tetgen_prepare(
+fn launch_external_prepare(
     runtime: &mut AccurateRuntime,
     state: &ProjectState,
     settings: AccurateSettings,
+    mesh_path: AccurateMeshPath,
 ) {
+    debug_assert!(matches!(
+        mesh_path,
+        AccurateMeshPath::ValidatedTetgen | AccurateMeshPath::BoundaryLayerTetgen
+    ));
     let snapshot = snapshot_project_state(state);
     let revision = state.revision;
     let completion_slot = Arc::clone(&runtime.completion);
@@ -476,11 +521,20 @@ fn launch_tetgen_prepare(
     runtime.last_error = None;
 
     thread::spawn(move || {
-        let result = prepare_tetgen_from_state(&snapshot, &settings);
+        let result = match mesh_path {
+            AccurateMeshPath::ValidatedTetgen => prepare_tetgen_from_state(&snapshot, &settings),
+            AccurateMeshPath::BoundaryLayerTetgen => {
+                prepare_boundary_layer_tetgen_from_state(&snapshot, &settings)
+            }
+            AccurateMeshPath::Staircase => Err(
+                "staircase preparation cannot be launched through the external-mesh worker"
+                    .to_owned(),
+            ),
+        };
         let completed = AccuratePrepareCompletion {
             revision,
             settings,
-            mesh_path: AccurateMeshPath::ValidatedTetgen,
+            mesh_path,
             result,
         };
         let mut slot = completion_slot
@@ -728,7 +782,7 @@ mod tests {
         runtime.summary = Some(summary);
         runtime.prepared_case = Some(AccuratePreparedCase::staircase(bundle));
         assert!(runtime.is_fresh_for(state.revision));
-        runtime.selected_mesh_path = AccurateMeshPath::ValidatedTetgen;
+        runtime.selected_mesh_path = AccurateMeshPath::BoundaryLayerTetgen;
         assert!(!runtime.is_fresh_for(state.revision));
     }
 }
