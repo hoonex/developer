@@ -1,4 +1,5 @@
 mod boundary_layer;
+mod boundary_layer_tetgen;
 mod boundary_orientation;
 mod cancellable_su2;
 mod exterior_handoff;
@@ -55,6 +56,7 @@ mod tetgen_real_smoke;
 mod tetgen_wall_height_real_smoke;
 
 pub use boundary_layer::*;
+pub use boundary_layer_tetgen::*;
 pub use boundary_orientation::{
     orient_exterior_boundary_triangles, BoundaryOrientationError,
     OrientedExteriorBoundaryTriangle,
@@ -151,8 +153,7 @@ pub use source_normal_variation::{
     validate_source_boundary_discrete_normal_variation,
     SourceBoundaryDiscreteNormalVariationBodyReport,
     SourceBoundaryDiscreteNormalVariationError,
-    SourceBoundaryDiscreteNormalVariationPolicy,
-    SourceBoundaryDiscreteNormalVariationReport,
+    SourceBoundaryDiscreteNormalVariationPolicy, SourceBoundaryDiscreteNormalVariationReport,
 };
 pub use su2::{
     discover_su2, probe_su2_banner, run_su2_case, FlowModel, InletBoundary, Su2Case,
@@ -221,8 +222,7 @@ pub use tetgen_runner::{
 };
 pub use tetgen_skewness_handoff::{
     validate_tetgen_external_handoff_with_face_centroid_skewness,
-    SkewnessValidatedTetgenExteriorHandoff,
-    SkewnessValidatedTetgenExteriorHandoffError,
+    SkewnessValidatedTetgenExteriorHandoff, SkewnessValidatedTetgenExteriorHandoffError,
 };
 pub use tetgen_skewness_validated_case::{
     prepare_skewness_tetgen_validated_exterior_su2_case_directory,
