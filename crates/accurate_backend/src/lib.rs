@@ -1,5 +1,6 @@
 mod boundary_layer;
 mod boundary_layer_tetgen;
+mod boundary_layer_tetgen_merge;
 mod boundary_orientation;
 mod cancellable_su2;
 mod exterior_handoff;
@@ -57,6 +58,7 @@ mod tetgen_wall_height_real_smoke;
 
 pub use boundary_layer::*;
 pub use boundary_layer_tetgen::*;
+pub use boundary_layer_tetgen_merge::*;
 pub use boundary_orientation::{
     orient_exterior_boundary_triangles, BoundaryOrientationError,
     OrientedExteriorBoundaryTriangle,
