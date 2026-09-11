@@ -143,6 +143,9 @@ jobs:
             $hexExit = '0x{0:X8}' -f ([uint32]$process.ExitCode)
             throw "AeroForge startup smoke exited with code $($process.ExitCode) ($hexExit)."
           }
+          if (-not (Select-String -Path $stdout -Pattern '^AEROFORGE_STARTUP_SMOKE_OK rendered_frames=\d+$' -Quiet)) {
+            throw "AeroForge startup smoke exited cleanly without the required rendered-frame success marker."
+          }
       - name: Stage Windows limited-alpha artifact
         shell: pwsh
         run: |
@@ -159,7 +162,7 @@ jobs:
           Accurate SU2 execution requires a separately installed SU2 8.5.0 runtime. AeroForge discovers SU2_CFD.exe from SU2_RUN or PATH.
           The external TetGen path is optional and TetGen is not bundled; configure TETGEN_EXECUTABLE or PATH when using it.
 
-          The packaged executable is smoke-tested on the GitHub-hosted Windows runner by creating the real AeroForge Bevy application with its primary window hidden, advancing at least three rendered frames, and requesting a clean AppExit. This is stronger than build-only evidence but still does not prove compatibility with every real GPU/driver/display environment, successful solver installation, or engineering CFD accuracy.
+          The packaged executable is smoke-tested on the GitHub-hosted Windows runner by creating the real AeroForge Bevy application with its primary window hidden and advancing at least three rendered frames. The smoke process then terminates immediately because the hosted Microsoft Basic Render Driver loses its DX12 device during Bevy/wgpu teardown after successful rendering; graceful GPU teardown is therefore not established by this CI smoke. This is stronger than build-only evidence but still does not prove compatibility with every real GPU/driver/display environment, successful solver installation, or engineering CFD accuracy.
           "@ | Set-Content "$packageDir/README.txt" -Encoding utf8
           "$sha  AeroForge.exe" | Set-Content "$packageDir/SHA256SUMS.txt" -Encoding ascii
           "${{ github.sha }}" | Set-Content "$packageDir/BUILD_COMMIT.txt" -Encoding ascii

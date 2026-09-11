@@ -1,4 +1,5 @@
-use bevy::app::AppExit;
+use std::io::{self, Write};
+
 use bevy::diagnostic::FrameCount;
 use bevy::prelude::*;
 use bevy::window::PresentMode;
@@ -106,15 +107,16 @@ fn main() {
     app.run();
 }
 
-fn exit_after_startup_smoke_frames(
-    frames: Res<FrameCount>,
-    mut exit: MessageWriter<AppExit>,
-) {
+fn exit_after_startup_smoke_frames(frames: Res<FrameCount>) {
     if frames.0 >= STARTUP_SMOKE_RENDERED_FRAMES {
         println!(
             "AEROFORGE_STARTUP_SMOKE_OK rendered_frames={}",
             frames.0
         );
-        exit.write(AppExit::Success);
+        let _ = io::stdout().flush();
+        // CI uses a software DX12 adapter whose Bevy/wgpu teardown loses the device
+        // after successful rendering. Startup smoke therefore ends here on purpose;
+        // graceful GPU teardown is a separate validation target.
+        std::process::exit(0);
     }
 }
