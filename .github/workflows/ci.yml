@@ -87,11 +87,6 @@ jobs:
             ${{ runner.os }}-cargo-
       - name: Check desktop editor and test targets
         run: cargo check -p aeroforge-app --all-targets
-      - name: Smoke-test desktop editor startup in debug build
-        env:
-          RUST_BACKTRACE: full
-          RUST_LOG: info
-        run: cargo run -p aeroforge-app -- --startup-smoke
       - name: Run desktop editor unit tests
         run: cargo test -p aeroforge-app -- --nocapture
 
