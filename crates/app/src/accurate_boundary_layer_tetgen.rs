@@ -9,12 +9,18 @@ use aeroforge_accurate_backend::{
     prepare_validated_exterior_su2_case_directory_with_reference,
     rebuild_tetgen_input_around_boundary_layers, run_tetgen_for_handoff,
     validate_candidate_exterior_mesher_handoff, validate_exterior_mesher_source_clearance,
+    validate_tetrahedral_dihedral_quality, validate_tetrahedral_face_centroid_skewness,
+    validate_tetrahedral_face_orthogonality, validate_tetrahedral_size_transition,
     AccurateImportedSurfacePolicy, BoundTetgenExternalRun, BoundaryLayerTetgenMergePolicy,
     BoundaryLayerTetgenMergeReport, BoundarySource, ClearanceValidatedExteriorMesherInput,
     ExteriorMeshQualityPolicy, GeneratedSu2CaseBundle, GeneratedTetrahedralBoundaryLayer,
     PreparedGeneratedSu2Case, SourceSurfaceCorrespondencePolicy, Su2Case,
-    Su2CoefficientReference, TetrahedralBoundaryLayerPolicy, TetrahedralOverlapPolicy,
-    TetgenHoleSeedPolicy, ValidatedExteriorMesherHandoff,
+    Su2CoefficientReference, TetrahedralBoundaryLayerPolicy, TetrahedralDihedralQualityPolicy,
+    TetrahedralDihedralQualityReport, TetrahedralFaceCentroidSkewnessPolicy,
+    TetrahedralFaceCentroidSkewnessReport, TetrahedralFaceOrthogonalityPolicy,
+    TetrahedralFaceOrthogonalityReport, TetrahedralOverlapPolicy,
+    TetrahedralSizeTransitionPolicy, TetrahedralSizeTransitionReport, TetgenHoleSeedPolicy,
+    ValidatedExteriorMesherHandoff,
 };
 use aeroforge_volume_core::BoundaryMarkerId;
 
@@ -51,6 +57,7 @@ const DESKTOP_BOUNDARY_LAYER_FINAL_CORRESPONDENCE_POLICY: SourceSurfaceCorrespon
         distance_tolerance: 1.0e-9,
         max_point_triangle_tests: 20_000_000,
     };
+const DESKTOP_BOUNDARY_LAYER_MERGED_QUALITY_MAX_FACE_TESTS: usize = 20_000_000;
 
 /// Retained evidence for the desktop boundary-layer + external-TetGen path.
 ///
@@ -58,8 +65,8 @@ const DESKTOP_BOUNDARY_LAYER_FINAL_CORRESPONDENCE_POLICY: SourceSurfaceCorrespon
 /// generated physical-wall-to-outer-interface tetrahedra and their explicit policy-derived reports.
 /// `tetgen_run` owns the expanded outer-shell TetGen input, deterministic PLC, process result and
 /// hole-seed policy. `handoff` is validated again against the original physical source surfaces
-/// after the interface weld. This type intentionally does not claim body-fitted fidelity, y+
-/// adequacy, solver-specific engineering mesh quality, convergence, or CFD accuracy.
+/// after the interface weld. The merged-mesh quality reports are complete report-only measurements
+/// on that exact solver-visible mesh; they intentionally do not promote engineering quality.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DesktopBoundaryLayerTetgenHandoff {
     pub source_input: ClearanceValidatedExteriorMesherInput,
@@ -69,6 +76,10 @@ pub(crate) struct DesktopBoundaryLayerTetgenHandoff {
     pub merge_policy: BoundaryLayerTetgenMergePolicy,
     pub merge_report: BoundaryLayerTetgenMergeReport,
     pub handoff: ValidatedExteriorMesherHandoff,
+    pub merged_dihedral_quality: TetrahedralDihedralQualityReport,
+    pub merged_face_orthogonality: TetrahedralFaceOrthogonalityReport,
+    pub merged_size_transition: TetrahedralSizeTransitionReport,
+    pub merged_face_centroid_skewness: TetrahedralFaceCentroidSkewnessReport,
 }
 
 /// Runs one complete desktop geometry path from original physical walls through explicit
@@ -171,6 +182,48 @@ pub(crate) fn run_project_tetgen_boundary_layer_handoff(
         format!("desktop boundary-layer merged solver handoff rejected: {error}")
     })?;
 
+    let merged_dihedral_quality = validate_tetrahedral_dihedral_quality(
+        &handoff.mesh,
+        TetrahedralDihedralQualityPolicy {
+            minimum_dihedral_angle_radians: f64::MIN_POSITIVE,
+            maximum_dihedral_angle_radians: std::f64::consts::PI,
+        },
+    )
+    .map_err(|error| {
+        format!("desktop boundary-layer merged dihedral measurement failed: {error}")
+    })?;
+    let merged_face_orthogonality = validate_tetrahedral_face_orthogonality(
+        &handoff.mesh,
+        TetrahedralFaceOrthogonalityPolicy {
+            minimum_interior_face_orthogonality_cosine: 0.0,
+            minimum_boundary_face_orthogonality_cosine: 0.0,
+            max_face_tests: DESKTOP_BOUNDARY_LAYER_MERGED_QUALITY_MAX_FACE_TESTS,
+        },
+    )
+    .map_err(|error| {
+        format!("desktop boundary-layer merged face-orthogonality measurement failed: {error}")
+    })?;
+    let merged_size_transition = validate_tetrahedral_size_transition(
+        &handoff.mesh,
+        TetrahedralSizeTransitionPolicy {
+            maximum_adjacent_cell_volume_ratio: f64::MAX,
+            max_interior_face_tests: DESKTOP_BOUNDARY_LAYER_MERGED_QUALITY_MAX_FACE_TESTS,
+        },
+    )
+    .map_err(|error| {
+        format!("desktop boundary-layer merged size-transition measurement failed: {error}")
+    })?;
+    let merged_face_centroid_skewness = validate_tetrahedral_face_centroid_skewness(
+        &handoff.mesh,
+        TetrahedralFaceCentroidSkewnessPolicy {
+            maximum_face_centroid_skewness: f64::MAX,
+            max_interior_face_tests: DESKTOP_BOUNDARY_LAYER_MERGED_QUALITY_MAX_FACE_TESTS,
+        },
+    )
+    .map_err(|error| {
+        format!("desktop boundary-layer merged centroid-skewness measurement failed: {error}")
+    })?;
+
     Ok(DesktopBoundaryLayerTetgenHandoff {
         source_input,
         layer_policy,
@@ -179,6 +232,10 @@ pub(crate) fn run_project_tetgen_boundary_layer_handoff(
         merge_policy: DESKTOP_BOUNDARY_LAYER_MERGE_POLICY,
         merge_report: merged.report,
         handoff,
+        merged_dihedral_quality,
+        merged_face_orthogonality,
+        merged_size_transition,
+        merged_face_centroid_skewness,
     })
 }
 
@@ -276,12 +333,20 @@ fn render_boundary_layer_tetgen_provenance(
         }};
     }
 
-    row!("format_version", 2);
+    row!("format_version", 3);
     row!("contract", "desktop_boundary_layer_tetgen_handoff");
     row!("boundary_layer_geometry_status", "generated_and_welded_tetrahedral_shell");
     row!("body_fitted_status", "not_established");
     row!("engineering_quality_status", "not_established");
     row!("y_plus_status", "not_established");
+    row!(
+        "merged_quality_status",
+        "report_only_engineering_quality_not_established"
+    );
+    row!(
+        "merged_quality_max_face_tests_budget",
+        DESKTOP_BOUNDARY_LAYER_MERGED_QUALITY_MAX_FACE_TESTS
+    );
     row!("layer_policy_first_layer_thickness", handoff.layer_policy.first_layer_thickness);
     row!("layer_policy_growth_ratio", handoff.layer_policy.growth_ratio);
     row!("layer_policy_layer_count", handoff.layer_policy.layer_count);
@@ -349,6 +414,79 @@ fn render_boundary_layer_tetgen_provenance(
     row!("final_tetrahedra", final_audit.cells);
     row!("final_boundary_triangles", final_audit.boundary_triangles);
     row!("final_source_correspondence_body_count", handoff.handoff.correspondence.bodies.len());
+    row!("merged_quality_dihedral_cells", handoff.merged_dihedral_quality.cells);
+    row!(
+        "merged_quality_dihedral_angle_tests",
+        handoff.merged_dihedral_quality.dihedral_angle_tests
+    );
+    row!(
+        "merged_quality_minimum_dihedral_angle_radians",
+        handoff.merged_dihedral_quality.minimum_dihedral_angle_radians
+    );
+    row!(
+        "merged_quality_maximum_dihedral_angle_radians",
+        handoff.merged_dihedral_quality.maximum_dihedral_angle_radians
+    );
+    row!(
+        "merged_quality_orthogonality_interior_faces",
+        handoff.merged_face_orthogonality.interior_faces
+    );
+    row!(
+        "merged_quality_orthogonality_boundary_faces",
+        handoff.merged_face_orthogonality.boundary_faces
+    );
+    row!(
+        "merged_quality_orthogonality_face_tests",
+        handoff.merged_face_orthogonality.face_tests
+    );
+    row!(
+        "merged_quality_minimum_interior_face_orthogonality_cosine",
+        optional_f64(
+            handoff
+                .merged_face_orthogonality
+                .minimum_interior_face_orthogonality_cosine
+        )
+    );
+    row!(
+        "merged_quality_minimum_boundary_face_orthogonality_cosine",
+        optional_f64(
+            handoff
+                .merged_face_orthogonality
+                .minimum_boundary_face_orthogonality_cosine
+        )
+    );
+    row!(
+        "merged_quality_size_transition_interior_faces",
+        handoff.merged_size_transition.interior_faces
+    );
+    row!(
+        "merged_quality_size_transition_face_tests",
+        handoff.merged_size_transition.interior_face_tests
+    );
+    row!(
+        "merged_quality_maximum_adjacent_cell_volume_ratio",
+        optional_f64(
+            handoff
+                .merged_size_transition
+                .maximum_adjacent_cell_volume_ratio
+        )
+    );
+    row!(
+        "merged_quality_skewness_interior_faces",
+        handoff.merged_face_centroid_skewness.interior_faces
+    );
+    row!(
+        "merged_quality_skewness_face_tests",
+        handoff.merged_face_centroid_skewness.interior_face_tests
+    );
+    row!(
+        "merged_quality_maximum_face_centroid_skewness",
+        optional_f64(
+            handoff
+                .merged_face_centroid_skewness
+                .maximum_face_centroid_skewness
+        )
+    );
     row!("layer_count", handoff.layers.len());
     for (index, layer) in handoff.layers.iter().enumerate() {
         row!(&format!("layer_{index}_scene_object_id"), layer.report.scene_object_id);
@@ -377,6 +515,12 @@ fn render_boundary_layer_tetgen_provenance(
         row!(&format!("layer_{index}_overlap_sat_pair_tests"), layer.report.overlap.sat_pair_tests);
     }
     out
+}
+
+fn optional_f64(value: Option<f64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unavailable".into())
 }
 
 fn write_create_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -484,6 +628,10 @@ mod tests {
         assert!(result.merge_report.layer_tetrahedra > 0);
         assert!(result.merge_report.tetgen_tetrahedra > 0);
         assert_eq!(result.merge_report.combined_tetrahedra, audit.cells);
+        assert_eq!(result.merged_dihedral_quality.cells, audit.cells);
+        assert_eq!(result.merged_face_orthogonality.cells, audit.cells);
+        assert_eq!(result.merged_size_transition.cells, audit.cells);
+        assert_eq!(result.merged_face_centroid_skewness.cells, audit.cells);
         assert!(result.merge_report.welded_interface_vertices > 0);
         for layer in &result.layers {
             assert!(audit.marker_triangle_counts.contains_key(&layer.wall_marker));
@@ -520,17 +668,23 @@ mod tests {
             case_dir.join(BOUNDARY_LAYER_TETGEN_PROVENANCE_FILENAME),
         )
         .unwrap();
-        assert!(provenance.contains("format_version\t2\n"));
+        assert!(provenance.contains("format_version\t3\n"));
         assert!(provenance.contains("contract\tdesktop_boundary_layer_tetgen_handoff\n"));
         assert!(provenance.contains("boundary_layer_geometry_status\tgenerated_and_welded_tetrahedral_shell\n"));
         assert!(provenance.contains("body_fitted_status\tnot_established\n"));
         assert!(provenance.contains("engineering_quality_status\tnot_established\n"));
         assert!(provenance.contains("y_plus_status\tnot_established\n"));
+        assert!(provenance.contains("merged_quality_status\treport_only_engineering_quality_not_established\n"));
+        assert!(provenance.contains("merged_quality_max_face_tests_budget\t20000000\n"));
         assert!(provenance.contains("merge_layer_tetrahedra\t72\n"));
         assert!(provenance.contains("merge_tetgen_tetrahedra\t36\n"));
         assert!(provenance.contains("merge_combined_tetrahedra\t108\n"));
         assert!(provenance.contains("merge_welded_interface_vertices\t8\n"));
         assert!(provenance.contains("final_source_correspondence_body_count\t1\n"));
+        assert!(provenance.contains("merged_quality_minimum_dihedral_angle_radians\t"));
+        assert!(provenance.contains("merged_quality_minimum_interior_face_orthogonality_cosine\t"));
+        assert!(provenance.contains("merged_quality_maximum_adjacent_cell_volume_ratio\t"));
+        assert!(provenance.contains("merged_quality_maximum_face_centroid_skewness\t"));
         assert!(provenance.contains("layer_0_minimum_vertex_face_normal_projection\t"));
         assert!(provenance.contains("layer_0_maximum_vertex_normal_amplification\t"));
         assert!(case_dir.join(BOUNDARY_LAYER_TETGEN_INPUT_FILENAME).is_file());
@@ -539,7 +693,7 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
 
         println!(
-            "AEROFORGE_DESKTOP_TETGEN_BOUNDARY_LAYER=PASS bodies={} layer_tets={} tetgen_tets={} combined_tets={} welded_vertices={} source_correspondence_bodies={} persisted_provenance=v2",
+            "AEROFORGE_DESKTOP_TETGEN_BOUNDARY_LAYER=PASS bodies={} layer_tets={} tetgen_tets={} combined_tets={} welded_vertices={} source_correspondence_bodies={} persisted_provenance=v3 merged_quality=report_only",
             result.layers.len(),
             result.merge_report.layer_tetrahedra,
             result.merge_report.tetgen_tetrahedra,

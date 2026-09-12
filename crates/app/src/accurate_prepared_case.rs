@@ -123,7 +123,7 @@ impl AccuratePreparedCase {
     /// Direct TetGen persistence rebuilds the exact solver bundle from the retained `Su2Case` and
     /// nested generic validated handoff, then writes the exact PLC plus complete format-v12
     /// provenance for evidence actually measured on that direct-TetGen mesh. Boundary-layer/TetGen
-    /// persistence instead writes the generic final exterior handoff plus its dedicated format-v2
+    /// persistence instead writes the generic final exterior handoff plus its dedicated format-v3
     /// layer/outer-TetGen/weld sidecar, avoiding false reuse of direct-TetGen v12 measurements.
     pub fn persist(
         &self,
