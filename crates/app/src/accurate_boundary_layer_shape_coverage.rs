@@ -1,9 +1,16 @@
+use aeroforge_accurate_backend::{
+    validate_tetrahedral_dihedral_quality, validate_tetrahedral_face_centroid_skewness,
+    validate_tetrahedral_face_orthogonality, validate_tetrahedral_size_transition,
+    TetrahedralDihedralQualityPolicy, TetrahedralFaceCentroidSkewnessPolicy,
+    TetrahedralFaceOrthogonalityPolicy, TetrahedralSizeTransitionPolicy,
+};
 use bevy::prelude::Vec3;
 
 use crate::accurate_boundary_layer_prepare::{
     prepare_boundary_layer_tetgen_from_state, AccurateBoundaryLayerSettings,
 };
 use crate::accurate_prepare::AccurateSettings;
+use crate::accurate_prepared_case::AccuratePreparedCase;
 use crate::model::{PrimitiveKind, ProjectState};
 
 fn real_tetgen_enabled() -> bool {
@@ -11,6 +18,67 @@ fn real_tetgen_enabled() -> bool {
         .ok()
         .as_deref()
         == Some("1")
+}
+
+fn report_merged_quality(label: &str, prepared_case: &AccuratePreparedCase) {
+    let mesh = match prepared_case {
+        AccuratePreparedCase::BoundaryLayerTetgen { handoff, .. } => &handoff.handoff.mesh,
+        _ => panic!("shape coverage must retain the boundary-layer TetGen handoff"),
+    };
+
+    // Deliberately permissive policies turn the existing complete validators into measurement
+    // passes. They reject invalid/non-finite geometry and work-budget exhaustion, but do not encode
+    // an engineering-quality acceptance threshold for these report-only observations.
+    let dihedral = validate_tetrahedral_dihedral_quality(
+        mesh,
+        TetrahedralDihedralQualityPolicy {
+            minimum_dihedral_angle_radians: f64::MIN_POSITIVE,
+            maximum_dihedral_angle_radians: std::f64::consts::PI,
+        },
+    )
+    .expect("merged boundary-layer mesh must yield complete dihedral measurements");
+    let orthogonality = validate_tetrahedral_face_orthogonality(
+        mesh,
+        TetrahedralFaceOrthogonalityPolicy {
+            minimum_interior_face_orthogonality_cosine: 0.0,
+            minimum_boundary_face_orthogonality_cosine: 0.0,
+            max_face_tests: usize::MAX,
+        },
+    )
+    .expect("merged boundary-layer mesh must yield complete face-orthogonality measurements");
+    let size_transition = validate_tetrahedral_size_transition(
+        mesh,
+        TetrahedralSizeTransitionPolicy {
+            maximum_adjacent_cell_volume_ratio: f64::MAX,
+            max_interior_face_tests: usize::MAX,
+        },
+    )
+    .expect("merged boundary-layer mesh must yield complete size-transition measurements");
+    let skewness = validate_tetrahedral_face_centroid_skewness(
+        mesh,
+        TetrahedralFaceCentroidSkewnessPolicy {
+            maximum_face_centroid_skewness: f64::MAX,
+            max_interior_face_tests: usize::MAX,
+        },
+    )
+    .expect("merged boundary-layer mesh must yield complete centroid-skewness measurements");
+
+    assert_eq!(dihedral.cells, mesh.cells.len());
+    assert_eq!(orthogonality.cells, mesh.cells.len());
+    assert_eq!(size_transition.cells, mesh.cells.len());
+    assert_eq!(skewness.cells, mesh.cells.len());
+
+    println!(
+        "AEROFORGE_BOUNDARY_LAYER_MERGED_QUALITY=REPORT_ONLY shape={} engineering_quality_status=not_established cells={} min_dihedral_rad={} max_dihedral_rad={} min_interior_orthogonality_cos={:?} min_boundary_orthogonality_cos={:?} max_adjacent_volume_ratio={:?} max_centroid_skewness={:?}",
+        label,
+        mesh.cells.len(),
+        dihedral.minimum_dihedral_angle_radians,
+        dihedral.maximum_dihedral_angle_radians,
+        orthogonality.minimum_interior_face_orthogonality_cosine,
+        orthogonality.minimum_boundary_face_orthogonality_cosine,
+        size_transition.maximum_adjacent_cell_volume_ratio,
+        skewness.maximum_face_centroid_skewness,
+    );
 }
 
 #[test]
@@ -45,6 +113,7 @@ fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_for_rounded_sphe
         .bundle()
         .config_text
         .contains(&format!("body_{sphere_id}")));
+    report_merged_quality("rounded_sphere", &prepared_case);
 
     println!(
         "AEROFORGE_BOUNDARY_LAYER_ROUNDED_SPHERE=PASS scene_object_id={} tetrahedra={}",
@@ -93,6 +162,7 @@ fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_for_sharp_rim_cy
         .bundle()
         .config_text
         .contains(&format!("body_{cylinder_id}")));
+    report_merged_quality("sharp_rim_cylinder", &prepared_case);
 
     println!(
         "AEROFORGE_BOUNDARY_LAYER_SHARP_RIM_CYLINDER=PASS scene_object_id={} tetrahedra={} settings={}",
