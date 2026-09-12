@@ -4,6 +4,7 @@ use aeroforge_accurate_backend::{
     TetrahedralDihedralQualityPolicy, TetrahedralFaceCentroidSkewnessPolicy,
     TetrahedralFaceOrthogonalityPolicy, TetrahedralSizeTransitionPolicy,
 };
+use aeroforge_volume_core::VolumeMesh;
 use bevy::prelude::Vec3;
 
 use crate::accurate_boundary_layer_prepare::{
@@ -13,6 +14,8 @@ use crate::accurate_prepare::AccurateSettings;
 use crate::accurate_prepared_case::AccuratePreparedCase;
 use crate::model::{PrimitiveKind, ProjectState};
 
+const REPORT_MAX_FACE_TESTS: usize = 20_000_000;
+
 fn real_tetgen_enabled() -> bool {
     std::env::var("AEROFORGE_REQUIRE_REAL_TETGEN")
         .ok()
@@ -20,15 +23,7 @@ fn real_tetgen_enabled() -> bool {
         == Some("1")
 }
 
-fn report_merged_quality(label: &str, prepared_case: &AccuratePreparedCase) {
-    let mesh = match prepared_case {
-        AccuratePreparedCase::BoundaryLayerTetgen { handoff, .. } => &handoff.handoff.mesh,
-        _ => panic!("shape coverage must retain the boundary-layer TetGen handoff"),
-    };
-
-    // Deliberately permissive policies turn the existing complete validators into measurement
-    // passes. They reject invalid/non-finite geometry and work-budget exhaustion, but do not encode
-    // an engineering-quality acceptance threshold for these report-only observations.
+fn report_component_quality(shape: &str, component: &str, mesh: &VolumeMesh) {
     let dihedral = validate_tetrahedral_dihedral_quality(
         mesh,
         TetrahedralDihedralQualityPolicy {
@@ -36,32 +31,32 @@ fn report_merged_quality(label: &str, prepared_case: &AccuratePreparedCase) {
             maximum_dihedral_angle_radians: std::f64::consts::PI,
         },
     )
-    .expect("merged boundary-layer mesh must yield complete dihedral measurements");
+    .expect("boundary-layer component must yield complete dihedral measurements");
     let orthogonality = validate_tetrahedral_face_orthogonality(
         mesh,
         TetrahedralFaceOrthogonalityPolicy {
             minimum_interior_face_orthogonality_cosine: 0.0,
             minimum_boundary_face_orthogonality_cosine: 0.0,
-            max_face_tests: usize::MAX,
+            max_face_tests: REPORT_MAX_FACE_TESTS,
         },
     )
-    .expect("merged boundary-layer mesh must yield complete face-orthogonality measurements");
+    .expect("boundary-layer component must yield complete face-orthogonality measurements");
     let size_transition = validate_tetrahedral_size_transition(
         mesh,
         TetrahedralSizeTransitionPolicy {
             maximum_adjacent_cell_volume_ratio: f64::MAX,
-            max_interior_face_tests: usize::MAX,
+            max_interior_face_tests: REPORT_MAX_FACE_TESTS,
         },
     )
-    .expect("merged boundary-layer mesh must yield complete size-transition measurements");
+    .expect("boundary-layer component must yield complete size-transition measurements");
     let skewness = validate_tetrahedral_face_centroid_skewness(
         mesh,
         TetrahedralFaceCentroidSkewnessPolicy {
             maximum_face_centroid_skewness: f64::MAX,
-            max_interior_face_tests: usize::MAX,
+            max_interior_face_tests: REPORT_MAX_FACE_TESTS,
         },
     )
-    .expect("merged boundary-layer mesh must yield complete centroid-skewness measurements");
+    .expect("boundary-layer component must yield complete centroid-skewness measurements");
 
     assert_eq!(dihedral.cells, mesh.cells.len());
     assert_eq!(orthogonality.cells, mesh.cells.len());
@@ -69,8 +64,9 @@ fn report_merged_quality(label: &str, prepared_case: &AccuratePreparedCase) {
     assert_eq!(skewness.cells, mesh.cells.len());
 
     println!(
-        "AEROFORGE_BOUNDARY_LAYER_MERGED_QUALITY=REPORT_ONLY shape={} engineering_quality_status=not_established cells={} min_dihedral_rad={} max_dihedral_rad={} min_interior_orthogonality_cos={:?} min_boundary_orthogonality_cos={:?} max_adjacent_volume_ratio={:?} max_centroid_skewness={:?}",
-        label,
+        "AEROFORGE_BOUNDARY_LAYER_COMPONENT_QUALITY=REPORT_ONLY shape={} component={} engineering_quality_status=not_established cells={} min_dihedral_rad={} max_dihedral_rad={} min_interior_orthogonality_cos={:?} min_boundary_orthogonality_cos={:?} max_adjacent_volume_ratio={:?} max_centroid_skewness={:?}",
+        shape,
+        component,
         mesh.cells.len(),
         dihedral.minimum_dihedral_angle_radians,
         dihedral.maximum_dihedral_angle_radians,
@@ -79,6 +75,47 @@ fn report_merged_quality(label: &str, prepared_case: &AccuratePreparedCase) {
         size_transition.maximum_adjacent_cell_volume_ratio,
         skewness.maximum_face_centroid_skewness,
     );
+}
+
+fn report_merged_quality(label: &str, prepared_case: &AccuratePreparedCase) {
+    let handoff = match prepared_case {
+        AccuratePreparedCase::BoundaryLayerTetgen { handoff, .. } => handoff,
+        _ => panic!("shape coverage must retain the boundary-layer TetGen handoff"),
+    };
+    let mesh = &handoff.handoff.mesh;
+
+    // The final solver-visible values are the authoritative bounded report owned by the handoff.
+    // Component-only measurements below diagnose whether poor quality originates in the retained
+    // layer shell or the external TetGen fill; they never promote engineering quality.
+    assert_eq!(handoff.merged_dihedral_quality.cells, mesh.cells.len());
+    assert_eq!(handoff.merged_face_orthogonality.cells, mesh.cells.len());
+    assert_eq!(handoff.merged_size_transition.cells, mesh.cells.len());
+    assert_eq!(handoff.merged_face_centroid_skewness.cells, mesh.cells.len());
+
+    println!(
+        "AEROFORGE_BOUNDARY_LAYER_MERGED_QUALITY=REPORT_ONLY shape={} engineering_quality_status=not_established cells={} min_dihedral_rad={} max_dihedral_rad={} min_interior_orthogonality_cos={:?} min_boundary_orthogonality_cos={:?} max_adjacent_volume_ratio={:?} max_centroid_skewness={:?}",
+        label,
+        mesh.cells.len(),
+        handoff.merged_dihedral_quality.minimum_dihedral_angle_radians,
+        handoff.merged_dihedral_quality.maximum_dihedral_angle_radians,
+        handoff
+            .merged_face_orthogonality
+            .minimum_interior_face_orthogonality_cosine,
+        handoff
+            .merged_face_orthogonality
+            .minimum_boundary_face_orthogonality_cosine,
+        handoff
+            .merged_size_transition
+            .maximum_adjacent_cell_volume_ratio,
+        handoff
+            .merged_face_centroid_skewness
+            .maximum_face_centroid_skewness,
+    );
+
+    for (index, layer) in handoff.layers.iter().enumerate() {
+        report_component_quality(label, &format!("layer_{index}"), &layer.mesh);
+    }
+    report_component_quality(label, "tetgen_far_field", &handoff.tetgen_run.run().parsed.mesh);
 }
 
 #[test]
