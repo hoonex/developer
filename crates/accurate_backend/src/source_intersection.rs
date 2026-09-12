@@ -534,6 +534,15 @@ fn segments_intersect_2d_beyond_ignore(
     let offset = sub_2d(second[0], first[0]);
 
     if denominator.abs() > area_epsilon {
+        // Two non-parallel straight segments that both contain the exact topologically shared
+        // endpoint can intersect only at that endpoint. Solving the nearly-parallel 2D line system
+        // can reconstruct the same endpoint a few ulps outside `distance_epsilon`; trust the exact
+        // mesh identity instead of widening the geometric tolerance. Collinear overlap remains on
+        // the branch below and is still rejected when it extends beyond the shared endpoint.
+        if ignore_point.is_some_and(|point| first.contains(&point) && second.contains(&point)) {
+            return false;
+        }
+
         let t = cross_2d(offset, second_direction) / denominator;
         let u = cross_2d(offset, first_direction) / denominator;
         if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
@@ -741,6 +750,27 @@ mod tests {
             shared,
             [0.21650634706020355, 3.433012694120407, 0.125],
             [0.34150633215904236, 3.353553384542465, 0.09150634706020355],
+        ];
+
+        assert!(!triangles_intersect(first, second, 1.0e-10, Some(shared)));
+    }
+
+    #[test]
+    fn shared_vertex_coplanar_edge_roundoff_is_not_a_false_intersection() {
+        // Exact outer-shell coordinates from the sharp-rim cylinder regression. The two cap
+        // triangles share only `shared`; their nearly collinear radial edges are non-overlapping.
+        // The generic 2D line solve reconstructed that shared endpoint about 1.18e-10 away from its
+        // exact coordinate and therefore exceeded a 1e-10 ignore radius by roundoff alone.
+        let shared = [0.5071110129356384, 2.821000011920929, 0.1358799934387207];
+        let first = [
+            [0.3499999940395355, 2.821000011920929, 0.0],
+            [0.3380740284919739, 2.821000011920929, 0.09058666229248047],
+            shared,
+        ];
+        let second = [
+            shared,
+            [0.6245612060573584, 2.821000011920929, 0.36059059808656024],
+            [0.6966075326256209, 2.821000011920929, 0.18665542622471887],
         ];
 
         assert!(!triangles_intersect(first, second, 1.0e-10, Some(shared)));
