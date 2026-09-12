@@ -13,20 +13,26 @@ use crate::tetra_overlap::{
     TetrahedralOverlapPolicy, TetrahedralOverlapReport,
 };
 
-/// Fail-closed upper bound for how far an angle-weighted vertex-normal direction may be amplified
-/// to preserve the requested face-normal spacing at sharp vertices. This is an algorithmic safety
-/// guard, not an engineering mesh-quality threshold.
+/// Fail-closed upper bound for the unit-offset displacement magnitude at a source vertex. This is
+/// an algorithmic safety guard, not an engineering mesh-quality threshold.
 const MAX_VERTEX_NORMAL_MITER_AMPLIFICATION: f64 = 4.0;
+/// Incident normals closer than this cosine tolerance are treated as the same geometric plane for
+/// the exact sharp/polyhedral miter solve. The final extrusion is still checked against every
+/// original incident face normal before use.
+const COPLANAR_NORMAL_COSINE_TOLERANCE: f64 = 1.0e-10;
+const MITER_LINEAR_SOLVE_EPSILON: f64 = 1.0e-12;
 
 /// Explicit geometric policy for constructing a tetrahedralized wall-normal layer block around
 /// one already-audited closed surface body.
 ///
-/// Layer thicknesses follow a geometric progression. Vertices use angle-weighted outward normal
-/// directions, then those directions are miter-scaled so the requested offset is preserved against
-/// every incident source-face normal. Excessive or non-positive miter projection fails closed.
-/// Each triangular shell prism is split deterministically into three tetrahedra using globally
-/// sorted source vertex ids, which keeps shared prism side diagonals conforming between neighboring
-/// source triangles.
+/// Layer thicknesses follow a geometric progression. At vertices with at most three distinct
+/// incident face planes, the extrusion is the exact minimum-plane-offset miter: each incident plane
+/// is displaced by the requested normal spacing independent of how that plane was triangulated.
+/// More continuously curved vertices retain the angle-weighted-normal fallback. Every candidate is
+/// checked against all incident face normals and excessive amplification fails closed. Each
+/// triangular shell prism is split deterministically into three tetrahedra using globally sorted
+/// source vertex ids, which keeps shared prism side diagonals conforming between neighboring source
+/// triangles.
 ///
 /// This policy does not claim engineering near-wall adequacy. In particular it does not infer y+,
 /// a turbulence-model target, a dimensional unit system, CAD feature semantics, or a safe layer
@@ -56,11 +62,11 @@ pub struct TetrahedralBoundaryLayerReport {
     pub growth_ratio: f64,
     pub total_thickness: f64,
     pub maximum_adjacent_face_normal_angle_radians: f64,
-    /// Smallest cosine projection from a unit angle-weighted vertex normal onto any incident face
-    /// normal before miter scaling. Values near zero require large amplification and are rejected by
-    /// the bounded miter guard.
+    /// Smallest cosine projection from the selected unit extrusion direction onto any incident face
+    /// normal. Values near zero require large unit-offset displacement and are rejected by the
+    /// bounded miter guard.
     pub minimum_vertex_face_normal_projection: f64,
-    /// Largest miter amplification actually applied to any source vertex.
+    /// Largest unit-offset displacement magnitude actually applied to any source vertex.
     pub maximum_vertex_normal_amplification: f64,
     pub minimum_tetrahedron_volume: f64,
     pub maximum_tetrahedron_volume: f64,
@@ -147,11 +153,11 @@ impl Display for TetrahedralBoundaryLayerError {
             ),
             Self::InvalidVertexNormal { vertex } => write!(
                 f,
-                "boundary-layer source vertex {vertex} has no finite angle-weighted outward normal"
+                "boundary-layer source vertex {vertex} has no finite outward extrusion direction"
             ),
             Self::InvalidVertexFaceNormalProjection { vertex, projection } => write!(
                 f,
-                "boundary-layer source vertex {vertex} angle-weighted normal has non-positive/non-finite incident-face projection {projection}; safe outward miter extrusion is not established"
+                "boundary-layer source vertex {vertex} extrusion has non-positive/non-finite incident-face projection {projection}; safe outward miter extrusion is not established"
             ),
             Self::VertexNormalMiterAmplificationExceeded {
                 vertex,
@@ -668,18 +674,46 @@ fn face_spacing_preserving_vertex_extrusions(
     let mut minimum_projection = f64::INFINITY;
     let mut maximum_amplification = 1.0_f64;
     let mut extrusions = Vec::with_capacity(vertex_normals.len());
-    for (vertex, &normal) in vertex_normals.iter().enumerate() {
-        let projection = incident_faces[vertex]
+    for (vertex, &fallback_normal) in vertex_normals.iter().enumerate() {
+        let mut distinct_normals = Vec::<[f64; 3]>::new();
+        for &face in &incident_faces[vertex] {
+            let candidate = face_normals[face];
+            if !distinct_normals.iter().any(|normal| {
+                dot(*normal, candidate) >= 1.0 - COPLANAR_NORMAL_COSINE_TOLERANCE
+            }) {
+                distinct_normals.push(candidate);
+            }
+        }
+
+        let exact_miter = if distinct_normals.len() <= 3 {
+            exact_polyhedral_miter(&distinct_normals)
+        } else {
+            None
+        };
+        let mut extrusion = exact_miter.unwrap_or(fallback_normal);
+        let mut spacing = incident_faces[vertex]
             .iter()
-            .map(|&face| dot(normal, face_normals[face]))
+            .map(|&face| dot(extrusion, face_normals[face]))
             .fold(f64::INFINITY, f64::min);
-        if !projection.is_finite() || projection <= 0.0 {
+        if !spacing.is_finite() || spacing <= 0.0 {
             return Err(TetrahedralBoundaryLayerError::InvalidVertexFaceNormalProjection {
                 vertex,
-                projection,
+                projection: spacing,
             });
         }
-        let amplification = 1.0 / projection;
+
+        // Exact plane solves should already have spacing 1.0. This final all-face rescale makes the
+        // coplanar-normal clustering numerically conservative and is also the legacy fallback for
+        // continuously curved vertices with more than three distinct incident normals.
+        if spacing < 1.0 {
+            for value in &mut extrusion {
+                *value /= spacing;
+            }
+            spacing = 1.0;
+        }
+        debug_assert!(spacing >= 1.0 - 1.0e-12);
+
+        let amplification = dot(extrusion, extrusion).sqrt();
         if !amplification.is_finite()
             || amplification > MAX_VERTEX_NORMAL_MITER_AMPLIFICATION
         {
@@ -691,15 +725,65 @@ fn face_spacing_preserving_vertex_extrusions(
                 },
             );
         }
+        let direction = normalized(extrusion)
+            .ok_or(TetrahedralBoundaryLayerError::InvalidVertexNormal { vertex })?;
+        let projection = incident_faces[vertex]
+            .iter()
+            .map(|&face| dot(direction, face_normals[face]))
+            .fold(f64::INFINITY, f64::min);
+        if !projection.is_finite() || projection <= 0.0 {
+            return Err(TetrahedralBoundaryLayerError::InvalidVertexFaceNormalProjection {
+                vertex,
+                projection,
+            });
+        }
+
         minimum_projection = minimum_projection.min(projection);
         maximum_amplification = maximum_amplification.max(amplification);
-        extrusions.push([
-            normal[0] * amplification,
-            normal[1] * amplification,
-            normal[2] * amplification,
-        ]);
+        extrusions.push(extrusion);
     }
     Ok((extrusions, minimum_projection, maximum_amplification))
+}
+
+/// Returns the unit-normal-spacing miter for one, two, or three distinct incident planes. The
+/// returned displacement `d` satisfies `n_i · d = 1` for every supplied unit normal. For two planes
+/// this is the minimum-norm bisector solution; for three independent planes it is their exact plane
+/// intersection displacement. Singular/near-opposite constraints fall back to the angle-weighted
+/// path so the existing positivity/amplification gates remain authoritative.
+fn exact_polyhedral_miter(normals: &[[f64; 3]]) -> Option<[f64; 3]> {
+    match normals {
+        [] => None,
+        [normal] => Some(*normal),
+        [first, second] => {
+            let denominator = 1.0 + dot(*first, *second);
+            if !denominator.is_finite() || denominator <= MITER_LINEAR_SOLVE_EPSILON {
+                return None;
+            }
+            Some([
+                (first[0] + second[0]) / denominator,
+                (first[1] + second[1]) / denominator,
+                (first[2] + second[2]) / denominator,
+            ])
+        }
+        [first, second, third] => {
+            let second_cross_third = cross(*second, *third);
+            let determinant = dot(*first, second_cross_third);
+            if !determinant.is_finite() || determinant.abs() <= MITER_LINEAR_SOLVE_EPSILON {
+                return None;
+            }
+            let third_cross_first = cross(*third, *first);
+            let first_cross_second = cross(*first, *second);
+            Some([
+                (second_cross_third[0] + third_cross_first[0] + first_cross_second[0])
+                    / determinant,
+                (second_cross_third[1] + third_cross_first[1] + first_cross_second[1])
+                    / determinant,
+                (second_cross_third[2] + third_cross_first[2] + first_cross_second[2])
+                    / determinant,
+            ])
+        }
+        _ => None,
+    }
 }
 
 fn signed_tetrahedron_volume(points: &[[f64; 3]], vertices: [u32; 4]) -> f64 {
@@ -872,6 +956,22 @@ mod tests {
             assert!((dot(displacement, face_normal) - 0.05).abs() < 1.0e-12);
         }
         assert!((dot(displacement, displacement).sqrt() - 0.05 * 3.0_f64.sqrt()).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn exact_three_plane_miter_is_triangulation_weight_independent() {
+        let half_angle = std::f64::consts::PI / 24.0;
+        let side_a = [half_angle.cos(), 0.0, half_angle.sin()];
+        let side_b = [half_angle.cos(), 0.0, -half_angle.sin()];
+        let cap = [0.0, 1.0, 0.0];
+        let miter = exact_polyhedral_miter(&[cap, side_a, side_b]).unwrap();
+
+        assert!((dot(miter, cap) - 1.0).abs() < 1.0e-12);
+        assert!((dot(miter, side_a) - 1.0).abs() < 1.0e-12);
+        assert!((dot(miter, side_b) - 1.0).abs() < 1.0e-12);
+        assert!((miter[1] - 1.0).abs() < 1.0e-12);
+        assert!((miter[0] - 1.0 / half_angle.cos()).abs() < 1.0e-12);
+        assert!(miter[2].abs() < 1.0e-12);
     }
 
     #[test]
