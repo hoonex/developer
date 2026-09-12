@@ -1,0 +1,210 @@
+name: AeroForge CI
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  core-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Test numerical, geometry, volume and accurate-backend cores
+        run: cargo test -p aeroforge-flow-core -p aeroforge-geometry-core -p aeroforge-volume-core -p aeroforge-accurate-backend --locked -- --nocapture
+
+  tetgen-real-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install external TetGen test dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tetgen libasound2-dev libudev-dev
+          command -v tetgen
+      - name: Cache TetGen smoke Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-tetgen-desktop-v3-cargo-${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-tetgen-desktop-v3-cargo-
+            ${{ runner.os }}-tetgen-desktop-v2-cargo-
+            ${{ runner.os }}-cargo-
+      - name: Validate real TetGen PLC to exterior handoff
+        env:
+          AEROFORGE_REQUIRE_REAL_TETGEN: "1"
+        run: cargo test -p aeroforge-accurate-backend configured_real_tetgen_reaches_validated_handoff --locked -- --nocapture
+      - name: Validate desktop boundary-layer TetGen merge handoff
+        env:
+          AEROFORGE_REQUIRE_REAL_TETGEN: "1"
+        run: cargo test -p aeroforge-app configured_real_tetgen_builds_desktop_boundary_layer_handoff --locked -- --nocapture
+      - name: Validate rounded real TetGen dihedral ownership
+        env:
+          AEROFORGE_REQUIRE_REAL_TETGEN: "1"
+        run: cargo test -p aeroforge-accurate-backend configured_real_tetgen_rounded_surface_reaches_facet_owned_handoff --locked -- --nocapture
+      - name: Validate desktop TetGen prepare and provenance persistence
+        env:
+          AEROFORGE_REQUIRE_REAL_TETGEN: "1"
+        run: cargo test -p aeroforge-app configured_real_tetgen_prepares_and_persists_desktop_case --locked -- --nocapture
+
+  app-check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Check desktop editor and test targets
+        run: cargo check -p aeroforge-app --all-targets --locked
+      - name: Run desktop editor unit tests
+        run: cargo test -p aeroforge-app --locked -- --nocapture
+
+  windows-alpha-package:
+    needs: app-check
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      AEROFORGE_SOURCE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      AEROFORGE_CI_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AEROFORGE_SOURCE_SHA }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Windows alpha release build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-alpha-release-cargo-${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-alpha-release-cargo-
+            ${{ runner.os }}-cargo-
+      - name: Build Windows limited-alpha executable
+        run: cargo build -p aeroforge-app --release --locked
+      - name: Smoke-test Windows limited-alpha executable
+        shell: pwsh
+        env:
+          RUST_BACKTRACE: full
+          RUST_LOG: info
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = (Resolve-Path "target/release/aeroforge-app.exe").Path
+          $stdout = Join-Path $env:RUNNER_TEMP "aeroforge-startup-smoke.stdout.log"
+          $stderr = Join-Path $env:RUNNER_TEMP "aeroforge-startup-smoke.stderr.log"
+          Remove-Item $stdout, $stderr -Force -ErrorAction SilentlyContinue
+          $process = Start-Process -FilePath $exe -ArgumentList "--startup-smoke" -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+          $timedOut = -not $process.WaitForExit(60000)
+          if ($timedOut) {
+            $process.Kill($true)
+            $process.WaitForExit()
+          }
+          Write-Host "=== AeroForge startup smoke stdout ==="
+          if (Test-Path $stdout) { Get-Content $stdout } else { Write-Host "<no stdout captured>" }
+          Write-Host "=== AeroForge startup smoke stderr ==="
+          if (Test-Path $stderr) { Get-Content $stderr } else { Write-Host "<no stderr captured>" }
+          if ($timedOut) {
+            throw "AeroForge startup smoke exceeded the 60-second bounded runtime."
+          }
+          if ($process.ExitCode -ne 0) {
+            $hexExit = '0x{0:X8}' -f ([uint32]$process.ExitCode)
+            throw "AeroForge startup smoke exited with code $($process.ExitCode) ($hexExit)."
+          }
+          if (-not (Select-String -Path $stdout -Pattern '^AEROFORGE_STARTUP_SMOKE_OK rendered_frames=\d+$' -Quiet)) {
+            throw "AeroForge startup smoke exited cleanly without the required rendered-frame success marker."
+          }
+      - name: Stage Windows limited-alpha artifact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $packageDir = "dist/AeroForge-Windows-x86_64"
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+          Copy-Item "target/release/aeroforge-app.exe" "$packageDir/AeroForge.exe"
+          Copy-Item "Cargo.lock" "$packageDir/Cargo.lock"
+          $exeSha = (Get-FileHash "$packageDir/AeroForge.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          $lockSha = (Get-FileHash "$packageDir/Cargo.lock" -Algorithm SHA256).Hash.ToLowerInvariant()
+          @"
+          AeroForge limited alpha
+
+          Run AeroForge.exe directly. This is an unsigned test build, not an installer or production release.
+
+          Accurate SU2 execution requires a separately installed SU2 8.5.0 runtime. AeroForge discovers SU2_CFD.exe from SU2_RUN or PATH.
+          The external TetGen path is optional and TetGen is not bundled; configure TETGEN_EXECUTABLE or PATH when using it.
+          Cargo.lock is included as build dependency provenance; CI builds with --locked so dependency resolution cannot drift from this file.
+
+          The packaged executable is smoke-tested on the GitHub-hosted Windows runner by creating the real AeroForge Bevy application with its primary window hidden and advancing at least three rendered frames. The smoke process then terminates immediately because the hosted Microsoft Basic Render Driver loses its DX12 device during Bevy/wgpu teardown after successful rendering; graceful GPU teardown is therefore not established by this CI smoke. This is stronger than build-only evidence but still does not prove compatibility with every real GPU/driver/display environment, successful solver installation, or engineering CFD accuracy.
+          "@ | Set-Content "$packageDir/README.txt" -Encoding utf8
+          @(
+            "$exeSha  AeroForge.exe",
+            "$lockSha  Cargo.lock"
+          ) | Set-Content "$packageDir/SHA256SUMS.txt" -Encoding ascii
+          $env:AEROFORGE_SOURCE_SHA | Set-Content "$packageDir/BUILD_COMMIT.txt" -Encoding ascii
+          $env:AEROFORGE_CI_SHA | Set-Content "$packageDir/CI_VALIDATION_COMMIT.txt" -Encoding ascii
+      - name: Upload Windows limited-alpha package
+        uses: actions/upload-artifact@v4
+        with:
+          name: AeroForge-Windows-x86_64-${{ env.AEROFORGE_SOURCE_SHA }}
+          path: dist/AeroForge-Windows-x86_64
+          if-no-files-found: error
+          retention-days: 14
+
+  gpu-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache GPU smoke Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-gpu-smoke-cargo-${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-gpu-smoke-cargo-
+            ${{ runner.os }}-cargo-
+      - name: Validate moving-wall GPU parity
+        run: cargo run -p aeroforge-gpu-smoke --bin aeroforge-gpu-smoke --locked
+      - name: Validate NEQ open-boundary GPU parity
+        run: cargo run -p aeroforge-gpu-smoke --bin open_boundary --locked
+      - name: Validate free-stream far-field GPU parity
+        run: cargo run -p aeroforge-gpu-smoke --bin far_field --locked
