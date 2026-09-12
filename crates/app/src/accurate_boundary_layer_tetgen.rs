@@ -276,7 +276,7 @@ fn render_boundary_layer_tetgen_provenance(
         }};
     }
 
-    row!("format_version", 1);
+    row!("format_version", 2);
     row!("contract", "desktop_boundary_layer_tetgen_handoff");
     row!("boundary_layer_geometry_status", "generated_and_welded_tetrahedral_shell");
     row!("body_fitted_status", "not_established");
@@ -359,6 +359,14 @@ fn render_boundary_layer_tetgen_provenance(
         row!(&format!("layer_{index}_generated_points"), layer.report.generated_points);
         row!(&format!("layer_{index}_generated_tetrahedra"), layer.report.generated_tetrahedra);
         row!(&format!("layer_{index}_total_thickness"), layer.report.total_thickness);
+        row!(
+            &format!("layer_{index}_minimum_vertex_face_normal_projection"),
+            layer.report.minimum_vertex_face_normal_projection
+        );
+        row!(
+            &format!("layer_{index}_maximum_vertex_normal_amplification"),
+            layer.report.maximum_vertex_normal_amplification
+        );
         row!(&format!("layer_{index}_minimum_tetrahedron_volume"), layer.report.minimum_tetrahedron_volume);
         row!(&format!("layer_{index}_maximum_tetrahedron_volume"), layer.report.maximum_tetrahedron_volume);
         row!(&format!("layer_{index}_overlap_cells"), layer.report.overlap.cells);
@@ -512,7 +520,7 @@ mod tests {
             case_dir.join(BOUNDARY_LAYER_TETGEN_PROVENANCE_FILENAME),
         )
         .unwrap();
-        assert!(provenance.contains("format_version\t1\n"));
+        assert!(provenance.contains("format_version\t2\n"));
         assert!(provenance.contains("contract\tdesktop_boundary_layer_tetgen_handoff\n"));
         assert!(provenance.contains("boundary_layer_geometry_status\tgenerated_and_welded_tetrahedral_shell\n"));
         assert!(provenance.contains("body_fitted_status\tnot_established\n"));
@@ -523,13 +531,15 @@ mod tests {
         assert!(provenance.contains("merge_combined_tetrahedra\t108\n"));
         assert!(provenance.contains("merge_welded_interface_vertices\t8\n"));
         assert!(provenance.contains("final_source_correspondence_body_count\t1\n"));
+        assert!(provenance.contains("layer_0_minimum_vertex_face_normal_projection\t"));
+        assert!(provenance.contains("layer_0_maximum_vertex_normal_amplification\t"));
         assert!(case_dir.join(BOUNDARY_LAYER_TETGEN_INPUT_FILENAME).is_file());
         assert!(case_dir.join("aeroforge_exterior_handoff.tsv").is_file());
         assert!(!case_dir.join("aeroforge_tetgen_handoff.tsv").exists());
         fs::remove_dir_all(&root).unwrap();
 
         println!(
-            "AEROFORGE_DESKTOP_TETGEN_BOUNDARY_LAYER=PASS bodies={} layer_tets={} tetgen_tets={} combined_tets={} welded_vertices={} source_correspondence_bodies={} persisted_provenance=v1",
+            "AEROFORGE_DESKTOP_TETGEN_BOUNDARY_LAYER=PASS bodies={} layer_tets={} tetgen_tets={} combined_tets={} welded_vertices={} source_correspondence_bodies={} persisted_provenance=v2",
             result.layers.len(),
             result.merge_report.layer_tetrahedra,
             result.merge_report.tetgen_tetrahedra,
