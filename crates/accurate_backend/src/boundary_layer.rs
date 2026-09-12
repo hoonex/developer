@@ -13,13 +13,20 @@ use crate::tetra_overlap::{
     TetrahedralOverlapPolicy, TetrahedralOverlapReport,
 };
 
+/// Fail-closed upper bound for how far an angle-weighted vertex-normal direction may be amplified
+/// to preserve the requested face-normal spacing at sharp vertices. This is an algorithmic safety
+/// guard, not an engineering mesh-quality threshold.
+const MAX_VERTEX_NORMAL_MITER_AMPLIFICATION: f64 = 4.0;
+
 /// Explicit geometric policy for constructing a tetrahedralized wall-normal layer block around
 /// one already-audited closed surface body.
 ///
-/// Layer thicknesses follow a geometric progression. Vertices are displaced along angle-weighted
-/// outward vertex normals. Each triangular shell prism is split deterministically into three
-/// tetrahedra using globally sorted source vertex ids, which keeps shared prism side diagonals
-/// conforming between neighboring source triangles.
+/// Layer thicknesses follow a geometric progression. Vertices use angle-weighted outward normal
+/// directions, then those directions are miter-scaled so the requested offset is preserved against
+/// every incident source-face normal. Excessive or non-positive miter projection fails closed.
+/// Each triangular shell prism is split deterministically into three tetrahedra using globally
+/// sorted source vertex ids, which keeps shared prism side diagonals conforming between neighboring
+/// source triangles.
 ///
 /// This policy does not claim engineering near-wall adequacy. In particular it does not infer y+,
 /// a turbulence-model target, a dimensional unit system, CAD feature semantics, or a safe layer
@@ -49,6 +56,12 @@ pub struct TetrahedralBoundaryLayerReport {
     pub growth_ratio: f64,
     pub total_thickness: f64,
     pub maximum_adjacent_face_normal_angle_radians: f64,
+    /// Smallest cosine projection from a unit angle-weighted vertex normal onto any incident face
+    /// normal before miter scaling. Values near zero require large amplification and are rejected by
+    /// the bounded miter guard.
+    pub minimum_vertex_face_normal_projection: f64,
+    /// Largest miter amplification actually applied to any source vertex.
+    pub maximum_vertex_normal_amplification: f64,
     pub minimum_tetrahedron_volume: f64,
     pub maximum_tetrahedron_volume: f64,
     pub overlap: TetrahedralOverlapReport,
@@ -58,7 +71,7 @@ pub struct TetrahedralBoundaryLayerReport {
 pub struct GeneratedTetrahedralBoundaryLayer {
     pub mesh: VolumeMesh,
     pub outer_surface: SurfaceMesh,
-    /// Cumulative vertex-normal offsets from the source wall. Entry zero is always `0.0`.
+    /// Cumulative face-normal target offsets from the source wall. Entry zero is always `0.0`.
     pub layer_offsets: Vec<f64>,
     pub wall_marker: BoundaryMarkerId,
     pub interface_marker: BoundaryMarkerId,
@@ -76,6 +89,12 @@ pub enum TetrahedralBoundaryLayerError {
     SourceNotClosedPositiveManifold,
     DegenerateSourceTriangle { triangle: usize },
     InvalidVertexNormal { vertex: usize },
+    InvalidVertexFaceNormalProjection { vertex: usize, projection: f64 },
+    VertexNormalMiterAmplificationExceeded {
+        vertex: usize,
+        amplification: f64,
+        maximum: f64,
+    },
     AdjacentFaceNormalAngleExceeded {
         edge: [u32; 2],
         angle_radians: f64,
@@ -129,6 +148,18 @@ impl Display for TetrahedralBoundaryLayerError {
             Self::InvalidVertexNormal { vertex } => write!(
                 f,
                 "boundary-layer source vertex {vertex} has no finite angle-weighted outward normal"
+            ),
+            Self::InvalidVertexFaceNormalProjection { vertex, projection } => write!(
+                f,
+                "boundary-layer source vertex {vertex} angle-weighted normal has non-positive/non-finite incident-face projection {projection}; safe outward miter extrusion is not established"
+            ),
+            Self::VertexNormalMiterAmplificationExceeded {
+                vertex,
+                amplification,
+                maximum,
+            } => write!(
+                f,
+                "boundary-layer source vertex {vertex} requires miter amplification {amplification}, above fail-closed maximum {maximum}"
             ),
             Self::AdjacentFaceNormalAngleExceeded {
                 edge,
@@ -203,9 +234,9 @@ impl From<TetrahedralOverlapError> for TetrahedralBoundaryLayerError {
 /// `VolumeMesh::audit()` and the bounded positive-volume overlap gate before it is returned.
 ///
 /// Passing establishes a conforming, non-overlapping tetrahedral shell block under the caller's
-/// explicit geometric policy. It does not yet establish integration with the external TetGen
-/// far-field mesh, post-extrusion inter-body/domain clearance, sharp-feature bevel semantics,
-/// solver/model-specific y+ adequacy, or engineering CFD accuracy.
+/// explicit geometric policy plus the bounded internal miter guard. It does not yet establish
+/// integration with the external TetGen far-field mesh, post-extrusion inter-body/domain clearance,
+/// CAD sharp-feature semantics, solver/model-specific y+ adequacy, or engineering CFD accuracy.
 pub fn generate_tetrahedral_boundary_layer(
     body: &AuditedImportedSurfaceBody,
     wall_marker: BoundaryMarkerId,
@@ -256,6 +287,11 @@ pub fn generate_tetrahedral_boundary_layer(
         policy.maximum_adjacent_face_normal_angle_radians,
     )?;
     let vertex_normals = angle_weighted_vertex_normals(&body.mesh, &face_normals)?;
+    let (
+        vertex_extrusions,
+        minimum_vertex_face_normal_projection,
+        maximum_vertex_normal_amplification,
+    ) = face_spacing_preserving_vertex_extrusions(&body.mesh, &face_normals, &vertex_normals)?;
     let layer_offsets = build_layer_offsets(policy)?;
     let total_thickness = *layer_offsets
         .last()
@@ -263,17 +299,17 @@ pub fn generate_tetrahedral_boundary_layer(
 
     let mut points = Vec::with_capacity(point_count);
     for (layer, &offset) in layer_offsets.iter().enumerate() {
-        for (vertex, (&point, &normal)) in body
+        for (vertex, (&point, &extrusion)) in body
             .mesh
             .positions
             .iter()
-            .zip(vertex_normals.iter())
+            .zip(vertex_extrusions.iter())
             .enumerate()
         {
             let generated = [
-                point[0] + normal[0] * offset,
-                point[1] + normal[1] * offset,
-                point[2] + normal[2] * offset,
+                point[0] + extrusion[0] * offset,
+                point[1] + extrusion[1] * offset,
+                point[2] + extrusion[2] * offset,
             ];
             if !generated.iter().all(|value| value.is_finite()) {
                 return Err(TetrahedralBoundaryLayerError::NonFiniteGeneratedPoint {
@@ -395,6 +431,8 @@ pub fn generate_tetrahedral_boundary_layer(
             growth_ratio: policy.growth_ratio,
             total_thickness,
             maximum_adjacent_face_normal_angle_radians: observed_maximum_angle,
+            minimum_vertex_face_normal_projection,
+            maximum_vertex_normal_amplification,
             minimum_tetrahedron_volume,
             maximum_tetrahedron_volume,
             overlap,
@@ -615,6 +653,55 @@ fn angle_weighted_vertex_normals(
         .collect()
 }
 
+fn face_spacing_preserving_vertex_extrusions(
+    mesh: &SurfaceMesh,
+    face_normals: &[[f64; 3]],
+    vertex_normals: &[[f64; 3]],
+) -> Result<(Vec<[f64; 3]>, f64, f64), TetrahedralBoundaryLayerError> {
+    let mut incident_faces = vec![Vec::<usize>::new(); mesh.positions.len()];
+    for (face, triangle) in mesh.triangles.iter().enumerate() {
+        for &vertex in triangle {
+            incident_faces[vertex as usize].push(face);
+        }
+    }
+
+    let mut minimum_projection = f64::INFINITY;
+    let mut maximum_amplification = 1.0_f64;
+    let mut extrusions = Vec::with_capacity(vertex_normals.len());
+    for (vertex, &normal) in vertex_normals.iter().enumerate() {
+        let projection = incident_faces[vertex]
+            .iter()
+            .map(|&face| dot(normal, face_normals[face]))
+            .fold(f64::INFINITY, f64::min);
+        if !projection.is_finite() || projection <= 0.0 {
+            return Err(TetrahedralBoundaryLayerError::InvalidVertexFaceNormalProjection {
+                vertex,
+                projection,
+            });
+        }
+        let amplification = 1.0 / projection;
+        if !amplification.is_finite()
+            || amplification > MAX_VERTEX_NORMAL_MITER_AMPLIFICATION
+        {
+            return Err(
+                TetrahedralBoundaryLayerError::VertexNormalMiterAmplificationExceeded {
+                    vertex,
+                    amplification,
+                    maximum: MAX_VERTEX_NORMAL_MITER_AMPLIFICATION,
+                },
+            );
+        }
+        minimum_projection = minimum_projection.min(projection);
+        maximum_amplification = maximum_amplification.max(amplification);
+        extrusions.push([
+            normal[0] * amplification,
+            normal[1] * amplification,
+            normal[2] * amplification,
+        ]);
+    }
+    Ok((extrusions, minimum_projection, maximum_amplification))
+}
+
 fn signed_tetrahedron_volume(points: &[[f64; 3]], vertices: [u32; 4]) -> f64 {
     let a = points[vertices[0] as usize];
     let b = points[vertices[1] as usize];
@@ -769,17 +856,22 @@ mod tests {
         assert_eq!(generated.report.layer_count, 3);
         assert_eq!(generated.report.generated_tetrahedra, 108);
         assert!((generated.report.total_thickness - 0.182).abs() < 1.0e-12);
+        assert!((generated.report.minimum_vertex_face_normal_projection - 1.0 / 3.0_f64.sqrt()).abs() < 1.0e-12);
+        assert!((generated.report.maximum_vertex_normal_amplification - 3.0_f64.sqrt()).abs() < 1.0e-12);
         assert!(generated.report.minimum_tetrahedron_volume >= 1.0e-12);
         assert!(generated.report.maximum_tetrahedron_volume >= generated.report.minimum_tetrahedron_volume);
         assert_eq!(generated.report.overlap.cells, 108);
 
         for vertex in 0..body.mesh.positions.len() {
             assert_eq!(generated.mesh.points[vertex], body.mesh.positions[vertex]);
-            let first = generated.mesh.points[body.mesh.positions.len() + vertex];
-            let source = body.mesh.positions[vertex];
-            let displacement = sub(first, source);
-            assert!((dot(displacement, displacement).sqrt() - 0.05).abs() < 1.0e-12);
         }
+        let first = generated.mesh.points[body.mesh.positions.len()];
+        let source = body.mesh.positions[0];
+        let displacement = sub(first, source);
+        for face_normal in [[-1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]] {
+            assert!((dot(displacement, face_normal) - 0.05).abs() < 1.0e-12);
+        }
+        assert!((dot(displacement, displacement).sqrt() - 0.05 * 3.0_f64.sqrt()).abs() < 1.0e-12);
     }
 
     #[test]
