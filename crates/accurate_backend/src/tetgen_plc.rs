@@ -8,20 +8,13 @@ use crate::imported_surface::AuditedImportedSurfaceBody;
 use crate::source_containment::ContainmentValidatedExteriorMesherInput;
 use crate::su2_mesh::{BoundarySource, DomainAxis, DomainSide};
 
-const TETGEN_FAR_FIELD_TARGET_TETRAHEDRA: f64 = 8_192.0;
-
 /// Baseline external TetGen PLC switches.
 ///
-/// The historical `-pYzCQ` prefix remains stable for persisted provenance: `-p` consumes `.poly`,
-/// `-Y` preserves input boundary facets, `-z` uses zero-based output, `-C` checks the final mesh,
-/// and `-Q` keeps routine output concise. `-a` reads the deterministic per-fluid-region maximum
-/// tetrahedron volume written into the `.poly` region section, while `S20000` bounds refinement-
-/// added Steiner points. The current region volume targets roughly 8,192 equal-volume tetrahedra
-/// across the full domain before body subtraction; it is an experimental sizing control for
-/// measured far-field transition evidence, not an engineering mesh-quality acceptance criterion.
-/// Iteration suffixes are kept deliberately: TetGen's `-I` also suppresses `.node` output, which
-/// would make added/interior output nodes impossible to reconstruct safely.
-pub const TETGEN_BASELINE_SWITCHES: &str = "-pYzCQaS20000";
+/// `-p` consumes `.poly`, `-Y` preserves input boundary facets, `-z` uses zero-based output,
+/// `-C` checks the final mesh, and `-Q` keeps routine output concise. Iteration suffixes are kept
+/// deliberately: TetGen's `-I` also suppresses `.node` output, which would make added/interior
+/// output nodes impossible to reconstruct safely.
+pub const TETGEN_BASELINE_SWITCHES: &str = "-pYzCQ";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TetgenHoleSeedPolicy {
@@ -94,10 +87,6 @@ pub enum TetgenPlcError {
     MissingDomainMarker { axis: DomainAxis, side: DomainSide },
     MissingBodyMarker { scene_object_id: u64 },
     MarkerOutOfRange { marker: u32 },
-    InvalidFarFieldSizing {
-        domain_volume: f64,
-        maximum_tetrahedron_volume: f64,
-    },
     MissingUsableTriangle { scene_object_id: u64 },
     NonFiniteHoleSeedEvaluation { scene_object_id: u64 },
     HoleSeedNotFound {
@@ -151,13 +140,6 @@ impl Display for TetgenPlcError {
                 f,
                 "TetGen PLC boundary marker {marker} exceeds signed 32-bit marker range"
             ),
-            Self::InvalidFarFieldSizing {
-                domain_volume,
-                maximum_tetrahedron_volume,
-            } => write!(
-                f,
-                "derived TetGen far-field sizing must be finite and positive; domain volume {domain_volume}, maximum tetrahedron volume {maximum_tetrahedron_volume}"
-            ),
             Self::MissingUsableTriangle { scene_object_id } => write!(
                 f,
                 "SceneObject {scene_object_id} has no finite non-degenerate triangle for deterministic hole-seed construction"
@@ -184,12 +166,8 @@ impl Error for TetgenPlcError {}
 ///
 /// The outer domain is six marked quads; every audited source triangle is copied unchanged as a
 /// marked internal facet. One strictly interior volume-hole point is proven per solid body by a
-/// bounded inward-normal search plus full-shell winding validation. One deterministic fluid-region
-/// seed is placed between the domain-min corner and the minimum source bounds, so it lies inside the
-/// domain while remaining outside every source AABB. Its maximum tetrahedron volume is derived from
-/// the complete domain volume and retained directly in the `.poly` region section. The returned
-/// value only prepares external-mesher input; it does not execute TetGen or make a body-fitted,
-/// engineering-quality, or CFD-accuracy claim.
+/// bounded inward-normal search plus full-shell winding validation. The returned value only prepares
+/// external-mesher input; it does not execute TetGen or make a body-fitted/quality/CFD claim.
 pub fn prepare_tetgen_plc(
     input: &ContainmentValidatedExteriorMesherInput,
     hole_seed_policy: TetgenHoleSeedPolicy,
@@ -271,42 +249,6 @@ pub fn prepare_tetgen_plc(
 
     let domain_min = admission.domain_min();
     let domain_max = admission.domain_max();
-    let domain_extents = [
-        domain_max[0] - domain_min[0],
-        domain_max[1] - domain_min[1],
-        domain_max[2] - domain_min[2],
-    ];
-    let domain_volume = domain_extents[0] * domain_extents[1] * domain_extents[2];
-    let maximum_tetrahedron_volume = domain_volume / TETGEN_FAR_FIELD_TARGET_TETRAHEDRA;
-    if !domain_volume.is_finite()
-        || domain_volume <= 0.0
-        || !maximum_tetrahedron_volume.is_finite()
-        || maximum_tetrahedron_volume <= 0.0
-    {
-        return Err(TetgenPlcError::InvalidFarFieldSizing {
-            domain_volume,
-            maximum_tetrahedron_volume,
-        });
-    }
-    let minimum_source_bounds = [
-        sources
-            .iter()
-            .map(|source| source.bounds.min[0])
-            .fold(f64::INFINITY, f64::min),
-        sources
-            .iter()
-            .map(|source| source.bounds.min[1])
-            .fold(f64::INFINITY, f64::min),
-        sources
-            .iter()
-            .map(|source| source.bounds.min[2])
-            .fold(f64::INFINITY, f64::min),
-    ];
-    let fluid_region_seed = [
-        0.5 * domain_min[0] + 0.5 * minimum_source_bounds[0],
-        0.5 * domain_min[1] + 0.5 * minimum_source_bounds[1],
-        0.5 * domain_min[2] + 0.5 * minimum_source_bounds[2],
-    ];
     let domain_points = [
         [domain_min[0], domain_min[1], domain_min[2]],
         [domain_max[0], domain_min[1], domain_min[2]],
@@ -371,14 +313,7 @@ pub fn prepare_tetgen_plc(
             fmt_float(seed.point[2])
         ));
     }
-    poly.push_str("1\n");
-    poly.push_str(&format!(
-        "0 {} {} {} 0 {}\n",
-        fmt_float(fluid_region_seed[0]),
-        fmt_float(fluid_region_seed[1]),
-        fmt_float(fluid_region_seed[2]),
-        fmt_float(maximum_tetrahedron_volume),
-    ));
+    poly.push_str("0\n");
 
     Ok(PreparedTetgenPlc {
         poly_text: poly,
@@ -792,7 +727,7 @@ mod tests {
     fn deterministic_plc_preserves_domain_and_scene_markers() {
         let prepared = prepare_tetgen_plc(&containment_input(), seed_policy(1_000)).unwrap();
 
-        assert_eq!(prepared.switches(), TETGEN_BASELINE_SWITCHES);
+        assert_eq!(prepared.switches(), "-pYzCQ");
         assert_eq!(prepared.point_count(), 12);
         assert_eq!(prepared.facet_count(), 10);
         assert_eq!(prepared.hole_seeds().len(), 1);
@@ -806,14 +741,7 @@ mod tests {
         for marker in 1..=7 {
             assert!(poly.contains(&format!("1 0 {marker}\n")));
         }
-        let expected_max_volume = 125.0 / TETGEN_FAR_FIELD_TARGET_TETRAHEDRA;
-        assert!(poly.ends_with(&format!(
-            "1\n0 {} {} {} 0 {}\n",
-            fmt_float(-0.5),
-            fmt_float(-0.5),
-            fmt_float(-0.5),
-            fmt_float(expected_max_volume),
-        )));
+        assert!(poly.ends_with("0\n"));
     }
 
     #[test]
