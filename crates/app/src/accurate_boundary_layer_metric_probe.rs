@@ -19,7 +19,10 @@ use bevy::prelude::Vec3;
 use crate::accurate_boundary_layer_tetgen::run_project_tetgen_boundary_layer_handoff;
 use crate::model::{PrimitiveKind, ProjectState};
 
-const METRIC_PROBE_SWITCHES: &str = "-pYzCQq2.0mS20000";
+// Test-only TetGen contract. `-YY` preserves both exterior and interior PLC boundaries while
+// `q2.0m` activates refinement under a full-domain nodal sizing field. `S20000` bounds added
+// Steiner points. This is measurement-only evidence, not an engineering mesh-quality criterion.
+const METRIC_PROBE_SWITCHES: &str = "-pYYzCQq2.0mS20000";
 const REPORT_MAX_FACE_TESTS: usize = 20_000_000;
 
 #[derive(Clone, Copy, Debug)]
@@ -37,6 +40,7 @@ struct QualitySnapshot {
 struct MetricSummary {
     point_count: usize,
     constrained_points: usize,
+    domain_anchor_edge_length: f64,
     minimum_desired_edge_length: f64,
     maximum_desired_edge_length: f64,
 }
@@ -86,7 +90,7 @@ fn quality_snapshot(mesh: &VolumeMesh) -> QualitySnapshot {
             maximum_dihedral_angle_radians: std::f64::consts::PI,
         },
     )
-    .expect("metric probe mesh must yield complete dihedral measurements");
+    .expect("graded metric probe mesh must yield complete dihedral measurements");
     let orthogonality = validate_tetrahedral_face_orthogonality(
         mesh,
         TetrahedralFaceOrthogonalityPolicy {
@@ -95,7 +99,7 @@ fn quality_snapshot(mesh: &VolumeMesh) -> QualitySnapshot {
             max_face_tests: REPORT_MAX_FACE_TESTS,
         },
     )
-    .expect("metric probe mesh must yield complete face-orthogonality measurements");
+    .expect("graded metric probe mesh must yield complete face-orthogonality measurements");
     let transition = validate_tetrahedral_size_transition(
         mesh,
         TetrahedralSizeTransitionPolicy {
@@ -103,7 +107,7 @@ fn quality_snapshot(mesh: &VolumeMesh) -> QualitySnapshot {
             max_interior_face_tests: REPORT_MAX_FACE_TESTS,
         },
     )
-    .expect("metric probe mesh must yield complete size-transition measurements");
+    .expect("graded metric probe mesh must yield complete size-transition measurements");
     let skewness = validate_tetrahedral_face_centroid_skewness(
         mesh,
         TetrahedralFaceCentroidSkewnessPolicy {
@@ -111,7 +115,7 @@ fn quality_snapshot(mesh: &VolumeMesh) -> QualitySnapshot {
             max_interior_face_tests: REPORT_MAX_FACE_TESTS,
         },
     )
-    .expect("metric probe mesh must yield complete centroid-skewness measurements");
+    .expect("graded metric probe mesh must yield complete centroid-skewness measurements");
 
     QualitySnapshot {
         cells: mesh.cells.len(),
@@ -156,6 +160,23 @@ fn minimum_incident_edge_lengths(mesh: &SurfaceMesh) -> Vec<f64> {
     lengths
 }
 
+fn minimum_domain_edge_length(input: &ClearanceValidatedExteriorMesherInput) -> f64 {
+    let admission = input.containment().admission();
+    let min = admission.domain_min();
+    let max = admission.domain_max();
+    let mut minimum = f64::INFINITY;
+    for axis in 0..3 {
+        let extent = max[axis] - min[axis];
+        assert!(
+            extent.is_finite() && extent > 0.0,
+            "validated outer-domain extent must remain finite and positive"
+        );
+        minimum = minimum.min(extent);
+    }
+    assert!(minimum.is_finite() && minimum > 0.0);
+    minimum
+}
+
 fn render_metric_file(
     input: &ClearanceValidatedExteriorMesherInput,
     point_count: usize,
@@ -171,18 +192,23 @@ fn render_metric_file(
         "metric ordering must exactly match deterministic PLC point ordering"
     );
 
-    // TetGen's PLC writer emits the eight domain corners first, then every admitted source mesh
-    // vertex in source order. A zero metric leaves the remote domain corners unconstrained; the
-    // outer boundary-layer interface uses its own local surface edge scale. With `-Y`, those
-    // boundary facets remain preserved and the experiment only asks TetGen to grade interior work.
+    // TetGen's deterministic PLC ordering is eight outer-domain corners followed by source
+    // vertices. Give every domain corner the minimum outer-domain edge length and every outer
+    // boundary-layer interface vertex its local minimum incident edge length. All PLC nodes are
+    // therefore positive sizing anchors and their convex hull covers the complete meshing domain.
+    // The field is geometry-derived only; these values are not engineering acceptance thresholds.
+    let domain_anchor_edge_length = minimum_domain_edge_length(input);
     let mut text = format!("{point_count} 1\n");
-    for _ in 0..8 {
-        text.push_str("0\n");
-    }
-
     let mut constrained_points = 0_usize;
     let mut minimum_desired_edge_length = f64::INFINITY;
     let mut maximum_desired_edge_length = 0.0_f64;
+    for _ in 0..8 {
+        text.push_str(&format!("{domain_anchor_edge_length:.17e}\n"));
+        constrained_points += 1;
+        minimum_desired_edge_length = minimum_desired_edge_length.min(domain_anchor_edge_length);
+        maximum_desired_edge_length = maximum_desired_edge_length.max(domain_anchor_edge_length);
+    }
+
     for source in sources {
         for value in minimum_incident_edge_lengths(&source.mesh) {
             text.push_str(&format!("{value:.17e}\n"));
@@ -192,15 +218,19 @@ fn render_metric_file(
         }
     }
 
-    assert_eq!(constrained_points, source_point_count);
+    assert_eq!(constrained_points, point_count);
     assert!(minimum_desired_edge_length.is_finite());
     assert!(maximum_desired_edge_length.is_finite());
-    (text, MetricSummary {
-        point_count,
-        constrained_points,
-        minimum_desired_edge_length,
-        maximum_desired_edge_length,
-    })
+    (
+        text,
+        MetricSummary {
+            point_count,
+            constrained_points,
+            domain_anchor_edge_length,
+            minimum_desired_edge_length,
+            maximum_desired_edge_length,
+        },
+    )
 }
 
 fn temp_root(label: &str) -> PathBuf {
@@ -209,7 +239,7 @@ fn temp_root(label: &str) -> PathBuf {
         .expect("system clock must be after UNIX_EPOCH")
         .as_nanos();
     std::env::temp_dir().join(format!(
-        "aeroforge-boundary-layer-metric-probe-{label}-{}-{nonce}",
+        "aeroforge-boundary-layer-graded-metric-probe-{label}-{}-{nonce}",
         std::process::id()
     ))
 }
@@ -221,37 +251,37 @@ fn run_metric_probe(
     metric_text: &str,
 ) -> aeroforge_accurate_backend::ParsedTetgenVolumeMesh {
     let root = temp_root(label);
-    fs::create_dir(&root).expect("metric probe must allocate a private TetGen directory");
+    fs::create_dir(&root).expect("graded metric probe must allocate a private TetGen directory");
     fs::write(root.join("aeroforge.poly"), poly_text)
-        .expect("metric probe must persist the exact baseline PLC");
+        .expect("graded metric probe must persist the exact baseline PLC");
     fs::write(root.join("aeroforge.mtr"), metric_text)
-        .expect("metric probe must persist its exact metric field");
+        .expect("graded metric probe must persist its exact metric field");
 
     let output = Command::new(executable)
         .current_dir(&root)
         .arg(METRIC_PROBE_SWITCHES)
         .arg("aeroforge.poly")
         .output()
-        .expect("metric probe TetGen process must launch");
+        .expect("graded metric probe TetGen process must launch");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
-        "metric probe TetGen failed: exit={:?}\nstdout:\n{}\nstderr:\n{}",
+        "graded metric probe TetGen failed: exit={:?}\nstdout:\n{}\nstderr:\n{}",
         output.status.code(),
         stdout,
         stderr
     );
 
     let node = fs::read_to_string(root.join("aeroforge.1.node"))
-        .expect("metric probe must produce .1.node");
+        .expect("graded metric probe must produce .1.node");
     let ele = fs::read_to_string(root.join("aeroforge.1.ele"))
-        .expect("metric probe must produce .1.ele");
+        .expect("graded metric probe must produce .1.ele");
     let face = fs::read_to_string(root.join("aeroforge.1.face"))
-        .expect("metric probe must produce .1.face");
+        .expect("graded metric probe must produce .1.face");
     let parsed = parse_tetgen_volume_mesh(&node, &ele, &face)
-        .expect("metric probe TetGen output must pass AeroForge parsing/audit");
-    fs::remove_dir_all(root).expect("metric probe private directory must clean up");
+        .expect("graded metric probe TetGen output must pass AeroForge parsing/audit");
+    fs::remove_dir_all(root).expect("graded metric probe private directory must clean up");
     parsed
 }
 
@@ -263,12 +293,13 @@ fn report_probe(
     metric: QualitySnapshot,
 ) {
     println!(
-        "AEROFORGE_BOUNDARY_LAYER_METRIC_PROBE=REPORT_ONLY shape={} scope={} engineering_quality_status=not_established switches={} metric_points={} metric_constrained_points={} metric_min_edge={} metric_max_edge={} baseline_cells={} metric_cells={} baseline_min_dihedral_rad={} metric_min_dihedral_rad={} baseline_max_dihedral_rad={} metric_max_dihedral_rad={} baseline_min_interior_orthogonality_cos={:?} metric_min_interior_orthogonality_cos={:?} baseline_min_boundary_orthogonality_cos={:?} metric_min_boundary_orthogonality_cos={:?} baseline_max_adjacent_volume_ratio={:?} metric_max_adjacent_volume_ratio={:?} baseline_max_centroid_skewness={:?} metric_max_centroid_skewness={:?}",
+        "AEROFORGE_BOUNDARY_LAYER_GRADED_METRIC_PROBE=REPORT_ONLY shape={} scope={} engineering_quality_status=not_established switches={} metric_points={} metric_constrained_points={} metric_domain_anchor_edge={} metric_min_edge={} metric_max_edge={} baseline_cells={} metric_cells={} baseline_min_dihedral_rad={} metric_min_dihedral_rad={} baseline_max_dihedral_rad={} metric_max_dihedral_rad={} baseline_min_interior_orthogonality_cos={:?} metric_min_interior_orthogonality_cos={:?} baseline_min_boundary_orthogonality_cos={:?} metric_min_boundary_orthogonality_cos={:?} baseline_max_adjacent_volume_ratio={:?} metric_max_adjacent_volume_ratio={:?} baseline_max_centroid_skewness={:?} metric_max_centroid_skewness={:?}",
         shape,
         scope,
         METRIC_PROBE_SWITCHES,
         metric_summary.point_count,
         metric_summary.constrained_points,
+        metric_summary.domain_anchor_edge_length,
         metric_summary.minimum_desired_edge_length,
         metric_summary.maximum_desired_edge_length,
         baseline.cells,
@@ -297,7 +328,7 @@ fn execute_shape_probe(
         "AEROFORGE_REQUIRE_REAL_TETGEN=1 requires tetgen on PATH or TETGEN_EXECUTABLE",
     );
     let baseline = run_project_tetgen_boundary_layer_handoff(state, &executable, policy)
-        .expect("baseline boundary-layer TetGen handoff must remain valid before metric probing");
+        .expect("baseline boundary-layer TetGen handoff must remain valid before graded metric probing");
     let prepared = baseline.tetgen_run.prepared();
     let (metric_text, metric_summary) =
         render_metric_file(baseline.tetgen_run.input(), prepared.point_count());
@@ -323,7 +354,7 @@ fn execute_shape_probe(
         &baseline.layers,
         merge_policy(),
     )
-    .expect("metric probe must still weld exactly to the preserved boundary-layer outer interface");
+    .expect("graded metric probe must weld exactly to the preserved boundary-layer outer interface");
     let baseline_merged = quality_snapshot(&baseline.handoff.mesh);
     let metric_merged_quality = quality_snapshot(&metric_merged.mesh);
     report_probe(
@@ -336,7 +367,7 @@ fn execute_shape_probe(
 }
 
 #[test]
-fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_metric_probe_rounded_sphere() {
+fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_graded_metric_probe_rounded_sphere() {
     if !real_tetgen_enabled() {
         return;
     }
@@ -357,7 +388,7 @@ fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_metric_probe_rou
 }
 
 #[test]
-fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_metric_probe_sharp_rim_cylinder() {
+fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_graded_metric_probe_sharp_rim_cylinder() {
     if !real_tetgen_enabled() {
         return;
     }
