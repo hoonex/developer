@@ -10,16 +10,11 @@ use crate::su2_mesh::{BoundarySource, DomainAxis, DomainSide};
 
 /// Baseline external TetGen PLC switches.
 ///
-/// The historical `-pYzCQ` prefix remains stable for persisted provenance: `-p` consumes `.poly`,
-/// `-Y` preserves input boundary facets, `-z` uses zero-based output, `-C` checks the final mesh,
-/// and `-Q` keeps routine output concise. `q1.4q5` asks TetGen to refine toward radius-edge ratio
-/// 1.4 while also targeting a 5-degree minimum tetrahedral dihedral angle; `S20000` caps the
-/// refinement-added Steiner-point budget. TetGen may still retain poorer cells when the preserved
-/// PLC boundary prevents satisfying those targets. These are bounded mesher controls for measured
-/// far-field quality, not engineering mesh-quality acceptance criteria. Iteration suffixes are kept
+/// `-p` consumes `.poly`, `-Y` preserves input boundary facets, `-z` uses zero-based output,
+/// `-C` checks the final mesh, and `-Q` keeps routine output concise. Iteration suffixes are kept
 /// deliberately: TetGen's `-I` also suppresses `.node` output, which would make added/interior
 /// output nodes impossible to reconstruct safely.
-pub const TETGEN_BASELINE_SWITCHES: &str = "-pYzCQq1.4q5S20000";
+pub const TETGEN_BASELINE_SWITCHES: &str = "-pYzCQ";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TetgenHoleSeedPolicy {
@@ -732,7 +727,7 @@ mod tests {
     fn deterministic_plc_preserves_domain_and_scene_markers() {
         let prepared = prepare_tetgen_plc(&containment_input(), seed_policy(1_000)).unwrap();
 
-        assert_eq!(prepared.switches(), TETGEN_BASELINE_SWITCHES);
+        assert_eq!(prepared.switches(), "-pYzCQ");
         assert_eq!(prepared.point_count(), 12);
         assert_eq!(prepared.facet_count(), 10);
         assert_eq!(prepared.hole_seeds().len(), 1);
