@@ -1,5 +1,7 @@
 # AeroForge
 
+**English** | [한국어](README_KR.md)
+
 AeroForge is a native Bevy + egui 3D aerodynamics workbench with a fast interactive preview path and a separate SU2-backed Accurate workflow.
 
 ## Current foundation
