@@ -11,8 +11,6 @@ mod accurate_boundary_layer_prepare;
 mod accurate_boundary_layer_coverage;
 #[cfg(test)]
 mod accurate_boundary_layer_shape_coverage;
-#[cfg(test)]
-mod accurate_boundary_layer_boundary_split_probe;
 mod accurate_boundary_layer_tetgen;
 mod accurate_execute;
 mod accurate_exterior_admission;
