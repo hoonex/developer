@@ -75,7 +75,7 @@ fn render_middle_plc(
         ));
     }
     for triangle in &layer.outer_surface.triangles {
-        poly.push_str(&format!("1 0 {}\n", BODY_INTERFACE_MARKER.0));
+        poly.push_str(&format!("1 0 {}\n", BODY_WALL_MARKER.0));
         poly.push_str(&format!(
             "3 {} {} {}\n",
             layer_offset + triangle[0] as usize,
@@ -183,7 +183,7 @@ fn configured_real_tetgen_reaches_validated_handoff_three_way_outer_buffer_probe
     let shell = build_outer_buffer_shell();
     let middle = run_inner_tetgen(&render_middle_plc(&shell, &layer));
     assert!(middle.mesh.boundary.iter().all(|face| {
-        face.marker == INNER_INTERFACE_MARKER || face.marker == BODY_INTERFACE_MARKER
+        face.marker == INNER_INTERFACE_MARKER || face.marker == BODY_WALL_MARKER
     }));
 
     let middle_dihedral = validate_tetrahedral_dihedral_quality(
