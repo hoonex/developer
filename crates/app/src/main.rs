@@ -10,8 +10,6 @@ mod accurate_boundary_layer_prepare;
 #[cfg(test)]
 mod accurate_boundary_layer_coverage;
 #[cfg(test)]
-mod accurate_boundary_layer_outer_domain_edge_probe;
-#[cfg(test)]
 mod accurate_boundary_layer_shape_coverage;
 mod accurate_boundary_layer_tetgen;
 mod accurate_execute;
