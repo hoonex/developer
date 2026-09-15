@@ -460,6 +460,12 @@ fn run_coarse48_shape_probe(
         layer_cells,
     );
     let min_centroid = tetra_centroid(mesh, dihedral.minimum_dihedral_angle_cell);
+    let max_owner = component_for_cell(
+        dihedral.maximum_dihedral_angle_cell,
+        shell_cells,
+        layer_cells,
+    );
+    let max_centroid = tetra_centroid(mesh, dihedral.maximum_dihedral_angle_cell);
     let ratio_owner_components = transition.maximum_ratio_owner_cells.map(|owners| {
         [
             component_for_cell(owners[0], shell_cells, layer_cells),
@@ -474,7 +480,7 @@ fn run_coarse48_shape_probe(
     });
 
     println!(
-        "AEROFORGE_OUTER_BUFFER_COARSE48_SHAPE_PROBE=REPORT_ONLY shape={} engineering_quality_status=not_established baseline_cells={} coarse48_cells={} shell_cells={} layer_cells={} middle_cells={} bl_welded_vertices={} outer_welded_vertices={} outer_interface_faces={} shell_min_dihedral_rad={} middle_min_dihedral_rad={} baseline_min_dihedral_rad={} coarse48_min_dihedral_rad={} coarse48_min_owner={} coarse48_min_centroid={:?} baseline_max_dihedral_rad={} coarse48_max_dihedral_rad={} baseline_min_interior_orthogonality_cos={:?} coarse48_min_interior_orthogonality_cos={:?} coarse48_min_interior_owner_components={:?} baseline_min_boundary_orthogonality_cos={:?} coarse48_min_boundary_orthogonality_cos={:?} baseline_max_adjacent_volume_ratio={:?} coarse48_max_adjacent_volume_ratio={:?} coarse48_max_ratio_owner_components={:?} baseline_max_centroid_skewness={:?} coarse48_max_centroid_skewness={:?} overlap_broad_phase_tests={} overlap_sat_tests={}",
+        "AEROFORGE_OUTER_BUFFER_COARSE48_SHAPE_PROBE=REPORT_ONLY shape={} engineering_quality_status=not_established baseline_cells={} coarse48_cells={} shell_cells={} layer_cells={} middle_cells={} bl_welded_vertices={} outer_welded_vertices={} outer_interface_faces={} shell_min_dihedral_rad={} middle_min_dihedral_rad={} middle_max_dihedral_rad={} baseline_min_dihedral_rad={} coarse48_min_dihedral_rad={} coarse48_min_owner={} coarse48_min_centroid={:?} baseline_max_dihedral_rad={} coarse48_max_dihedral_rad={} coarse48_max_owner={} coarse48_max_centroid={:?} baseline_min_interior_orthogonality_cos={:?} coarse48_min_interior_orthogonality_cos={:?} coarse48_min_interior_owner_components={:?} baseline_min_boundary_orthogonality_cos={:?} coarse48_min_boundary_orthogonality_cos={:?} baseline_max_adjacent_volume_ratio={:?} coarse48_max_adjacent_volume_ratio={:?} coarse48_max_ratio_owner_components={:?} baseline_max_centroid_skewness={:?} coarse48_max_centroid_skewness={:?} overlap_broad_phase_tests={} overlap_sat_tests={}",
         shape,
         handoff.handoff.mesh.cells.len(),
         mesh.cells.len(),
@@ -486,12 +492,15 @@ fn run_coarse48_shape_probe(
         outer_interface_faces,
         shell_dihedral.minimum_dihedral_angle_radians,
         middle_dihedral.minimum_dihedral_angle_radians,
+        middle_dihedral.maximum_dihedral_angle_radians,
         handoff.merged_dihedral_quality.minimum_dihedral_angle_radians,
         dihedral.minimum_dihedral_angle_radians,
         min_owner,
         min_centroid,
         handoff.merged_dihedral_quality.maximum_dihedral_angle_radians,
         dihedral.maximum_dihedral_angle_radians,
+        max_owner,
+        max_centroid,
         handoff
             .merged_face_orthogonality
             .minimum_interior_face_orthogonality_cosine,
