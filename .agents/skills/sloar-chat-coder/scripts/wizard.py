@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from doctor import inspect as inspect_local
 
-CURRENT_SLOAR_VERSION = "0.9.0"
+CURRENT_SLOAR_VERSION = "0.9.1"
 VERSION_RE = re.compile(r'^\s*version:\s*["\']?([0-9]+\.[0-9]+\.[0-9]+)["\']?\s*$')
 
 
