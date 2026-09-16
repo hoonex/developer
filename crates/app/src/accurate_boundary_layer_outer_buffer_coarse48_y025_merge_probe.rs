@@ -1,23 +1,23 @@
 include!("accurate_boundary_layer_outer_buffer_coarse48_shape_probe.rs");
 
-const Y16_ASPECT_DOMAIN_Y: f64 = 8.0;
-const Y16_ASPECT_MARGIN: f64 = Y16_ASPECT_DOMAIN_Y / 16.0;
+const LOCAL_CAVITY_DOMAIN_Y: f64 = 8.0;
+const LOCAL_CAVITY_Y_MIN: f64 = 0.375;
+const LOCAL_CAVITY_Y_MAX: f64 = 5.625;
 
-fn build_y16_aspect_coarse48_shell() -> VolumeMesh {
-    assert_eq!(Y16_ASPECT_MARGIN, 0.5);
+fn build_local_cavity_coarse48_shell() -> VolumeMesh {
     let mut shell = coarse_shell_support::build_app_coarse48_shell(APP_COARSE_INTERFACE_MARKER);
     for point in &mut shell.points {
-        if (point[1] - 3.0).abs() <= 1.0e-12 {
-            point[1] = 4.0;
+        if (point[1] - 0.5).abs() <= 1.0e-12 {
+            point[1] = LOCAL_CAVITY_Y_MIN;
         } else if (point[1] - 5.5).abs() <= 1.0e-12 {
-            point[1] = Y16_ASPECT_DOMAIN_Y - Y16_ASPECT_MARGIN;
+            point[1] = LOCAL_CAVITY_Y_MAX;
         } else if (point[1] - 6.0).abs() <= 1.0e-12 {
-            point[1] = Y16_ASPECT_DOMAIN_Y;
+            point[1] = LOCAL_CAVITY_DOMAIN_Y;
         }
     }
     shell
         .audit()
-        .expect("y/16 aspect-ratio coarse48 shell must remain a valid VolumeMesh");
+        .expect("local-cavity aspect shell must remain a valid VolumeMesh");
     assert_eq!(
         shell
             .boundary
@@ -26,38 +26,224 @@ fn build_y16_aspect_coarse48_shell() -> VolumeMesh {
             .count(),
         48
     );
-    let interface = interface_points_for_marker(&shell, APP_COARSE_INTERFACE_MARKER);
-    assert_eq!(interface.len(), 26);
     shell
 }
 
-fn run_y16_aspect_full_merge_probe(
+fn point_key_if_eighth_grid(point: [f64; 3]) -> Option<[i64; 3]> {
+    let mut key = [0_i64; 3];
+    for axis in 0..3 {
+        let scaled = point[axis] * 8.0;
+        let rounded = scaled.round();
+        if !scaled.is_finite() || (scaled - rounded).abs() > 1.0e-9 {
+            return None;
+        }
+        key[axis] = rounded as i64;
+    }
+    Some(key)
+}
+
+fn local_cavity_interface_points_for_marker(
+    shell: &VolumeMesh,
+    interface_marker: BoundaryMarkerId,
+) -> BTreeMap<[i64; 3], u32> {
+    let mut points = BTreeMap::new();
+    for face in shell
+        .boundary
+        .iter()
+        .filter(|face| face.marker == interface_marker)
+    {
+        for &vertex in &face.vertices {
+            let point = shell.points[vertex as usize];
+            let key = point_key_if_eighth_grid(point)
+                .expect("local-cavity interface must remain on the eighth-unit grid");
+            if let Some(previous) = points.insert(key, vertex) {
+                assert_eq!(previous, vertex);
+            }
+        }
+    }
+    points
+}
+
+fn render_local_cavity_middle_plc(
+    shell: &VolumeMesh,
+    interface_marker: BoundaryMarkerId,
+    layer: &GeneratedTetrahedralBoundaryLayer,
+    hole_seed: [f64; 3],
+) -> String {
+    let shell_faces = shell
+        .boundary
+        .iter()
+        .filter(|face| face.marker == interface_marker)
+        .collect::<Vec<_>>();
+    assert_eq!(shell_faces.len(), 48);
+
+    let interface_points = local_cavity_interface_points_for_marker(shell, interface_marker);
+    assert_eq!(interface_points.len(), 26);
+    let mut shell_vertices = interface_points.values().copied().collect::<Vec<_>>();
+    shell_vertices.sort_unstable();
+    shell_vertices.dedup();
+    let local_by_shell = shell_vertices
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(local, vertex)| (vertex, local))
+        .collect::<BTreeMap<_, _>>();
+
+    let layer_offset = shell_vertices.len();
+    let mut poly = String::new();
+    poly.push_str(&format!(
+        "{} 3 0 0\n",
+        shell_vertices.len() + layer.outer_surface.positions.len()
+    ));
+    for (local, vertex) in shell_vertices.iter().copied().enumerate() {
+        let p = shell.points[vertex as usize];
+        poly.push_str(&format!(
+            "{local} {:.17e} {:.17e} {:.17e}\n",
+            p[0], p[1], p[2]
+        ));
+    }
+    for (index, p) in layer.outer_surface.positions.iter().enumerate() {
+        poly.push_str(&format!(
+            "{} {:.17e} {:.17e} {:.17e}\n",
+            layer_offset + index,
+            p[0], p[1], p[2]
+        ));
+    }
+
+    poly.push_str(&format!(
+        "{} 1\n",
+        shell_faces.len() + layer.outer_surface.triangles.len()
+    ));
+    for face in shell_faces {
+        poly.push_str(&format!("1 0 {}\n", interface_marker.0));
+        poly.push_str(&format!(
+            "3 {} {} {}\n",
+            local_by_shell[&face.vertices[0]],
+            local_by_shell[&face.vertices[1]],
+            local_by_shell[&face.vertices[2]]
+        ));
+    }
+    for triangle in &layer.outer_surface.triangles {
+        poly.push_str(&format!("1 0 {}\n", layer.wall_marker.0));
+        poly.push_str(&format!(
+            "3 {} {} {}\n",
+            layer_offset + triangle[0] as usize,
+            layer_offset + triangle[1] as usize,
+            layer_offset + triangle[2] as usize
+        ));
+    }
+
+    poly.push_str("1\n");
+    poly.push_str(&format!(
+        "0 {:.17e} {:.17e} {:.17e}\n",
+        hole_seed[0], hole_seed[1], hole_seed[2]
+    ));
+    poly.push_str("0\n");
+    poly
+}
+
+fn weld_local_cavity_shell_to_inner(
+    shell: &VolumeMesh,
+    inner: &VolumeMesh,
+    interface_marker: BoundaryMarkerId,
+) -> (VolumeMesh, usize, usize) {
+    let shell_interface_points = local_cavity_interface_points_for_marker(shell, interface_marker);
+    let expected_faces = shell
+        .boundary
+        .iter()
+        .filter(|face| face.marker == interface_marker)
+        .map(|face| canonical_face(face.vertices))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(shell_interface_points.len(), 26);
+    assert_eq!(expected_faces.len(), 48);
+
+    let mut points = shell.points.clone();
+    let mut remap = Vec::with_capacity(inner.points.len());
+    let mut welded = BTreeSet::new();
+    for &point in &inner.points {
+        let mapped = point_key_if_eighth_grid(point)
+            .and_then(|key| shell_interface_points.get(&key).copied())
+            .filter(|&vertex| {
+                let expected = shell.points[vertex as usize];
+                (0..3).all(|axis| (expected[axis] - point[axis]).abs() <= 1.0e-12)
+            });
+        if let Some(vertex) = mapped {
+            welded.insert(vertex);
+            remap.push(vertex);
+        } else {
+            let vertex = u32::try_from(points.len()).expect("local-cavity point count must fit u32");
+            points.push(point);
+            remap.push(vertex);
+        }
+    }
+    assert_eq!(
+        welded.len(),
+        shell_interface_points.len(),
+        "TetGen -Y must preserve every local-cavity interface vertex"
+    );
+
+    let actual_faces = inner
+        .boundary
+        .iter()
+        .filter(|face| face.marker == interface_marker)
+        .map(|face| canonical_face(face.vertices.map(|vertex| remap[vertex as usize])))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(actual_faces, expected_faces, "local-cavity interface facet set must remain exact");
+
+    let mut cells = shell.cells.clone();
+    cells.extend(inner.cells.iter().map(|cell| Tetrahedron {
+        vertices: cell.vertices.map(|vertex| remap[vertex as usize]),
+    }));
+    let mut boundary = shell
+        .boundary
+        .iter()
+        .filter(|face| face.marker != interface_marker)
+        .cloned()
+        .collect::<Vec<_>>();
+    boundary.extend(
+        inner
+            .boundary
+            .iter()
+            .filter(|face| face.marker != interface_marker)
+            .map(|face| BoundaryTriangle {
+                vertices: face.vertices.map(|vertex| remap[vertex as usize]),
+                marker: face.marker,
+            }),
+    );
+
+    (
+        VolumeMesh {
+            points,
+            cells,
+            boundary,
+        },
+        welded.len(),
+        expected_faces.len(),
+    )
+}
+
+fn run_local_cavity_aspect_probe(
     shape: &str,
     state: &ProjectState,
     boundary_layer_settings: AccurateBoundaryLayerSettings,
     hole_seed: [f64; 3],
 ) {
     assert_eq!(state.simulation.domain_size_m, Vec3::new(12.0, 8.0, 8.0));
-    assert!(
-        (Y16_ASPECT_MARGIN / state.simulation.domain_size_m.y as f64 - 1.0 / 16.0).abs()
-            <= 1.0e-15
-    );
-
     let (prepared_case, _) = prepare_boundary_layer_tetgen_from_state(
         state,
         &AccurateSettings::default(),
         &boundary_layer_settings,
     )
-    .expect("production BL path must build y/16 aspect-ratio fixture");
+    .expect("production BL path must build local-cavity aspect fixture");
     let handoff = match &prepared_case {
         AccuratePreparedCase::BoundaryLayerTetgen { handoff, .. } => handoff,
-        _ => panic!("y/16 aspect probe requires retained BL TetGen handoff"),
+        _ => panic!("local-cavity aspect probe requires retained BL TetGen handoff"),
     };
     assert_eq!(handoff.layers.len(), 1);
     let layer = &handoff.layers[0];
     assert_ne!(layer.interface_marker, APP_COARSE_INTERFACE_MARKER);
 
-    let shell = build_y16_aspect_coarse48_shell();
+    let shell = build_local_cavity_coarse48_shell();
     let shell_dihedral = validate_tetrahedral_dihedral_quality(
         &shell,
         TetrahedralDihedralQualityPolicy {
@@ -65,9 +251,14 @@ fn run_y16_aspect_full_merge_probe(
             maximum_dihedral_angle_radians: std::f64::consts::PI,
         },
     )
-    .expect("y/16 aspect shell must expose dihedral evidence");
+    .expect("local-cavity shell must expose dihedral evidence");
 
-    let poly = render_middle_plc(&shell, APP_COARSE_INTERFACE_MARKER, layer, hole_seed);
+    let poly = render_local_cavity_middle_plc(
+        &shell,
+        APP_COARSE_INTERFACE_MARKER,
+        layer,
+        hole_seed,
+    );
     let middle = run_middle_tetgen(&poly);
     let middle_dihedral = validate_tetrahedral_dihedral_quality(
         &middle.mesh,
@@ -76,15 +267,15 @@ fn run_y16_aspect_full_merge_probe(
             maximum_dihedral_angle_radians: std::f64::consts::PI,
         },
     )
-    .expect("y/16 aspect middle TetGen fill must expose dihedral evidence");
+    .expect("local-cavity middle TetGen fill must expose dihedral evidence");
 
     let inner = merge_tetgen_with_boundary_layers(&middle, &handoff.layers, handoff.merge_policy)
-        .expect("production BL layer must weld to y/16 aspect middle TetGen fill");
+        .expect("production BL layer must weld to local-cavity middle fill");
     let (combined, outer_welded_vertices, outer_interface_faces) =
-        weld_shell_to_inner(&shell, &inner.mesh, APP_COARSE_INTERFACE_MARKER);
+        weld_local_cavity_shell_to_inner(&shell, &inner.mesh, APP_COARSE_INTERFACE_MARKER);
     combined
         .audit()
-        .expect("y/16 aspect full merged mesh must audit after both welds");
+        .expect("local-cavity full merged mesh must audit after both welds");
     let overlap = validate_tetrahedral_interior_overlaps(
         &combined,
         TetrahedralOverlapPolicy {
@@ -92,7 +283,7 @@ fn run_y16_aspect_full_merge_probe(
             max_tetrahedron_pair_tests: 50_000_000,
         },
     )
-    .expect("y/16 aspect full merged mesh must have no positive-volume overlap");
+    .expect("local-cavity full merged mesh must have no positive-volume overlap");
 
     let admission = handoff.source_input.containment().admission();
     let final_handoff = validate_candidate_exterior_mesher_handoff(
@@ -109,7 +300,7 @@ fn run_y16_aspect_full_merge_probe(
             max_point_triangle_tests: 20_000_000,
         },
     )
-    .expect("y/16 aspect mesh must reach generic physical-source handoff");
+    .expect("local-cavity mesh must reach generic physical-source handoff");
     assert!(final_handoff
         .mesh
         .boundary
@@ -124,7 +315,7 @@ fn run_y16_aspect_full_merge_probe(
             maximum_dihedral_angle_radians: std::f64::consts::PI,
         },
     )
-    .expect("y/16 aspect mesh must retain dihedral evidence");
+    .expect("local-cavity mesh must retain dihedral evidence");
     let orthogonality = validate_tetrahedral_face_orthogonality(
         mesh,
         TetrahedralFaceOrthogonalityPolicy {
@@ -133,7 +324,7 @@ fn run_y16_aspect_full_merge_probe(
             max_face_tests: MAX_FACE_TESTS,
         },
     )
-    .expect("y/16 aspect mesh must retain orthogonality evidence");
+    .expect("local-cavity mesh must retain orthogonality evidence");
     let transition = validate_tetrahedral_size_transition(
         mesh,
         TetrahedralSizeTransitionPolicy {
@@ -141,7 +332,7 @@ fn run_y16_aspect_full_merge_probe(
             max_interior_face_tests: MAX_FACE_TESTS,
         },
     )
-    .expect("y/16 aspect mesh must retain size-transition evidence");
+    .expect("local-cavity mesh must retain size-transition evidence");
     let skewness = validate_tetrahedral_face_centroid_skewness(
         mesh,
         TetrahedralFaceCentroidSkewnessPolicy {
@@ -149,7 +340,7 @@ fn run_y16_aspect_full_merge_probe(
             max_interior_face_tests: MAX_FACE_TESTS,
         },
     )
-    .expect("y/16 aspect mesh must retain centroid-skewness evidence");
+    .expect("local-cavity mesh must retain centroid-skewness evidence");
 
     let shell_cells = shell.cells.len();
     let layer_cells = layer.mesh.cells.len();
@@ -163,7 +354,6 @@ fn run_y16_aspect_full_merge_probe(
         shell_cells,
         layer_cells,
     );
-
     let layer_y_min = layer
         .outer_surface
         .positions
@@ -178,15 +368,14 @@ fn run_y16_aspect_full_merge_probe(
         .fold(f64::NEG_INFINITY, f64::max);
 
     println!(
-        "AEROFORGE_OUTER_BUFFER_COARSE48_Y16_ASPECT=REPORT_ONLY shape={} engineering_quality_status=not_established domain_y={} y_margin={} normalized_y_margin={} layer_y_min={} layer_y_max={} lower_clearance={} upper_clearance={} baseline_cells={} candidate_cells={} shell_cells={} layer_cells={} middle_cells={} bl_welded_vertices={} outer_welded_vertices={} outer_interface_faces={} shell_min_dihedral_rad={} middle_min_dihedral_rad={} middle_max_dihedral_rad={} baseline_min_dihedral_rad={} candidate_min_dihedral_rad={} candidate_min_owner={} baseline_max_dihedral_rad={} candidate_max_dihedral_rad={} candidate_max_owner={} baseline_min_interior_orthogonality_cos={:?} candidate_min_interior_orthogonality_cos={:?} baseline_min_boundary_orthogonality_cos={:?} candidate_min_boundary_orthogonality_cos={:?} baseline_max_adjacent_volume_ratio={:?} candidate_max_adjacent_volume_ratio={:?} baseline_max_centroid_skewness={:?} candidate_max_centroid_skewness={:?} overlap_broad_phase_tests={} overlap_sat_tests={}",
+        "AEROFORGE_OUTER_BUFFER_COARSE48_LOCAL_CAVITY_ASPECT=REPORT_ONLY shape={} engineering_quality_status=not_established domain_y={} interface_y_min={} interface_y_max={} lower_clearance={} upper_clearance={} upper_farfield_thickness={} baseline_cells={} candidate_cells={} shell_cells={} layer_cells={} middle_cells={} bl_welded_vertices={} outer_welded_vertices={} outer_interface_faces={} shell_min_dihedral_rad={} middle_min_dihedral_rad={} middle_max_dihedral_rad={} baseline_min_dihedral_rad={} candidate_min_dihedral_rad={} candidate_min_owner={} baseline_max_dihedral_rad={} candidate_max_dihedral_rad={} candidate_max_owner={} baseline_min_interior_orthogonality_cos={:?} candidate_min_interior_orthogonality_cos={:?} baseline_min_boundary_orthogonality_cos={:?} candidate_min_boundary_orthogonality_cos={:?} baseline_max_adjacent_volume_ratio={:?} candidate_max_adjacent_volume_ratio={:?} baseline_max_centroid_skewness={:?} candidate_max_centroid_skewness={:?} overlap_broad_phase_tests={} overlap_sat_tests={}",
         shape,
         state.simulation.domain_size_m.y,
-        Y16_ASPECT_MARGIN,
-        Y16_ASPECT_MARGIN / state.simulation.domain_size_m.y as f64,
-        layer_y_min,
-        layer_y_max,
-        layer_y_min - Y16_ASPECT_MARGIN,
-        (Y16_ASPECT_DOMAIN_Y - Y16_ASPECT_MARGIN) - layer_y_max,
+        LOCAL_CAVITY_Y_MIN,
+        LOCAL_CAVITY_Y_MAX,
+        layer_y_min - LOCAL_CAVITY_Y_MIN,
+        LOCAL_CAVITY_Y_MAX - layer_y_max,
+        LOCAL_CAVITY_DOMAIN_Y - LOCAL_CAVITY_Y_MAX,
         handoff.handoff.mesh.cells.len(),
         mesh.cells.len(),
         shell_cells,
@@ -218,13 +407,13 @@ fn run_y16_aspect_full_merge_probe(
 }
 
 #[test]
-fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_coarse48_y16_aspect_for_rounded_sphere() {
+fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_coarse48_local_cavity_aspect_for_rounded_sphere() {
     if !env_enabled("AEROFORGE_REQUIRE_REAL_TETGEN") || discover_tetgen().is_none() {
         return;
     }
 
     let mut state = ProjectState::default();
-    state.simulation.domain_size_m.y = Y16_ASPECT_DOMAIN_Y as f32;
+    state.simulation.domain_size_m.y = LOCAL_CAVITY_DOMAIN_Y as f32;
     state.objects.clear();
     let sphere_id = state.add_object(PrimitiveKind::Sphere);
     let sphere = state
@@ -236,7 +425,7 @@ fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_coarse48_y16_asp
     sphere.scale = Vec3::splat(1.5);
     state.touch();
 
-    run_y16_aspect_full_merge_probe(
+    run_local_cavity_aspect_probe(
         "rounded_sphere",
         &state,
         AccurateBoundaryLayerSettings::default(),
@@ -245,13 +434,13 @@ fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_coarse48_y16_asp
 }
 
 #[test]
-fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_coarse48_y16_aspect_for_sharp_rim_cylinder() {
+fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_coarse48_local_cavity_aspect_for_sharp_rim_cylinder() {
     if !env_enabled("AEROFORGE_REQUIRE_REAL_TETGEN") || discover_tetgen().is_none() {
         return;
     }
 
     let mut state = ProjectState::default();
-    state.simulation.domain_size_m.y = Y16_ASPECT_DOMAIN_Y as f32;
+    state.simulation.domain_size_m.y = LOCAL_CAVITY_DOMAIN_Y as f32;
     state.objects.clear();
     let cylinder_id = state.add_object(PrimitiveKind::Cylinder);
     let cylinder = state
@@ -263,7 +452,7 @@ fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_coarse48_y16_asp
     cylinder.scale = Vec3::new(1.4, 1.6, 1.4);
     state.touch();
 
-    run_y16_aspect_full_merge_probe(
+    run_local_cavity_aspect_probe(
         "sharp_rim_cylinder",
         &state,
         AccurateBoundaryLayerSettings {
