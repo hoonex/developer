@@ -197,7 +197,7 @@ fn run_middle_tetgen(poly: &str) -> ParsedTetgenVolumeMesh {
             .expect("coarse48 probe must write middle.poly");
         let output = Command::new(&executable)
             .current_dir(&work_dir)
-            .arg("-pYzCQO2/7/3")
+            .arg("-pYzCQ")
             .arg("middle.poly")
             .output()
             .expect("coarse48 probe must launch TetGen directly");
