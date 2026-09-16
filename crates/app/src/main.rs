@@ -18,6 +18,8 @@ mod accurate_boundary_layer_outer_buffer_coarse48_spectrum_probe;
 #[cfg(test)]
 mod accurate_boundary_layer_outer_buffer_coarse48_xmid_shift_probe;
 #[cfg(test)]
+mod accurate_boundary_layer_outer_buffer_coarse48_y_margin_probe;
+#[cfg(test)]
 mod accurate_boundary_layer_outer_buffer_shape_probe;
 #[cfg(test)]
 mod accurate_boundary_layer_shape_coverage;
