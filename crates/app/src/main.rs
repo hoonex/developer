@@ -10,6 +10,8 @@ mod accurate_boundary_layer_prepare;
 #[cfg(test)]
 mod accurate_boundary_layer_coverage;
 #[cfg(test)]
+mod accurate_boundary_layer_outer_buffer_coarse12_shape_probe;
+#[cfg(test)]
 mod accurate_boundary_layer_outer_buffer_coarse48_shape_probe;
 #[cfg(test)]
 mod accurate_boundary_layer_outer_buffer_coarse48_hotspot_probe;
