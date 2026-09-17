@@ -1,167 +1,45 @@
 include!("accurate_boundary_layer_outer_buffer_coarse48_y025_merge_probe.rs");
 
-const HOTSPOT_LOCAL_EDGE_OPPOSITE: [([u8; 2], [u8; 2]); 6] = [
-    ([0, 1], [2, 3]),
-    ([0, 2], [1, 3]),
-    ([0, 3], [1, 2]),
-    ([1, 2], [0, 3]),
-    ([1, 3], [0, 2]),
-    ([2, 3], [0, 1]),
-];
+const Z_OUTWARD_INNER: f64 = 3.125;
 
-type HotspotPointKey = [i64; 3];
-type HotspotEdgeKey = (HotspotPointKey, HotspotPointKey);
-
-fn hotspot_canonical_edge(mut a: HotspotPointKey, mut b: HotspotPointKey) -> HotspotEdgeKey {
-    if b < a {
-        std::mem::swap(&mut a, &mut b);
-    }
-    (a, b)
-}
-
-fn hotspot_plane_mask(key: HotspotPointKey) -> u8 {
-    let mut mask = 0_u8;
-    if key[0] == -40 {
-        mask |= 1 << 0;
-    }
-    if key[0] == 40 {
-        mask |= 1 << 1;
-    }
-    if key[1] == 3 {
-        mask |= 1 << 2;
-    }
-    if key[1] == 45 {
-        mask |= 1 << 3;
-    }
-    if key[2] == -24 {
-        mask |= 1 << 4;
-    }
-    if key[2] == 24 {
-        mask |= 1 << 5;
-    }
-    mask
-}
-
-fn hotspot_classify_edge(a: HotspotPointKey, b: HotspotPointKey) -> &'static str {
-    let a_mask = hotspot_plane_mask(a);
-    let b_mask = hotspot_plane_mask(b);
-    let shared_planes = (a_mask & b_mask).count_ones();
-    let a_planes = a_mask.count_ones();
-    let b_planes = b_mask.count_ones();
-
-    if shared_planes >= 2 {
-        return "box_edge_segment";
-    }
-    match (a_planes, b_planes) {
-        (1, 2) | (2, 1) => "face_center_spoke",
-        (1, 3) | (3, 1) => "face_corner_diagonal",
-        (2, 2) => "face_edge_midpoint_diagonal",
-        (1, 1) => "face_interior_segment",
-        _ => "interface_other",
-    }
-}
-
-fn hotspot_interface_edges(shell: &VolumeMesh) -> BTreeMap<HotspotEdgeKey, &'static str> {
-    let mut edges = BTreeMap::new();
-    for face in shell
-        .boundary
-        .iter()
-        .filter(|face| face.marker == APP_COARSE_INTERFACE_MARKER)
-    {
-        let keys = face.vertices.map(|vertex| {
-            point_key_if_eighth_grid(shell.points[vertex as usize])
-                .expect("local-cavity interface must remain on the eighth-unit grid")
-        });
-        for [left, right] in [[0, 1], [1, 2], [2, 0]] {
-            let key = hotspot_canonical_edge(keys[left], keys[right]);
-            let class = hotspot_classify_edge(key.0, key.1);
-            if let Some(previous) = edges.insert(key, class) {
-                assert_eq!(previous, class);
-            }
+fn build_y0375_z_outward_shell() -> VolumeMesh {
+    let mut shell = build_local_cavity_coarse48_shell();
+    for point in &mut shell.points {
+        if (point[2] + 3.0).abs() <= 1.0e-12 {
+            point[2] = -Z_OUTWARD_INNER;
+        } else if (point[2] - 3.0).abs() <= 1.0e-12 {
+            point[2] = Z_OUTWARD_INNER;
         }
     }
-    assert_eq!(edges.len(), 72);
-    edges
+    shell
+        .audit()
+        .expect("y0375 z-outward shell must remain a valid VolumeMesh");
+    assert_eq!(
+        shell
+            .boundary
+            .iter()
+            .filter(|face| face.marker == APP_COARSE_INTERFACE_MARKER)
+            .count(),
+        48
+    );
+    assert_eq!(
+        local_cavity_interface_points_for_marker(&shell, APP_COARSE_INTERFACE_MARKER).len(),
+        26
+    );
+    shell
 }
 
-fn hotspot_sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-fn hotspot_dot(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-fn hotspot_cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-
-fn hotspot_internal_dihedral(
-    edge_start: [f64; 3],
-    edge_end: [f64; 3],
-    opposite_a: [f64; 3],
-    opposite_b: [f64; 3],
-) -> f64 {
-    let edge = hotspot_sub(edge_end, edge_start);
-    let face_a = hotspot_cross(edge, hotspot_sub(opposite_a, edge_start));
-    let face_b = hotspot_cross(edge, hotspot_sub(opposite_b, edge_start));
-    let denominator = (hotspot_dot(face_a, face_a) * hotspot_dot(face_b, face_b)).sqrt();
-    let cosine = (hotspot_dot(face_a, face_b) / denominator).clamp(-1.0, 1.0);
-    cosine.acos()
-}
-
-fn hotspot_minimum_cell(mesh: &VolumeMesh) -> (usize, f64, [u8; 2]) {
-    mesh.audit().expect("hotspot middle mesh must audit");
-    let mut best = (usize::MAX, f64::INFINITY, [0_u8, 1_u8]);
-    for (cell_index, cell) in mesh.cells.iter().enumerate() {
-        let points = cell.vertices.map(|vertex| mesh.points[vertex as usize]);
-        for &(edge, opposite) in &HOTSPOT_LOCAL_EDGE_OPPOSITE {
-            let angle = hotspot_internal_dihedral(
-                points[edge[0] as usize],
-                points[edge[1] as usize],
-                points[opposite[0] as usize],
-                points[opposite[1] as usize],
-            );
-            if angle < best.1 {
-                best = (cell_index, angle, edge);
-            }
-        }
+fn z_outward_component(cell: usize, shell_cells: usize, layer_cells: usize) -> &'static str {
+    if cell < shell_cells {
+        "outer_shell"
+    } else if cell < shell_cells + layer_cells {
+        "boundary_layer"
+    } else {
+        "middle_tetgen"
     }
-    assert_ne!(best.0, usize::MAX);
-    best
 }
 
-fn hotspot_midpoint(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5]
-}
-
-fn hotspot_centroid(points: [[f64; 3]; 4]) -> [f64; 3] {
-    [
-        (points[0][0] + points[1][0] + points[2][0] + points[3][0]) * 0.25,
-        (points[0][1] + points[1][1] + points[2][1] + points[3][1]) * 0.25,
-        (points[0][2] + points[1][2] + points[2][2] + points[3][2]) * 0.25,
-    ]
-}
-
-fn hotspot_nearest_cavity_plane(point: [f64; 3]) -> (f64, &'static str) {
-    [
-        ((point[0] + 5.0).abs(), "x_min"),
-        ((5.0 - point[0]).abs(), "x_max"),
-        ((point[1] - LOCAL_CAVITY_Y_MIN).abs(), "y_min"),
-        ((LOCAL_CAVITY_Y_MAX - point[1]).abs(), "y_max"),
-        ((point[2] + 3.0).abs(), "z_min"),
-        ((3.0 - point[2]).abs(), "z_max"),
-    ]
-    .into_iter()
-    .min_by(|left, right| left.0.total_cmp(&right.0))
-    .expect("local cavity has six planes")
-}
-
-fn run_y0375_hotspot_probe(
+fn run_y0375_z_outward_probe(
     shape: &str,
     state: &ProjectState,
     boundary_layer_settings: AccurateBoundaryLayerSettings,
@@ -173,15 +51,34 @@ fn run_y0375_hotspot_probe(
         &AccurateSettings::default(),
         &boundary_layer_settings,
     )
-    .expect("production BL path must build y0375 hotspot fixture");
+    .expect("production BL path must build y0375 z-outward fixture");
     let handoff = match &prepared_case {
         AccuratePreparedCase::BoundaryLayerTetgen { handoff, .. } => handoff,
-        _ => panic!("y0375 hotspot probe requires retained BL TetGen handoff"),
+        _ => panic!("y0375 z-outward probe requires retained BL TetGen handoff"),
     };
     assert_eq!(handoff.layers.len(), 1);
     let layer = &handoff.layers[0];
-    let shell = build_local_cavity_coarse48_shell();
-    let interface_edges = hotspot_interface_edges(&shell);
+    assert_ne!(layer.interface_marker, APP_COARSE_INTERFACE_MARKER);
+
+    let shell = build_y0375_z_outward_shell();
+    let shell_dihedral = validate_tetrahedral_dihedral_quality(
+        &shell,
+        TetrahedralDihedralQualityPolicy {
+            minimum_dihedral_angle_radians: f64::MIN_POSITIVE,
+            maximum_dihedral_angle_radians: std::f64::consts::PI,
+        },
+    )
+    .expect("z-outward shell must retain dihedral evidence");
+    let shell_orthogonality = validate_tetrahedral_face_orthogonality(
+        &shell,
+        TetrahedralFaceOrthogonalityPolicy {
+            minimum_interior_face_orthogonality_cosine: 0.0,
+            minimum_boundary_face_orthogonality_cosine: 0.0,
+            max_face_tests: MAX_FACE_TESTS,
+        },
+    )
+    .expect("z-outward shell must retain orthogonality evidence");
+
     let poly = render_local_cavity_middle_plc(
         &shell,
         APP_COARSE_INTERFACE_MARKER,
@@ -189,60 +86,159 @@ fn run_y0375_hotspot_probe(
         hole_seed,
     );
     let middle = run_middle_tetgen(&poly);
-    let (cell_index, value, local_edge) = hotspot_minimum_cell(&middle.mesh);
-    let cell = &middle.mesh.cells[cell_index];
-    let vertices = cell.vertices.map(|vertex| middle.mesh.points[vertex as usize]);
-    let global_edge = [
-        cell.vertices[local_edge[0] as usize],
-        cell.vertices[local_edge[1] as usize],
-    ];
-    let edge_points = [
-        middle.mesh.points[global_edge[0] as usize],
-        middle.mesh.points[global_edge[1] as usize],
-    ];
-    let edge_keys = [
-        point_key_if_eighth_grid(edge_points[0]),
-        point_key_if_eighth_grid(edge_points[1]),
-    ];
-    let edge_class = match (edge_keys[0], edge_keys[1]) {
-        (Some(a), Some(b)) => interface_edges
-            .get(&hotspot_canonical_edge(a, b))
-            .copied()
-            .unwrap_or("not_interface_edge"),
-        _ => "not_interface_edge",
-    };
-    let edge_plane_masks = [
-        edge_keys[0].map(hotspot_plane_mask).unwrap_or(0),
-        edge_keys[1].map(hotspot_plane_mask).unwrap_or(0),
-    ];
-    let centroid = hotspot_centroid(vertices);
-    let edge_midpoint = hotspot_midpoint(edge_points[0], edge_points[1]);
-    let (centroid_distance, centroid_plane) = hotspot_nearest_cavity_plane(centroid);
-    let (edge_distance, edge_plane) = hotspot_nearest_cavity_plane(edge_midpoint);
+    let middle_dihedral = validate_tetrahedral_dihedral_quality(
+        &middle.mesh,
+        TetrahedralDihedralQualityPolicy {
+            minimum_dihedral_angle_radians: f64::MIN_POSITIVE,
+            maximum_dihedral_angle_radians: std::f64::consts::PI,
+        },
+    )
+    .expect("z-outward middle fill must retain dihedral evidence");
+
+    let inner = merge_tetgen_with_boundary_layers(
+        &middle,
+        &handoff.layers,
+        handoff.merge_policy,
+    )
+    .expect("production BL layer must weld to z-outward middle fill");
+    let (combined, outer_welded_vertices, outer_interface_faces) =
+        weld_local_cavity_shell_to_inner(&shell, &inner.mesh, APP_COARSE_INTERFACE_MARKER);
+    combined
+        .audit()
+        .expect("z-outward full merge must audit after both welds");
+    let overlap = validate_tetrahedral_interior_overlaps(
+        &combined,
+        TetrahedralOverlapPolicy {
+            geometric_epsilon: 1.0e-10,
+            max_tetrahedron_pair_tests: 50_000_000,
+        },
+    )
+    .expect("z-outward full merge must have no positive-volume overlap");
+
+    let admission = handoff.source_input.containment().admission();
+    let final_handoff = validate_candidate_exterior_mesher_handoff(
+        combined,
+        admission.marker_map().clone(),
+        admission.audited_sources(),
+        ExteriorMeshQualityPolicy {
+            min_mean_ratio: 1.0e-12,
+            max_edge_length_ratio: 1.0e6,
+        },
+        admission.source_intersection_policy(),
+        SourceSurfaceCorrespondencePolicy {
+            distance_tolerance: 1.0e-9,
+            max_point_triangle_tests: 20_000_000,
+        },
+    )
+    .expect("z-outward mesh must reach generic physical-source handoff");
+    assert!(final_handoff
+        .mesh
+        .boundary
+        .iter()
+        .all(|face| face.marker != APP_COARSE_INTERFACE_MARKER));
+
+    let mesh = &final_handoff.mesh;
+    let dihedral = validate_tetrahedral_dihedral_quality(
+        mesh,
+        TetrahedralDihedralQualityPolicy {
+            minimum_dihedral_angle_radians: f64::MIN_POSITIVE,
+            maximum_dihedral_angle_radians: std::f64::consts::PI,
+        },
+    )
+    .expect("z-outward full merge must retain dihedral evidence");
+    let orthogonality = validate_tetrahedral_face_orthogonality(
+        mesh,
+        TetrahedralFaceOrthogonalityPolicy {
+            minimum_interior_face_orthogonality_cosine: 0.0,
+            minimum_boundary_face_orthogonality_cosine: 0.0,
+            max_face_tests: MAX_FACE_TESTS,
+        },
+    )
+    .expect("z-outward full merge must retain orthogonality evidence");
+    let transition = validate_tetrahedral_size_transition(
+        mesh,
+        TetrahedralSizeTransitionPolicy {
+            maximum_adjacent_cell_volume_ratio: f64::MAX,
+            max_interior_face_tests: MAX_FACE_TESTS,
+        },
+    )
+    .expect("z-outward full merge must retain size-transition evidence");
+    let skewness = validate_tetrahedral_face_centroid_skewness(
+        mesh,
+        TetrahedralFaceCentroidSkewnessPolicy {
+            maximum_face_centroid_skewness: f64::MAX,
+            max_interior_face_tests: MAX_FACE_TESTS,
+        },
+    )
+    .expect("z-outward full merge must retain centroid-skewness evidence");
+
+    let shell_cells = shell.cells.len();
+    let layer_cells = layer.mesh.cells.len();
+    assert_eq!(mesh.cells.len(), shell_cells + inner.mesh.cells.len());
+    assert_eq!(inner.mesh.cells.len(), layer_cells + middle.mesh.cells.len());
+    let min_owner = z_outward_component(
+        dihedral.minimum_dihedral_angle_cell,
+        shell_cells,
+        layer_cells,
+    );
+    let max_owner = z_outward_component(
+        dihedral.maximum_dihedral_angle_cell,
+        shell_cells,
+        layer_cells,
+    );
+    let interior_owner_components = orthogonality.minimum_interior_owner_cells.map(|owners| {
+        [
+            z_outward_component(owners[0], shell_cells, layer_cells),
+            z_outward_component(owners[1], shell_cells, layer_cells),
+        ]
+    });
+    let boundary_owner_component = orthogonality
+        .minimum_boundary_owner_cell
+        .map(|owner| z_outward_component(owner, shell_cells, layer_cells));
+    let ratio_owner_components = transition.maximum_ratio_owner_cells.map(|owners| {
+        [
+            z_outward_component(owners[0], shell_cells, layer_cells),
+            z_outward_component(owners[1], shell_cells, layer_cells),
+        ]
+    });
 
     println!(
-        "AEROFORGE_OUTER_BUFFER_COARSE48_Y0375_HOTSPOT=REPORT_ONLY shape={} engineering_quality_status=not_established middle_cells={} value_rad={} cell={} local_edge={:?} global_edge={:?} vertices={:?} centroid={:?} edge_midpoint={:?} edge_class={} edge_keys={:?} edge_plane_masks={:?} centroid_interface_distance={} centroid_nearest_plane={} edge_interface_distance={} edge_nearest_plane={}",
+        "AEROFORGE_OUTER_BUFFER_COARSE48_Y0375_Z_OUTWARD=REPORT_ONLY shape={} engineering_quality_status=not_established interface_y_min={} interface_y_max={} interface_z_min={} interface_z_max={} shell_cells={} layer_cells={} middle_cells={} final_cells={} bl_welded_vertices={} outer_welded_vertices={} outer_interface_faces={} shell_min_dihedral_rad={} shell_min_interior_orthogonality_cos={:?} shell_min_boundary_orthogonality_cos={:?} middle_min_dihedral_rad={} middle_max_dihedral_rad={} final_min_dihedral_rad={} final_min_owner={} final_max_dihedral_rad={} final_max_owner={} min_interior_orthogonality_cos={:?} min_interior_owner_components={:?} min_boundary_orthogonality_cos={:?} min_boundary_owner_component={:?} max_adjacent_volume_ratio={:?} max_ratio_owner_components={:?} max_centroid_skewness={:?} overlap_broad_phase_tests={} overlap_sat_tests={}",
         shape,
+        LOCAL_CAVITY_Y_MIN,
+        LOCAL_CAVITY_Y_MAX,
+        -Z_OUTWARD_INNER,
+        Z_OUTWARD_INNER,
+        shell_cells,
+        layer_cells,
         middle.mesh.cells.len(),
-        value,
-        cell_index,
-        local_edge,
-        global_edge,
-        vertices,
-        centroid,
-        edge_midpoint,
-        edge_class,
-        edge_keys,
-        edge_plane_masks,
-        centroid_distance,
-        centroid_plane,
-        edge_distance,
-        edge_plane,
+        mesh.cells.len(),
+        inner.report.welded_interface_vertices,
+        outer_welded_vertices,
+        outer_interface_faces,
+        shell_dihedral.minimum_dihedral_angle_radians,
+        shell_orthogonality.minimum_interior_face_orthogonality_cosine,
+        shell_orthogonality.minimum_boundary_face_orthogonality_cosine,
+        middle_dihedral.minimum_dihedral_angle_radians,
+        middle_dihedral.maximum_dihedral_angle_radians,
+        dihedral.minimum_dihedral_angle_radians,
+        min_owner,
+        dihedral.maximum_dihedral_angle_radians,
+        max_owner,
+        orthogonality.minimum_interior_face_orthogonality_cosine,
+        interior_owner_components,
+        orthogonality.minimum_boundary_face_orthogonality_cosine,
+        boundary_owner_component,
+        transition.maximum_adjacent_cell_volume_ratio,
+        ratio_owner_components,
+        skewness.maximum_face_centroid_skewness,
+        overlap.broad_phase_pair_tests,
+        overlap.sat_pair_tests,
     );
 }
 
 #[test]
-fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_coarse48_y0375_hotspot_for_rounded_sphere() {
+fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_coarse48_y0375_z_outward_for_rounded_sphere() {
     if !env_enabled("AEROFORGE_REQUIRE_REAL_TETGEN") || discover_tetgen().is_none() {
         return;
     }
@@ -254,7 +250,7 @@ fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_coarse48_y0375_h
     sphere.position = Vec3::new(0.0, 2.5, 0.0);
     sphere.scale = Vec3::splat(1.5);
     state.touch();
-    run_y0375_hotspot_probe(
+    run_y0375_z_outward_probe(
         "rounded_sphere",
         &state,
         AccurateBoundaryLayerSettings::default(),
@@ -263,7 +259,7 @@ fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_coarse48_y0375_h
 }
 
 #[test]
-fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_coarse48_y0375_hotspot_for_sharp_rim_cylinder() {
+fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_coarse48_y0375_z_outward_for_sharp_rim_cylinder() {
     if !env_enabled("AEROFORGE_REQUIRE_REAL_TETGEN") || discover_tetgen().is_none() {
         return;
     }
@@ -275,7 +271,7 @@ fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_coarse48_y0375_h
     cylinder.position = Vec3::new(0.0, 2.0, 0.0);
     cylinder.scale = Vec3::new(1.4, 1.6, 1.4);
     state.touch();
-    run_y0375_hotspot_probe(
+    run_y0375_z_outward_probe(
         "sharp_rim_cylinder",
         &state,
         AccurateBoundaryLayerSettings {
