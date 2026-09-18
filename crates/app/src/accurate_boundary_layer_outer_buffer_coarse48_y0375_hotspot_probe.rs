@@ -2,6 +2,69 @@ include!("accurate_boundary_layer_outer_buffer_coarse48_y025_merge_probe.rs");
 
 const ZMIN_INWARD: f64 = 2.875;
 
+const ZMIN_HOTSPOT_LOCAL_EDGE_OPPOSITE: [([u8; 2], [u8; 2]); 6] = [
+    ([0, 1], [2, 3]),
+    ([0, 2], [1, 3]),
+    ([0, 3], [1, 2]),
+    ([1, 2], [0, 3]),
+    ([1, 3], [0, 2]),
+    ([2, 3], [0, 1]),
+];
+
+fn zmin_hotspot_sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn zmin_hotspot_dot(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn zmin_hotspot_cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn zmin_hotspot_internal_dihedral(
+    edge_start: [f64; 3],
+    edge_end: [f64; 3],
+    opposite_a: [f64; 3],
+    opposite_b: [f64; 3],
+) -> f64 {
+    let edge = zmin_hotspot_sub(edge_end, edge_start);
+    let face_a = zmin_hotspot_cross(edge, zmin_hotspot_sub(opposite_a, edge_start));
+    let face_b = zmin_hotspot_cross(edge, zmin_hotspot_sub(opposite_b, edge_start));
+    let denominator = (zmin_hotspot_dot(face_a, face_a) * zmin_hotspot_dot(face_b, face_b)).sqrt();
+    let cosine = (zmin_hotspot_dot(face_a, face_b) / denominator).clamp(-1.0, 1.0);
+    cosine.acos()
+}
+
+fn zmin_hotspot_minimum_edge(mesh: &VolumeMesh) -> (usize, f64, [[f64; 3]; 2]) {
+    let mut best = (usize::MAX, f64::INFINITY, [[0.0; 3]; 2]);
+    for (cell_index, cell) in mesh.cells.iter().enumerate() {
+        let points = cell.vertices.map(|vertex| mesh.points[vertex as usize]);
+        for &(edge, opposite) in &ZMIN_HOTSPOT_LOCAL_EDGE_OPPOSITE {
+            let angle = zmin_hotspot_internal_dihedral(
+                points[edge[0] as usize],
+                points[edge[1] as usize],
+                points[opposite[0] as usize],
+                points[opposite[1] as usize],
+            );
+            if angle < best.1 {
+                best = (
+                    cell_index,
+                    angle,
+                    [points[edge[0] as usize], points[edge[1] as usize]],
+                );
+            }
+        }
+    }
+    assert_ne!(best.0, usize::MAX);
+    best
+}
+
 fn build_y0375_zmin_inward_shell() -> VolumeMesh {
     let mut shell = build_local_cavity_coarse48_shell();
     for point in &mut shell.points {
@@ -92,6 +155,20 @@ fn run_y0375_zmin_inward_probe(
         },
     )
     .expect("zmin-inward middle fill must retain dihedral evidence");
+    let (middle_hotspot_cell, middle_hotspot_value, middle_hotspot_edge) =
+        zmin_hotspot_minimum_edge(&middle.mesh);
+    assert!(
+        (middle_hotspot_value - middle_dihedral.minimum_dihedral_angle_radians).abs() <= 1.0e-12,
+        "independent hotspot scan must match validator minimum"
+    );
+    println!(
+        "AEROFORGE_OUTER_BUFFER_COARSE48_Y0375_ZMIN_INWARD_HOTSPOT=REPORT_ONLY shape={} engineering_quality_status=not_established middle_cell={} value_rad={} edge_start={:?} edge_end={:?}",
+        shape,
+        middle_hotspot_cell,
+        middle_hotspot_value,
+        middle_hotspot_edge[0],
+        middle_hotspot_edge[1],
+    );
 
     let inner = merge_tetgen_with_boundary_layers(
         &middle,
