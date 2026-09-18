@@ -1,19 +1,17 @@
 include!("accurate_boundary_layer_outer_buffer_coarse48_y025_merge_probe.rs");
 
-const Z_INWARD_INNER: f64 = 2.875;
+const ZMIN_INWARD: f64 = 2.875;
 
-fn build_y0375_z_inward_shell() -> VolumeMesh {
+fn build_y0375_zmin_inward_shell() -> VolumeMesh {
     let mut shell = build_local_cavity_coarse48_shell();
     for point in &mut shell.points {
         if (point[2] + 3.0).abs() <= 1.0e-12 {
-            point[2] = -Z_INWARD_INNER;
-        } else if (point[2] - 3.0).abs() <= 1.0e-12 {
-            point[2] = Z_INWARD_INNER;
+            point[2] = -ZMIN_INWARD;
         }
     }
     shell
         .audit()
-        .expect("y0375 z-inward shell must remain a valid VolumeMesh");
+        .expect("y0375 zmin-inward shell must remain a valid VolumeMesh");
     assert_eq!(
         shell
             .boundary
@@ -29,7 +27,7 @@ fn build_y0375_z_inward_shell() -> VolumeMesh {
     shell
 }
 
-fn z_inward_component(cell: usize, shell_cells: usize, layer_cells: usize) -> &'static str {
+fn zmin_inward_component(cell: usize, shell_cells: usize, layer_cells: usize) -> &'static str {
     if cell < shell_cells {
         "outer_shell"
     } else if cell < shell_cells + layer_cells {
@@ -39,7 +37,7 @@ fn z_inward_component(cell: usize, shell_cells: usize, layer_cells: usize) -> &'
     }
 }
 
-fn run_y0375_z_inward_probe(
+fn run_y0375_zmin_inward_probe(
     shape: &str,
     state: &ProjectState,
     boundary_layer_settings: AccurateBoundaryLayerSettings,
@@ -51,16 +49,16 @@ fn run_y0375_z_inward_probe(
         &AccurateSettings::default(),
         &boundary_layer_settings,
     )
-    .expect("production BL path must build y0375 z-inward fixture");
+    .expect("production BL path must build y0375 zmin-inward fixture");
     let handoff = match &prepared_case {
         AccuratePreparedCase::BoundaryLayerTetgen { handoff, .. } => handoff,
-        _ => panic!("y0375 z-inward probe requires retained BL TetGen handoff"),
+        _ => panic!("y0375 zmin-inward probe requires retained BL TetGen handoff"),
     };
     assert_eq!(handoff.layers.len(), 1);
     let layer = &handoff.layers[0];
     assert_ne!(layer.interface_marker, APP_COARSE_INTERFACE_MARKER);
 
-    let shell = build_y0375_z_inward_shell();
+    let shell = build_y0375_zmin_inward_shell();
     let shell_dihedral = validate_tetrahedral_dihedral_quality(
         &shell,
         TetrahedralDihedralQualityPolicy {
@@ -68,7 +66,7 @@ fn run_y0375_z_inward_probe(
             maximum_dihedral_angle_radians: std::f64::consts::PI,
         },
     )
-    .expect("z-inward shell must retain dihedral evidence");
+    .expect("zmin-inward shell must retain dihedral evidence");
     let shell_orthogonality = validate_tetrahedral_face_orthogonality(
         &shell,
         TetrahedralFaceOrthogonalityPolicy {
@@ -77,7 +75,7 @@ fn run_y0375_z_inward_probe(
             max_face_tests: MAX_FACE_TESTS,
         },
     )
-    .expect("z-inward shell must retain orthogonality evidence");
+    .expect("zmin-inward shell must retain orthogonality evidence");
 
     let poly = render_local_cavity_middle_plc(
         &shell,
@@ -93,19 +91,19 @@ fn run_y0375_z_inward_probe(
             maximum_dihedral_angle_radians: std::f64::consts::PI,
         },
     )
-    .expect("z-inward middle fill must retain dihedral evidence");
+    .expect("zmin-inward middle fill must retain dihedral evidence");
 
     let inner = merge_tetgen_with_boundary_layers(
         &middle,
         &handoff.layers,
         handoff.merge_policy,
     )
-    .expect("production BL layer must weld to z-inward middle fill");
+    .expect("production BL layer must weld to zmin-inward middle fill");
     let (combined, outer_welded_vertices, outer_interface_faces) =
         weld_local_cavity_shell_to_inner(&shell, &inner.mesh, APP_COARSE_INTERFACE_MARKER);
     combined
         .audit()
-        .expect("z-inward full merge must audit after both welds");
+        .expect("zmin-inward full merge must audit after both welds");
     let overlap = validate_tetrahedral_interior_overlaps(
         &combined,
         TetrahedralOverlapPolicy {
@@ -113,7 +111,7 @@ fn run_y0375_z_inward_probe(
             max_tetrahedron_pair_tests: 50_000_000,
         },
     )
-    .expect("z-inward full merge must have no positive-volume overlap");
+    .expect("zmin-inward full merge must have no positive-volume overlap");
 
     let admission = handoff.source_input.containment().admission();
     let final_handoff = validate_candidate_exterior_mesher_handoff(
@@ -130,7 +128,7 @@ fn run_y0375_z_inward_probe(
             max_point_triangle_tests: 20_000_000,
         },
     )
-    .expect("z-inward mesh must reach generic physical-source handoff");
+    .expect("zmin-inward mesh must reach generic physical-source handoff");
     assert!(final_handoff
         .mesh
         .boundary
@@ -145,7 +143,7 @@ fn run_y0375_z_inward_probe(
             maximum_dihedral_angle_radians: std::f64::consts::PI,
         },
     )
-    .expect("z-inward full merge must retain dihedral evidence");
+    .expect("zmin-inward full merge must retain dihedral evidence");
     let orthogonality = validate_tetrahedral_face_orthogonality(
         mesh,
         TetrahedralFaceOrthogonalityPolicy {
@@ -154,7 +152,7 @@ fn run_y0375_z_inward_probe(
             max_face_tests: MAX_FACE_TESTS,
         },
     )
-    .expect("z-inward full merge must retain orthogonality evidence");
+    .expect("zmin-inward full merge must retain orthogonality evidence");
     let transition = validate_tetrahedral_size_transition(
         mesh,
         TetrahedralSizeTransitionPolicy {
@@ -162,7 +160,7 @@ fn run_y0375_z_inward_probe(
             max_interior_face_tests: MAX_FACE_TESTS,
         },
     )
-    .expect("z-inward full merge must retain size-transition evidence");
+    .expect("zmin-inward full merge must retain size-transition evidence");
     let skewness = validate_tetrahedral_face_centroid_skewness(
         mesh,
         TetrahedralFaceCentroidSkewnessPolicy {
@@ -170,45 +168,45 @@ fn run_y0375_z_inward_probe(
             max_interior_face_tests: MAX_FACE_TESTS,
         },
     )
-    .expect("z-inward full merge must retain centroid-skewness evidence");
+    .expect("zmin-inward full merge must retain centroid-skewness evidence");
 
     let shell_cells = shell.cells.len();
     let layer_cells = layer.mesh.cells.len();
     assert_eq!(mesh.cells.len(), shell_cells + inner.mesh.cells.len());
     assert_eq!(inner.mesh.cells.len(), layer_cells + middle.mesh.cells.len());
-    let min_owner = z_inward_component(
+    let min_owner = zmin_inward_component(
         dihedral.minimum_dihedral_angle_cell,
         shell_cells,
         layer_cells,
     );
-    let max_owner = z_inward_component(
+    let max_owner = zmin_inward_component(
         dihedral.maximum_dihedral_angle_cell,
         shell_cells,
         layer_cells,
     );
     let interior_owner_components = orthogonality.minimum_interior_owner_cells.map(|owners| {
         [
-            z_inward_component(owners[0], shell_cells, layer_cells),
-            z_inward_component(owners[1], shell_cells, layer_cells),
+            zmin_inward_component(owners[0], shell_cells, layer_cells),
+            zmin_inward_component(owners[1], shell_cells, layer_cells),
         ]
     });
     let boundary_owner_component = orthogonality
         .minimum_boundary_owner_cell
-        .map(|owner| z_inward_component(owner, shell_cells, layer_cells));
+        .map(|owner| zmin_inward_component(owner, shell_cells, layer_cells));
     let ratio_owner_components = transition.maximum_ratio_owner_cells.map(|owners| {
         [
-            z_inward_component(owners[0], shell_cells, layer_cells),
-            z_inward_component(owners[1], shell_cells, layer_cells),
+            zmin_inward_component(owners[0], shell_cells, layer_cells),
+            zmin_inward_component(owners[1], shell_cells, layer_cells),
         ]
     });
 
     println!(
-        "AEROFORGE_OUTER_BUFFER_COARSE48_Y0375_Z_INWARD=REPORT_ONLY shape={} engineering_quality_status=not_established interface_y_min={} interface_y_max={} interface_z_min={} interface_z_max={} shell_cells={} layer_cells={} middle_cells={} final_cells={} bl_welded_vertices={} outer_welded_vertices={} outer_interface_faces={} shell_min_dihedral_rad={} shell_min_interior_orthogonality_cos={:?} shell_min_boundary_orthogonality_cos={:?} middle_min_dihedral_rad={} middle_max_dihedral_rad={} final_min_dihedral_rad={} final_min_owner={} final_max_dihedral_rad={} final_max_owner={} min_interior_orthogonality_cos={:?} min_interior_owner_components={:?} min_boundary_orthogonality_cos={:?} min_boundary_owner_component={:?} max_adjacent_volume_ratio={:?} max_ratio_owner_components={:?} max_centroid_skewness={:?} overlap_broad_phase_tests={} overlap_sat_tests={}",
+        "AEROFORGE_OUTER_BUFFER_COARSE48_Y0375_ZMIN_INWARD=REPORT_ONLY shape={} engineering_quality_status=not_established interface_y_min={} interface_y_max={} interface_z_min={} interface_z_max={} shell_cells={} layer_cells={} middle_cells={} final_cells={} bl_welded_vertices={} outer_welded_vertices={} outer_interface_faces={} shell_min_dihedral_rad={} shell_min_interior_orthogonality_cos={:?} shell_min_boundary_orthogonality_cos={:?} middle_min_dihedral_rad={} middle_max_dihedral_rad={} final_min_dihedral_rad={} final_min_owner={} final_max_dihedral_rad={} final_max_owner={} min_interior_orthogonality_cos={:?} min_interior_owner_components={:?} min_boundary_orthogonality_cos={:?} min_boundary_owner_component={:?} max_adjacent_volume_ratio={:?} max_ratio_owner_components={:?} max_centroid_skewness={:?} overlap_broad_phase_tests={} overlap_sat_tests={}",
         shape,
         LOCAL_CAVITY_Y_MIN,
         LOCAL_CAVITY_Y_MAX,
-        -Z_INWARD_INNER,
-        Z_INWARD_INNER,
+        -ZMIN_INWARD,
+        3.0,
         shell_cells,
         layer_cells,
         middle.mesh.cells.len(),
@@ -238,7 +236,7 @@ fn run_y0375_z_inward_probe(
 }
 
 #[test]
-fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_coarse48_y0375_z_inward_for_rounded_sphere() {
+fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_coarse48_y0375_zmin_inward_for_rounded_sphere() {
     if !env_enabled("AEROFORGE_REQUIRE_REAL_TETGEN") || discover_tetgen().is_none() {
         return;
     }
@@ -250,7 +248,7 @@ fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_coarse48_y0375_z
     sphere.position = Vec3::new(0.0, 2.5, 0.0);
     sphere.scale = Vec3::splat(1.5);
     state.touch();
-    run_y0375_z_inward_probe(
+    run_y0375_zmin_inward_probe(
         "rounded_sphere",
         &state,
         AccurateBoundaryLayerSettings::default(),
@@ -259,7 +257,7 @@ fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_coarse48_y0375_z
 }
 
 #[test]
-fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_coarse48_y0375_z_inward_for_sharp_rim_cylinder() {
+fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_coarse48_y0375_zmin_inward_for_sharp_rim_cylinder() {
     if !env_enabled("AEROFORGE_REQUIRE_REAL_TETGEN") || discover_tetgen().is_none() {
         return;
     }
@@ -271,7 +269,7 @@ fn configured_real_tetgen_builds_desktop_boundary_layer_handoff_coarse48_y0375_z
     cylinder.position = Vec3::new(0.0, 2.0, 0.0);
     cylinder.scale = Vec3::new(1.4, 1.6, 1.4);
     state.touch();
-    run_y0375_z_inward_probe(
+    run_y0375_zmin_inward_probe(
         "sharp_rim_cylinder",
         &state,
         AccurateBoundaryLayerSettings {
