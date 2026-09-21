@@ -40,7 +40,7 @@ If the host stalls after TERMINALIZE, a fresh chat can revalidate the repository
 
 ## Durable layout
 
-Local default, which does not dirty the product worktree:
+Local default, which does not dirty the product worktree (in linked worktrees, resolve the real per-worktree Git directory because `.git` is a file):
 
 ```text
 .git/sloar-turn-state/
@@ -49,9 +49,9 @@ Local default, which does not dirty the product worktree:
     <turn-id>/
       latest.json
       events/
-        0001-active.json
-        0002-active.json
-        0003-completed.json
+        0001-active-<event-id>.json
+        0002-active-<event-id>.json
+        0003-completed-<event-id>.json
 ```
 
 When authorized repository write is available, mirror the pointer/events needed for cross-chat recovery to the existing sidecar branch:
@@ -133,6 +133,10 @@ A takeover:
 No automatic timeout takeover exists.
 
 Before a durable remote write or publication, an ACTIVE turn that uses this mechanism must confirm that its `turn_id + epoch` still matches the durable pointer. A stale turn must stop writing and recover/reconcile instead.
+
+The local helper holds a fail-fast OS file lock across reading, checking, and publishing the state. Pointer updates refer to immutable event snapshots, so an interrupted write cannot expose a partially published newer state. This protects only callers sharing that filesystem.
+
+For GitHub, publish the sidecar snapshot and pointer together under a non-force ref guard. Sidecar and product refs cannot be atomically fenced together through ordinary separate API calls; isolate overlapping sessions on separate branches and reconcile before integration. Follow [chat-github-workflow.md](chat-github-workflow.md).
 
 This limits damage if an old apparently-stuck host later resumes after the user has already continued in a fresh chat. It cannot cancel a write that was already in flight before fencing changed.
 

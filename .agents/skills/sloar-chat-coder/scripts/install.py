@@ -9,25 +9,61 @@ from pathlib import Path
 
 BEGIN = "<!-- sloar-chat-coder:begin -->"
 END = "<!-- sloar-chat-coder:end -->"
-BLOCK = f"""{BEGIN}\n## Sloar Chat Coder\n\nWhen repository development is requested from a chat/agent environment, read `.agents/skills/sloar-chat-coder/SKILL.md` before repository work. Sloar governs continuity, exact state, capability escalation, failure handling, publication safety, and evidence; the repository still defines engineering method. For substantial user-facing web UI/design work, when `.agents/skills/web-design-guidance/SKILL.md` exists, read that companion after repository design guidance unless the repository already defines a stronger design workflow or the user explicitly asks not to use it. When Apple-style web interaction/design is explicitly requested and `.agents/skills/apple-web-design/SKILL.md` exists, read that specialized companion after the repository guidance and general web-design guidance; companions never override the repository's product/design rules.\n{END}\n"""
+BLOCK = f"""{BEGIN}
+## Sloar Chat Coder
+
+When repository development is requested from a chat/agent environment, read `.agents/skills/sloar-chat-coder/SKILL.md` before repository work. Sloar governs continuity, exact state, capability escalation, failure handling, publication safety, and evidence; the repository still defines engineering method. For substantial user-facing web UI/design work, when `.agents/skills/web-design-guidance/SKILL.md` exists, read that companion after repository design guidance unless the repository already defines a stronger design workflow or the user explicitly asks not to use it. When Apple-style web interaction/design is explicitly requested and `.agents/skills/apple-web-design/SKILL.md` exists, read that specialized companion after the repository guidance and general web-design guidance; companions never override the repository's product/design rules.
+{END}
+"""
 
 BUNDLED_SKILLS = ("sloar-chat-coder", "web-design-guidance", "apple-web-design")
 IGNORE_PATTERNS = shutil.ignore_patterns("__pycache__", "*.pyc")
 VERSION_RE = re.compile(r'^\s*version:\s*["\']?([0-9]+\.[0-9]+\.[0-9]+)["\']?\s*$')
 
-# Exact Git-blob fingerprints for Sloar-owned historical companion releases.
-# They let --upgrade distinguish an untouched official bundle from a user-customized
-# companion. Add a historical manifest when a future release needs to migrate it.
+# Exact Git-blob fingerprints for Sloar-owned historical companion bundles.
+# Multiple manifests may share one declared companion version: version metadata
+# alone is never treated as proof that the installed bytes are official.
 KNOWN_OFFICIAL_COMPANIONS = {
     "web-design-guidance": {
-        "0.7.0": {
-            "NOTICE.md": "1b0dbe703c70a9f376768b6361b539aefad30f5c",
-            "SKILL.md": "9ce2ef891c1292bc37318349b0d25ff16b87ddb9",
-            "references/design-discovery.md": "4cd3642e71795afe41a0b910ceb8dcdf525d181f",
-            "references/surface-recipes.md": "052a9c101ca65a29146e38bb8312aa122e92f3d4",
-            "references/visual-verification.md": "8bb179656b452639255b300912a921d534150618",
-        }
-    }
+        "0.7.0": [
+            {
+                "NOTICE.md": "1b0dbe703c70a9f376768b6361b539aefad30f5c",
+                "SKILL.md": "9ce2ef891c1292bc37318349b0d25ff16b87ddb9",
+                "references/design-discovery.md": "4cd3642e71795afe41a0b910ceb8dcdf525d181f",
+                "references/surface-recipes.md": "052a9c101ca65a29146e38bb8312aa122e92f3d4",
+                "references/visual-verification.md": "8bb179656b452639255b300912a921d534150618",
+            }
+        ],
+        # Exact web-design-guidance shipped by Sloar v0.9.1. It already
+        # declared companion version 0.8.0, but v0.10 added structural UI
+        # guidance without changing that companion-local version.
+        "0.8.0": [
+            {
+                "NOTICE.md": "7dc49a14715c9d63eb5137f872276eb98a924196",
+                "SKILL.md": "939adb5bd92b2c89419fe12a0b4c88c97b717a44",
+                "references/adaptive-design-discovery.md": "02371fdf07e3877b42a76604dc0d870739f226a2",
+                "references/anti-ai-slop.md": "aad52fad2867025dde456d47772030d7cd708602",
+                "references/design-discovery.md": "2a099ad8207abc8930a33edd98c2b46fae1b2a18",
+                "references/design-system-authority.md": "d0011b976f59dd3ae382695c1d624cbfb29a98bd",
+                "references/design-taxonomy.md": "9c732c5bb04e84ab5de611e013ad962c2c6f5dcd",
+                "references/identity-and-logo.md": "1530c4ab1f178036da0d1a7ad1f8f72e636c3f88",
+                "references/reference-research-and-critique.md": "72aeec70b0001cd441d010fe40ca31b804360d94",
+                "references/surface-recipes.md": "052a9c101ca65a29146e38bb8312aa122e92f3d4",
+                "references/visual-verification.md": "66a0903ab724095bb51f923ab5cfd9e30fd57311",
+            }
+        ],
+    },
+    # The Apple companion intentionally has no local semantic version. Exact
+    # fingerprints therefore gate safe migration from the official v0.9.1
+    # bundle to the newer product-craft bundle.
+    "apple-web-design": {
+        None: [
+            {
+                "NOTICE.md": "78230a9a9598e02432a6ba939d27c793fd71e5b7",
+                "SKILL.md": "420471de579473c2efc97190441436e861b63e80",
+            }
+        ]
+    },
 }
 
 
@@ -70,6 +106,13 @@ def matches_official_manifest(dest: Path, manifest: dict[str, str]) -> bool:
     return actual == manifest
 
 
+def matches_known_official_companion(name: str, installed_version: str | None, dest: Path) -> bool:
+    manifests = KNOWN_OFFICIAL_COMPANIONS.get(name, {}).get(installed_version, [])
+    if isinstance(manifests, dict):
+        manifests = [manifests]
+    return any(matches_official_manifest(dest, manifest) for manifest in manifests)
+
+
 def skill_version(skill_dir: Path) -> str | None:
     skill = skill_dir / "SKILL.md"
     if not skill.is_file():
@@ -85,7 +128,7 @@ def version_tuple(value: str) -> tuple[int, int, int]:
     parts = value.split(".")
     if len(parts) != 3 or any(not part.isdigit() for part in parts):
         raise SystemExit(f"unsupported Sloar version: {value}")
-    return tuple(int(part) for part in parts)  # type: ignore[return-value]
+    return tuple(int(part) for part in parts)
 
 
 def git_common_dir(target: Path) -> Path:
@@ -123,9 +166,9 @@ def backup_skill(target: Path, dest: Path, installed_version: str) -> Path:
     return candidate
 
 
-def backup_companion(target: Path, dest: Path, name: str, installed_version: str) -> Path:
+def backup_companion(target: Path, dest: Path, name: str, installed_version: str | None) -> Path:
     base = git_common_dir(target) / "sloar-upgrade-backups" / "companions" / name
-    candidate = unique_backup_path(base, installed_version)
+    candidate = unique_backup_path(base, installed_version or "unversioned")
     candidate.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(dest, candidate, ignore=IGNORE_PATTERNS)
     return candidate
@@ -182,27 +225,34 @@ def maybe_upgrade_companion(target: Path, root: Path, name: str, dest: Path, dry
 
     source_version = skill_version(source)
     installed_version = skill_version(dest)
+
+    safe_direction = True
     if source_version and installed_version:
         source_v = version_tuple(source_version)
         installed_v = version_tuple(installed_version)
-        if installed_v < source_v:
-            manifest = KNOWN_OFFICIAL_COMPANIONS.get(name, {}).get(installed_version)
-            if manifest and matches_official_manifest(dest, manifest):
-                if dry_run:
-                    return [
-                        f"would back up official companion {name} {installed_version} under Git metadata",
-                        f"would upgrade official companion {name} {installed_version} -> {source_version} at {dest}",
-                    ]
-                backup = backup_companion(target, dest, name, installed_version)
-                shutil.rmtree(dest)
-                shutil.copytree(source, dest, ignore=IGNORE_PATTERNS)
-                return [
-                    f"backed up official companion {name} {installed_version} -> {backup}",
-                    f"upgraded official companion {name} {installed_version} -> {source_version} at {dest}",
-                ]
+        safe_direction = installed_v <= source_v
 
-    # A different/unrecognized companion may contain user changes. Never infer that
-    # a lower or missing version means it is safe to replace.
+    if safe_direction and matches_known_official_companion(name, installed_version, dest):
+        installed_label = installed_version or "unversioned"
+        source_label = source_version or "current bundle"
+        if dry_run:
+            return [
+                f"would back up official companion {name} {installed_label} under Git metadata",
+                f"would refresh official companion {name} {installed_label} -> {source_label} at {dest}",
+            ]
+
+        backup = backup_companion(target, dest, name, installed_version)
+        shutil.rmtree(dest)
+        shutil.copytree(source, dest, ignore=IGNORE_PATTERNS)
+        if installed_version and source_version and version_tuple(installed_version) < version_tuple(source_version):
+            action = f"upgraded official companion {name} {installed_version} -> {source_version}"
+        else:
+            action = f"refreshed official companion {name} {installed_label} -> {source_label}"
+        return [
+            f"backed up official companion {name} {installed_label} -> {backup}",
+            f"{action} at {dest}",
+        ]
+
     return [f"preserved existing companion customization -> {dest}"]
 
 

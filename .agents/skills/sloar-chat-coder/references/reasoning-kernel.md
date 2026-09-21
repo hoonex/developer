@@ -37,6 +37,12 @@ Identify:
 
 Prefer domain invariants over file-by-file choreography. Do not add process merely because a reference exists.
 
+### Critical assumptions
+
+When a consequential decision depends on an assumption that the repository itself does not establish, record only the assumptions whose falsity would materially change the architecture, implementation, acceptance claim, safety boundary, or performance conclusion. When useful, classify them as `CONFIRMED`, `SUPPORTED`, or `UNKNOWN` and identify what evidence could actually falsify the premise.
+
+Do not create an assumption ledger for routine facts. Use [evidence-independence.md](evidence-independence.md) when implementation and verification may share the same unproven premise, or when correctness depends on an external standard, protocol, mathematical/domain invariant, hardware contract, or reference behavior.
+
 ### Representation choice
 
 When two or more plausible representations or ownership boundaries can satisfy a consequential requirement, do a bounded internal comparison before committing to one. Usually two or three candidates are enough.
@@ -94,6 +100,12 @@ For every consequential claim, ask:
 3. Does the evidence exercise that exact path, phase, identity, and observable?
 
 For a rewritten public operation, also exercise its simplest pre-existing behavior directly. Feature-rich stress coverage is not a substitute for a one-line compatibility probe when both can fail independently.
+
+### Evidence provenance
+
+A verifier is not independent merely because it is a separate test, process, model call, or agent. If implementation and verification inherit the same unproven assumption, agreement between them proves self-consistency more strongly than it proves that premise.
+
+When this common-provenance risk can materially change correctness, seek at least one differentiated falsifier when practical: an authoritative contract, conformance vector/corpus, independently implemented reference, domain-derived property/invariant, or runtime/end-to-end observation. If the required differentiated evidence is unavailable, keep the result as `EVIDENCE_GAP` or explicitly bounded confidence instead of silently upgrading agreement into independent correctness. Read [evidence-independence.md](evidence-independence.md).
 
 ### Latest-valid-boundary rule
 
@@ -192,6 +204,7 @@ Reconciliation is where Sloar's continuity and publication machinery expands whe
 Use a specialized reference only when its trigger is present:
 
 - consequential representation / ownership choice -> `engineering-choice-priors.md`;
+- common-provenance verification or external domain/standard grounding -> `evidence-independence.md`;
 - async/stateful interleavings -> `async-evidence-closure.md`;
 - ownership split / production convergence -> `ownership-evidence-closure.md`;
 - substantial visible UI/product design -> `design-taste-priors.md`;
