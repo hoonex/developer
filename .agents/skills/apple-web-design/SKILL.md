@@ -1,6 +1,6 @@
 ---
 name: apple-web-design
-description: Build or review web interfaces that need Apple-style direct manipulation, interruptible gesture motion, velocity-aware settling, restrained translucent materials, responsive typography, and motion/transparency accessibility. Use only when the target repository or user asks for this interaction language; target-repository engineering and visual rules always win.
+description: Build or review web interfaces that need Apple-style direct manipulation, interruptible gesture motion, velocity-aware settling, restrained translucent materials, deliberate state-transition craft, responsive typography, and motion/transparency accessibility. Use only when the target repository or user asks for this interaction language; target-repository engineering and visual rules always win.
 license: MIT
 metadata:
   adapted-from: "emilkowalski/skills: skills/apple-design"
@@ -14,6 +14,19 @@ This is an **optional interaction-design companion** to Sloar Chat Coder. Sloar 
 Use it when the user or repository explicitly wants Apple-like web interaction quality: direct manipulation, fluid sheets, swipe/drag controls, momentum, interruptible motion, translucent functional chrome, or an Apple-inspired visual/interaction audit. Do not activate it merely because a project contains blur, rounded corners, or a mobile layout.
 
 The governing idea is simple: **the interface must continue from what the user currently sees and feels, not from a hidden logical target.**
+
+## 0. Product-craft contract
+
+Apple-inspired quality is not a catalog of glass, springs, or rounded corners. Treat it as a product-behavior standard:
+
+- **Do not expose complexity merely because the implementation is complex.** New rendering, animation, AI, caching, or interaction technology should normally disappear behind clearer behavior instead of becoming UI chrome that advertises itself.
+- **A new interaction should feel learnable from existing behavior.** Prefer extending familiar spatial, gesture, navigation, and control conventions over inventing a parallel interaction language.
+- **Design the transition, not only the endpoints.** `closed -> open`, `loading -> ready`, `editing -> saved`, `failed -> recovered`, `compact -> expanded`, and responsive reflow are product states with continuity obligations.
+- **Novelty must earn its maintenance cost.** A technically impressive effect is justified only when it improves causality, orientation, tactility, comprehension, product identity, or emotional finish without damaging accessibility, performance, or structural clarity.
+- **Keep a small delight budget.** One precise detail can be more effective than many effects: a control that yields naturally under touch, a transition that preserves spatial origin, a material change that reveals hierarchy, or a completion state that resolves cleanly. Do not spread spectacle across every component.
+- **Polish follows correctness.** Hierarchy, semantics, state ownership, accessibility, performance, and responsive behavior come first. Delight is not permission to patch around weak architecture.
+
+A detail may be intentionally non-essential to task completion and still be valid when it is cheap, coherent, restrained, and reinforces the product's character. The test is not `is this strictly necessary?`; the test is `does this make the experience feel more intentional without creating disproportionate complexity?`
 
 ## 1. Response contract
 
@@ -141,6 +154,8 @@ For gesture/motion work, static screenshots alone are insufficient. Add or run e
 
 For material changes, inspect rendered screenshots over real content. A CSS assertion that says `backdrop-filter` exists is not proof that the hierarchy or legibility is good.
 
+Also verify that signature details do not require duplicate state, parallel renderers, runaway observers, brittle positioning, or other structural workarounds. When the broader `web-design-guidance` companion is active, its structural-integrity gate remains in force.
+
 ## 12. Restraint rules
 
 Do not turn this skill into an Apple imitation pass across the entire product.
@@ -148,6 +163,7 @@ Do not turn this skill into an Apple imitation pass across the entire product.
 - Do not copy Apple proprietary assets, icons, sounds, trademarks, or product-specific layouts.
 - Do not redesign stable screens unless the request needs it.
 - Do not introduce bounce everywhere.
+- Do not spend the delight budget on every surface; reserve signature behavior for moments where it has product meaning.
 - Do not replace a target repository's established component system merely to match examples from this skill.
 - When repository guidance conflicts with this skill, **repository guidance wins**.
 

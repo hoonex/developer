@@ -66,6 +66,25 @@ Viewport coordinates, render caches, DOM placement, formatted labels, derived in
 
 Derived state should be cheap to rebuild or tightly fenced to its authority. Do not make two mutable representations jointly authoritative without a real need.
 
+## Dependency ownership boundary
+
+Do not confuse engineering depth with reimplementing every lower layer.
+
+Before replacing or recreating a mature dependency, ask:
+
+```text
+What contract does the product actually rely on?
+Does the dependency already own difficult correctness, compatibility, portability, or maintenance work?
+Would reimplementation give the product necessary control, or merely move proven complexity into our repository?
+Can we verify the boundary without understanding every internal detail below it?
+```
+
+Prefer reuse when the dependency's observable contract satisfies the product and taking ownership would add failure surface without a concrete benefit. Reimplement when the task genuinely requires control over that layer—for example because of semantics, performance, footprint, portability, auditability, educational intent, or a dependency contract that is insufficient.
+
+The obligation at a reused boundary is not blind trust. Understand enough of the relied-on contract to recognize a violation, verify the behavior that matters, and know when the dependency no longer fits. Do not demand "from scratch" work as a proxy for competence when a stronger engineering choice is to stand on a well-grounded layer.
+
+When the correctness of that boundary depends on an external standard or when implementation and tests may share the same premise, use `evidence-independence.md` rather than recursively reimplementing the dependency merely to feel certain.
+
 ## Lifecycle cost
 
 Representation quality includes lifecycle cost, not only static elegance.
